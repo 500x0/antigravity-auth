@@ -1,5 +1,6 @@
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -21,14 +22,19 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  createAccountRepositoryFactory,
   getAntigravityOpencodeModelIds,
+  initializeFreshAccountStore,
   loadCommonAuthClaustrum,
+  loadCommonAuthStoreModules,
   OPENCODE_MODEL_DEFINITIONS,
+  readAccountStoreAdmission,
   VAULT_ACCOUNT_REMEDY,
 } from '@cortexkit/antigravity-auth-core'
 import * as packageRoot from '../index'
 
 import { ANTIGRAVITY_PROVIDER_ID } from './constants.ts'
+import { startMenuVaultFixture } from './plugin/__fixtures__/vault-menu-daemon.test'
 import type { BackgroundQuotaRefresh } from './plugin/background-quota-refresh'
 import { ANTIGRAVITY_MENU_COMMAND } from './plugin/commands.ts'
 import type { FetchImpl } from './plugin/dependencies'
@@ -43,6 +49,13 @@ import {
   openCodeVaultPaths,
 } from './plugin/vault-custody'
 import { drainNotifications } from './rpc/notifications'
+import { createRpcClient } from './rpc/rpc-client'
+
+// The store binds its timers on import; load it before the quota-tick test
+// temporarily replaces the global timer function.
+beforeAll(async () => {
+  await loadCommonAuthStoreModules()
+})
 
 /**
  * A host-client stand-in for entry wiring tests. These methods record calls
@@ -601,3 +614,169 @@ it('the production V1 entry opens the vault menu without opening or changing dor
     rmSync(owned, { recursive: true, force: true })
   }
 })
+
+for (const direction of ['local to vault', 'vault to local'] as const) {
+  it(`the production V1 RPC apply refreshes sections when switching ${direction}`, async () => {
+    const owned = realpathSync(
+      mkdtempSync(join(tmpdir(), 'agy-v1-menu-switch-')),
+    )
+    const daemon = await startMenuVaultFixture(owned)
+    const overrides = {
+      OPENCODE_CONFIG_DIR: join(owned, 'config'),
+      ANTIGRAVITY_AUTH_RPC_DIR: join(owned, 'rpc'),
+      ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE: join(owned, 'sidebar.json'),
+      SUBC_CONNECTION_FILE: daemon.connectionFile,
+    }
+    const prior = Object.fromEntries(
+      Object.keys(overrides).map((key) => [key, process.env[key]]),
+    )
+    Object.assign(process.env, overrides)
+    const realFetch = globalThis.fetch
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+      Object.assign(
+        (async (input, init) => {
+          const url = new URL(
+            input instanceof Request ? input.url : String(input),
+          )
+          return url.hostname === '127.0.0.1'
+            ? realFetch(input, init)
+            : new Response('not-found', { status: 404 })
+        }) as typeof fetch,
+        { preconnect: realFetch.preconnect },
+      ),
+    )
+    let dispose: (() => Promise<void> | void) | undefined
+    const seeding = createOpenCodeVaultCustody({
+      accountFile: getStoragePath(),
+      reporterSource: 'direct',
+      readHostSlot: async () => undefined,
+    })
+    try {
+      const accountFile = getStoragePath()
+      const modules = await loadCommonAuthStoreModules()
+      await initializeFreshAccountStore(modules, {
+        legacyPath: accountFile,
+        now: Date.now,
+      })
+      const admission = await readAccountStoreAdmission(
+        accountFile,
+        modules,
+        Date.now,
+      )
+      if (admission.status !== 'active') throw new Error(admission.status)
+      const repository = createAccountRepositoryFactory(modules)({
+        paths: admission.paths,
+        now: Date.now,
+        exchange: async () => {
+          throw new Error(
+            'Opening the menu must not exchange local credentials',
+          )
+        },
+      })
+      try {
+        for (let index = 1; index <= 2; index++)
+          await repository.login({
+            id: crypto.randomUUID(),
+            refreshToken: `synthetic-menu-local-${index}`,
+            metadata: { addedAt: index, lastUsed: index },
+          })
+      } finally {
+        await repository.dispose()
+      }
+      expect((await seeding.requestAccess()).state).toBe('pending')
+      if (direction === 'vault to local') {
+        daemon.approve()
+        expect((await seeding.requestAccess()).state).toBe('approved')
+      }
+      expect(await seeding.readMode()).toMatchObject({
+        ok: true,
+        record: { mode: direction === 'local to vault' ? 'local' : 'custody' },
+      })
+      const client = createMinimalClient()
+      const plugin = await packageRoot.GoogleOAuthPlugin(
+        createPluginInput(client, owned),
+      )
+      dispose = plugin.dispose
+      const sessionId = 'menu-switch-session'
+      await expect(
+        plugin['command.execute.before']?.(
+          {
+            command: ANTIGRAVITY_MENU_COMMAND,
+            arguments: '',
+            sessionID: sessionId,
+          },
+          { parts: [] },
+        ),
+      ).rejects.toThrow()
+      const rpc = createRpcClient(
+        overrides.ANTIGRAVITY_AUTH_RPC_DIR,
+        process.pid,
+      )
+      const initial = JSON.stringify(
+        await rpc.pendingNotifications(0, sessionId),
+      )
+      expect(initial).toContain(
+        direction === 'local to vault'
+          ? '2 accounts'
+          : '1 account served from the vault',
+      )
+      daemon.approve()
+      const result = await rpc.apply({
+        command: ANTIGRAVITY_MENU_COMMAND,
+        sectionId: 'vault',
+        actionId:
+          direction === 'local to vault' ? 'request-access' : 'use-local',
+        sessionId,
+      })
+      const serialized = JSON.stringify(result)
+      expect(result).toMatchObject({
+        command: ANTIGRAVITY_MENU_COMMAND,
+        ok: true,
+        text:
+          direction === 'local to vault'
+            ? `Vault access: approved as ${OPENCODE_VAULT_ENROLLMENT_NAME}`
+            : 'Done. Start a new request to use the change.',
+      })
+      expect(await seeding.readMode()).toMatchObject({
+        ok: true,
+        record: { mode: direction === 'local to vault' ? 'custody' : 'local' },
+      })
+      expect(result).toMatchObject({
+        menu: {
+          sections: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'accounts',
+              lines: expect.arrayContaining([
+                expect.stringContaining(
+                  direction === 'local to vault'
+                    ? '1 account served from the vault'
+                    : '2 accounts',
+                ),
+              ]),
+            }),
+          ]),
+        },
+      })
+      if (direction === 'local to vault')
+        expect(serialized).not.toContain('"title":"Sign in"')
+      else expect(serialized).toContain('"title":"Sign in"')
+      expect(daemon.calls).toContain('auth.enroll_poll')
+      expect(daemon.calls).toContain('credential.list_scoped')
+      expect(daemon.errors).toEqual([])
+      expect(await rpc.pendingNotifications(0, 'other-menu-session')).toEqual(
+        [],
+      )
+      expect(client.auth.set).not.toHaveBeenCalled()
+    } finally {
+      await dispose?.()
+      await seeding.dispose()
+      await daemon.close()
+      fetchSpy.mockRestore()
+      for (const [key, value] of Object.entries(prior)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(owned, { recursive: true, force: true })
+    }
+  })
+}

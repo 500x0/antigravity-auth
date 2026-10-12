@@ -891,10 +891,8 @@ export const createAntigravityPlugin =
       apply: async (request) => {
         const current = await currentMenu()
         if (current.kind === 'unavailable') throw new Error(current.message)
-        const result = await current.menu.apply(
-          request,
-          menuInvocation(pushNotification, request.sessionId),
-        )
+        const invocation = menuInvocation(pushNotification, request.sessionId)
+        const result = await current.menu.apply(request, invocation)
         // The menu wrote to the account store; bring the routing manager up
         // to date with it so the next request sees the change.
         try {
@@ -913,6 +911,14 @@ export const createAntigravityPlugin =
             },
             request.sessionId,
           )
+        }
+        // An enrollment or disconnect action can leave its apply response with
+        // the old account source's menu. Reopen the selected menu, keeping the
+        // action's message and success/failure flags instead of running it again.
+        const refreshed = await currentMenu()
+        if (refreshed.kind === 'menu' && refreshed.menu !== current.menu) {
+          const payload = await refreshed.menu.open(invocation)
+          return { ...result, menu: payload.menu }
         }
         return result
       },
