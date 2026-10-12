@@ -70,7 +70,7 @@
   ],
   "scripts": {
     "embed:check": "bun scripts/build-tui.ts --check",
-    "build": "bun run embed:check && bun scripts/build-tui.ts --library && esbuild src/server.ts --bundle --platform=node --format=esm --external:zod --outfile=dist/server.js --sourcemap --metafile=dist/server.meta.json --log-level=warning && tsc -p tsconfig.ga.emit.json && bun ../../scripts/finalize-declaration-specifiers.ts dist .",
+    "build": "bun run embed:check && bun scripts/build-tui.ts --library && esbuild src/server.ts --bundle --platform=node --format=esm --external:zod --outfile=dist/server.js --sourcemap --metafile=dist/server.meta.json --log-level=warning && tsc -p tsconfig.ga.emit.json && bun ../../scripts/finalize-declaration-specifiers.ts dist/types . && bun ../../scripts/finalize-declaration-specifiers.ts dist .",
     "build:tui": "bun run embed:check && bun scripts/build-tui.ts",
     "build:schema": "bun script/build-schema.ts",
     "smoke:tui": "bun run embed:check && bun scripts/smoke-tui-pack-install.ts",
