@@ -663,6 +663,18 @@ export async function buildLibrary(packageRoot = PACKAGE_ROOT) {
       join(packageRoot, 'dist/src/common-auth-embedded'),
       { recursive: true },
     )
+    // The root export's declarations keep source specifiers (`./x.ts`,
+    // `./dir`) that installed packages cannot resolve; rewrite them to the
+    // compiled `.js` paths here, so every build of this tree is finalized.
+    run(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/finalize-declaration-specifiers.ts'),
+        'dist',
+        '.',
+      ],
+      packageRoot,
+    )
     for (const [entry, name] of [
       ['index.ts', 'index'],
       ['src/cli.ts', 'cli'],

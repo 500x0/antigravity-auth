@@ -76,6 +76,7 @@ import {
   type AntigravityChangedEvent,
   type AntigravityNotificationDto,
   AntigravityNotificationPayloadSchema,
+  type AntigravityQuotaEntryDto,
   type AntigravityRouteDto,
   type AntigravityRpcIssue,
   type AntigravityRpcScope,
@@ -1056,8 +1057,42 @@ export function createGaRpcActivation(
       accountsStatus: { kind: 'complete' },
       accounts: accounts.rows.map(({ selector, row }) => ({
         selector,
-        ...redactAccountForSidebar(row),
+        ...gaAccountFields(redactAccountForSidebar(row)),
       })),
+    }
+  }
+
+  /**
+   * The sidebar file carries email and unrounded fractions for owner-only
+   * machine readers. The GA client renders, so it receives only the
+   * contract's display fields.
+   */
+  const gaAccountFields = (
+    account: ReturnType<typeof redactAccountForSidebar>,
+  ) => {
+    const { email: _email, quota, ...rest } = account
+    const entry = (
+      value: (typeof quota)[keyof typeof quota],
+    ): AntigravityQuotaEntryDto | undefined => {
+      if (value === undefined) return undefined
+      const { remainingFraction: _fraction, windows, ...fields } = value
+      return windows === undefined
+        ? fields
+        : {
+            ...fields,
+            windows: windows.map(
+              ({ remainingFraction: _windowFraction, ...window }) => window,
+            ),
+          }
+    }
+    const gemini = entry(quota.gemini)
+    const nonGemini = entry(quota['non-gemini'])
+    return {
+      ...rest,
+      quota: {
+        ...(gemini ? { gemini } : {}),
+        ...(nonGemini ? { 'non-gemini': nonGemini } : {}),
+      },
     }
   }
 

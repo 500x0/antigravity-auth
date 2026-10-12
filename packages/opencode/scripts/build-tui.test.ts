@@ -658,20 +658,6 @@ test('release.preserves_tested_npm', async () => {
   expect(globalNpmChanges).toEqual([])
 })
 
-// The root `.` export's declarations live under dist/src, beside the GA
-// declarations under dist/types. Both trees must be finalized; otherwise a
-// source `.ts` specifier stays in a published declaration that consumers
-// cannot resolve. The GA tree goes first: its missing hand-written
-// declarations are copied from `src/`, which only that root maps correctly.
-test('build.finalizes_every_declaration_tree', async () => {
-  const pkg = JSON.parse(
-    await readFile(join(repo, 'packages/opencode/package.json'), 'utf8'),
-  )
-  expect(pkg.scripts.build).toEndWith(
-    'bun ../../scripts/finalize-declaration-specifiers.ts dist/types . && bun ../../scripts/finalize-declaration-specifiers.ts dist .',
-  )
-})
-
 test('build.prerequisite_order', async () => {
   for (const path of ['package.json', 'packages/opencode/package.json']) {
     const pkg = JSON.parse(await readFile(join(repo, path), 'utf8'))

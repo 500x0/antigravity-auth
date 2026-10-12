@@ -437,6 +437,8 @@ describe('state redaction', () => {
       'fake-access-token',
       'fake-project',
       'fake-device',
+      // Machine-only sidebar-file fields stay out of the rendering contract.
+      'remainingFraction',
     ]) {
       expect(text).not.toContain(secret)
     }
