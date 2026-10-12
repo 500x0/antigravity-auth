@@ -449,6 +449,7 @@ export const createAntigravityPlugin =
         sidebarStateFile: getSidebarStateFile(),
         readAuthority,
         currentVaultPool,
+        readProviderState: () => vaultCustody.readState(),
         publishSidebar: () => sidebarPublisher.publish(),
         transport: dependencies.fetchImpl,
         logger,

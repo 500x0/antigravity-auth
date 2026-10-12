@@ -1,9 +1,24 @@
-import type { VaultProviderStateFile } from '@cortexkit/antigravity-auth-core'
+import type {
+  VaultProviderStateFile,
+  VaultRouteRef,
+} from '@cortexkit/antigravity-auth-core'
 import { buildSidebarMachineStateFromAccounts } from '../sidebar-state'
 import {
   cachedQuotaOf,
   type VaultAccountPool,
 } from './shared/vault-request-credentials'
+
+/** Stored quota belongs to a row only while its account, route and credential still match. */
+export function quotaReadingForVaultRoute(
+  route: VaultRouteRef,
+  state: VaultProviderStateFile,
+) {
+  const stored = state.accounts[route.accountIdentity]
+  return stored?.observed.routeId === route.routeId &&
+    stored.observed.credentialId === route.credentialId
+    ? stored.quota
+    : undefined
+}
 
 /** OpenCode 1 sidebar projection reads durable quota, including another process's readings. */
 export function buildVaultSidebarProjection(
@@ -13,12 +28,7 @@ export function buildVaultSidebarProjection(
 ) {
   const projection = buildSidebarMachineStateFromAccounts(
     pool.selector.rows.map((row) => {
-      const stored = state.accounts[row.route.accountIdentity]
-      const quota =
-        stored?.observed.routeId === row.route.routeId &&
-        stored.observed.credentialId === row.route.credentialId
-          ? stored.quota
-          : undefined
+      const quota = quotaReadingForVaultRoute(row.route, state)
       return {
         index: row.index,
         email: row.route.email,

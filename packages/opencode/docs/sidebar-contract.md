@@ -97,10 +97,15 @@ not promise a fixed refresh cadence or that every group is always present.
 
 With `background_quota_refresh` enabled, a vault-only producer uses
 `background_quota_refresh_interval_minutes`, startup jitter up to 30 seconds,
-and interval jitter of up to 10%, like the unchanged local producer. Fresh
-snapshot publications skip background work under the existing gate
-`max(intervalMs - 60_000, floor(intervalMs / 2))`; this scheduling optimization
-is **not** a claim that the quota observation is current. The distinct renewable
+and interval jitter of up to 10%, like the unchanged local producer. Inside the
+polling fence it reads the current pool and durable provider state. A tick is due
+when any current row has no matching dated quota reading, or when the oldest
+matching `cachedQuotaUpdatedAt` reaches the age threshold
+`max(intervalMs - 60_000, floor(intervalMs / 2))`. Matching uses the same account,
+route and credential IDs as the sidebar projection. Missing quota or observation
+time is due; an empty pool performs no fetch. Sidebar publication time never
+postpones a vault quota check, and another process's fresh durable readings skip
+redundant requests. The distinct renewable
 `bg-vault-quota-poll` advisory fence permits one process to perform a check;
 contention or lock errors skip the tick. Disposal and fresh non-vault/unreadable
 authority stop further physical requests.

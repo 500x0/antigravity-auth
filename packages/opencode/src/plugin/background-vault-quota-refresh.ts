@@ -1,5 +1,6 @@
+import type { VaultProviderStateFile } from '@cortexkit/antigravity-auth-core'
 import { acquireFencedFileLock } from '@cortexkit/antigravity-auth-core/file-lock'
-import { ensureSidebarStateDir, readSidebarState } from '../sidebar-state'
+import { ensureSidebarStateDir } from '../sidebar-state'
 import {
   fetchVaultAccountQuota,
   type VaultQuotaCheckOptions,
@@ -7,6 +8,7 @@ import {
 } from './quota'
 import type { VaultAccountPool } from './shared/vault-request-credentials'
 import { checkAndPublishVaultQuota } from './vault-quota-refresh'
+import { quotaReadingForVaultRoute } from './vault-sidebar-projection'
 
 export interface BackgroundVaultQuotaRefreshOptions {
   intervalMs: number
@@ -16,6 +18,7 @@ export interface BackgroundVaultQuotaRefreshOptions {
     source: VaultQuotaSource
     pool: VaultAccountPool
   }>
+  readProviderState: () => Promise<VaultProviderStateFile>
   publishSidebar: () => Promise<void>
   transport: NonNullable<VaultQuotaCheckOptions['transport']>
   logger: VaultQuotaCheckOptions['logger']
@@ -117,18 +120,32 @@ export class BackgroundVaultQuotaRefresh {
     try {
       await this.assertActive(controller)
       await lock.assertOwned()
-      // Re-read inside the fence: another process may have published while we waited.
-      const age =
-        this.now() - readSidebarState(this.options.sidebarStateFile).checkedAt
-      const threshold = Math.max(
-        this.options.intervalMs - 60_000,
-        Math.floor(this.options.intervalMs / 2),
-      )
-      if (age < threshold) return
       const { source, pool } = await this.options.currentVaultPool()
       await this.assertActive(controller)
       await pool.sync()
       await this.assertActive(controller)
+      // Read durable observations inside the fence, including another process's
+      // updates. Sidebar publication time must never postpone quota fetching.
+      const state = await this.options.readProviderState()
+      await this.assertActive(controller)
+      await lock.assertOwned()
+      const threshold = Math.max(
+        this.options.intervalMs - 60_000,
+        Math.floor(this.options.intervalMs / 2),
+      )
+      const now = this.now()
+      const due = pool.selector.rows.some((row) => {
+        const quota = quotaReadingForVaultRoute(row.route, state)
+        const at = quota?.cachedQuotaUpdatedAt
+        return (
+          quota?.cachedQuota == null ||
+          typeof at !== 'number' ||
+          !Number.isFinite(at) ||
+          at < 0 ||
+          now - at >= threshold
+        )
+      })
+      if (!due) return
       await checkAndPublishVaultQuota(
         {
           pool,

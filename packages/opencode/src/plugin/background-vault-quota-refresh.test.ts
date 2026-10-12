@@ -146,6 +146,7 @@ function fixture() {
     sidebarStateFile: stateFile,
     readAuthority: async () => authority,
     currentVaultPool: async () => ({ source, pool }),
+    readProviderState: async () => stored,
     transport,
     logger: { debug: () => {} },
     now: () => now,
@@ -188,6 +189,24 @@ function fixture() {
     },
     advance: (ms: number) => {
       now += ms
+    },
+    seedReadings: (checkedAt: number) => {
+      for (const route of routes) {
+        accounts[route.accountIdentity] = {
+          observed: {
+            routeId: route.routeId,
+            credentialId: route.credentialId,
+            recordVersion: 42,
+          },
+          quota: {
+            schemaVersion: 1,
+            cachedQuota: {
+              gemini: { modelCount: 1, remainingFraction: 0.812345 },
+            },
+            cachedQuotaUpdatedAt: checkedAt,
+          },
+        }
+      }
     },
     pause: (promise: Promise<void>) => {
       wait = promise
@@ -326,7 +345,7 @@ describe('vault poller fences and lifecycle', () => {
     }
   })
 
-  it('a fresh snapshot skips and rechecks freshness after lock acquisition', async () => {
+  it('fresh durable readings written by another process skip after lock acquisition', async () => {
     const f = fixture()
     const { acquireFencedFileLock } = await import(
       '@cortexkit/antigravity-auth-core/file-lock'
@@ -335,10 +354,7 @@ describe('vault poller fences and lifecycle', () => {
       ...f.options,
       acquireLock: async (options) => {
         const lock = await acquireFencedFileLock(options)
-        await setSidebarMachineState(
-          { checkedAt: f.now - 239_999, accounts: [] },
-          { stateFile: f.stateFile },
-        )
+        f.seedReadings(f.now - 239_999)
         return lock
       },
     })
@@ -351,6 +367,100 @@ describe('vault poller fences and lifecycle', () => {
       await f.cleanup()
     }
   })
+
+  it('frequent sidebar publications do not postpone old durable readings', async () => {
+    const f = fixture()
+    try {
+      f.seedReadings(f.now - 300_000)
+      for (let i = 0; i < 3; i++) {
+        f.advance(10_000)
+        await setSidebarMachineState(
+          { checkedAt: f.now, accounts: [] },
+          { stateFile: f.stateFile },
+        )
+      }
+      await f.poller.tick()
+      expect(f.physical).toBe(4)
+      expect(f.writes).toBe(2)
+      expect(f.publishes).toBe(1)
+    } finally {
+      await f.cleanup()
+    }
+  })
+
+  it('a row with no durable reading fetches despite a fresh publication and another fresh row', async () => {
+    const f = fixture()
+    try {
+      f.seedReadings(f.now)
+      delete f.accounts['identity-1']
+      await setSidebarMachineState(
+        { checkedAt: f.now, accounts: [] },
+        { stateFile: f.stateFile },
+      )
+      await f.poller.tick()
+      expect(f.physical).toBe(4)
+      expect(f.writes).toBe(2)
+    } finally {
+      await f.cleanup()
+    }
+  })
+
+  for (const cause of [
+    'undated',
+    'missing quota',
+    'different route',
+    'different credential',
+    'one stale row',
+  ] as const) {
+    it(`${cause} makes the tick due while the other row is fresh`, async () => {
+      const f = fixture()
+      try {
+        f.seedReadings(f.now)
+        const prior = f.accounts['identity-1']!
+        switch (cause) {
+          case 'undated':
+            f.accounts['identity-1'] = {
+              ...prior,
+              quota: { ...prior.quota!, cachedQuotaUpdatedAt: undefined },
+            }
+            break
+          case 'missing quota':
+            f.accounts['identity-1'] = { ...prior, quota: undefined }
+            break
+          case 'different route':
+            f.accounts['identity-1'] = {
+              ...prior,
+              observed: { ...prior.observed, routeId: 'foreign-route' },
+            }
+            break
+          case 'different credential':
+            f.accounts['identity-1'] = {
+              ...prior,
+              observed: {
+                ...prior.observed,
+                credentialId: 'foreign-credential',
+              },
+            }
+            break
+          case 'one stale row':
+            f.accounts['identity-1'] = {
+              ...prior,
+              quota: { ...prior.quota!, cachedQuotaUpdatedAt: f.now - 240_000 },
+            }
+            break
+        }
+        await setSidebarMachineState(
+          { checkedAt: f.now, accounts: [] },
+          { stateFile: f.stateFile },
+        )
+        await f.poller.tick()
+        expect(f.physical).toBe(4)
+        expect(f.writes).toBe(2)
+      } finally {
+        await f.cleanup()
+      }
+    })
+  }
 
   it('lock errors fail closed without fetching', async () => {
     const f = fixture()

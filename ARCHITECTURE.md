@@ -466,7 +466,7 @@ The V1 `BackgroundVaultQuotaRefresh` uses the same config interval and jitter bu
 
 Three-layer cross-process deduplication:
 
-1. **Freshness gate:** Reads `checkedAt` from the on-disk sidebar state; skips quota work when it is fresher than `max(intervalMs - 60_000, floor(intervalMs / 2))`. The `/2` floor ensures the gate still fires at the 1-minute minimum interval.
+1. **Freshness gate:** The local poller retains its sidebar publication-age gate. The vault poller reads durable provider state inside the fence after syncing the current pool. It looks up each row's account identity and requires the stored observation's route and credential IDs to match that row. A missing match, quota or valid observation time makes the tick due. Otherwise the oldest matching `cachedQuotaUpdatedAt` must reach `max(intervalMs - 60_000, floor(intervalMs / 2))`. Sidebar publications cannot postpone vault fetching; fresh readings written by another process skip redundant requests. The `/2` floor keeps the gate effective at the 1-minute minimum interval.
 2. **Advisory fenced lock:** Optimization allowing a single process to do network work when multiple wake simultaneously (`acquireFencedFileLock`). Held locks skip the tick.
 3. **Fail closed on lock error:** Lock exceptions skip the tick and add jitter to the next interval without attempting uncoordinated claim files.
 
