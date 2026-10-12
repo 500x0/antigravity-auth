@@ -23,6 +23,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -596,9 +597,8 @@ describe('redaction', () => {
 
       const dirMode = statSync(join(dir, 'nested')).mode & 0o777
       const fileMode = statSync(nested).mode & 0o777
-      // POSIX mkdir honours the requested mode; on Linux this is exact.
-      expect([0o700, 0o711]).toContain(dirMode)
-      expect([0o600, 0o644]).toContain(fileMode)
+      expect(dirMode).toBe(0o700)
+      expect(fileMode).toBe(0o600)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1135,6 +1135,84 @@ it('does not let a late local route reappear in a vault projection', async () =>
 })
 
 describe('quota reading timestamp redaction', () => {
+  it('writes and round-trips contract v2 identity, precision and observation time', async () => {
+    const fixture = makeFixture()
+    try {
+      const state = buildSidebarMachineStateFromAccounts(
+        [
+          {
+            index: 0,
+            ...{ email: 'known@example.test' },
+            cachedQuotaUpdatedAt: 123,
+            cachedQuota: {
+              gemini: {
+                remainingFraction: 0.123456,
+                windows: [
+                  {
+                    window: '5h',
+                    remainingFraction: 0.123456,
+                    resetTime: '2030-01-01T00:00:00Z',
+                  },
+                ],
+              },
+            },
+          },
+          { index: 1, label: 'not-an-email@example.test' },
+        ],
+        { checkedAt: 456 },
+      )
+      await setSidebarMachineState(state, { stateFile: fixture.stateFile })
+      const raw = JSON.parse(readFileSync(fixture.stateFile, 'utf8'))
+      expect(raw.version).toBe(2)
+      expect(raw.accounts[0].email).toBe('known@example.test')
+      expect(raw.accounts[1]).not.toHaveProperty('email')
+      expect(raw.accounts[0].label).toBe('Account 1')
+      expect(raw.accounts[0].quota.gemini).toMatchObject({
+        remainingPercent: 12,
+        remainingFraction: 0.123456,
+        checkedAt: 123,
+      })
+      expect(raw.accounts[0].quota.gemini.windows[0]).toMatchObject({
+        window: '5h',
+        remainingFraction: 0.123456,
+        checkedAt: 123,
+      })
+      expect(readSidebarState(fixture.stateFile)).toMatchObject(raw)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  it('normalizes v1 without inventing precision or observation times and rejects future versions', () => {
+    const fixture = makeFixture()
+    try {
+      writeFileSync(
+        fixture.stateFile,
+        JSON.stringify({
+          version: 1,
+          checkedAt: 456,
+          accounts: [
+            makeAccount({ quota: { gemini: { remainingPercent: 12 } } }),
+          ],
+        }),
+      )
+      const old = readSidebarState(fixture.stateFile)
+      expect(old.version).toBe(2)
+      expect(old.accounts[0]?.quota.gemini?.remainingPercent).toBe(12)
+      expect(old.accounts[0]?.quota.gemini).not.toHaveProperty('checkedAt')
+      expect(old.accounts[0]?.quota.gemini).not.toHaveProperty(
+        'remainingFraction',
+      )
+      writeFileSync(fixture.stateFile, JSON.stringify({ ...old, version: 99 }))
+      expect(readSidebarState(fixture.stateFile)).toEqual({
+        ...DEFAULT_SIDEBAR_STATE,
+        lastError: 'unsupported-version:99',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   it('carries a quota fetch timestamp to each reported window without using the sidebar publication time', () => {
     const cachedQuota = {
       gemini: {

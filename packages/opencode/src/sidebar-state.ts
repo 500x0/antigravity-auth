@@ -8,9 +8,9 @@
  * could leak credentials or pull a heavy manager into the render path.
  *
  * The plugin writes a redacted snapshot to the file resolved by
- * `getSidebarStateFile()` and the TUI polls it. The contract version is `1`:
- * any future field that the TUI cannot understand must be ignored, and any
- * broken/missing file must collapse to `DEFAULT_SIDEBAR_STATE`.
+ * `getSidebarStateFile()` and the TUI polls it. Writers emit version 2;
+ * readers normalize version 1 without inventing precision or reading times.
+ * Unknown versions and broken/missing files collapse to `DEFAULT_SIDEBAR_STATE`.
  *
  * ## Writer surface
  *
@@ -39,7 +39,7 @@
  * 100 entries within 24h.
  */
 
-import { mkdirSync, readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 // Subpath imports (not the barrel): this file ships into the TUI's
@@ -52,13 +52,15 @@ import {
 } from '@cortexkit/antigravity-auth-core/file-lock'
 import { xdgState } from 'xdg-basedir'
 
-export const SIDEBAR_STATE_VERSION = 1 as const
+export const SIDEBAR_STATE_VERSION = 2 as const
 
 export type SidebarQuotaKey = 'gemini' | 'non-gemini'
 
 export interface SidebarQuotaWindowEntry {
   window: 'weekly' | '5h'
   remainingPercent: number
+  /** Unrounded fraction in [0, 1]; absent in normalized version 1 data. */
+  remainingFraction?: number
   checkedAt?: number
   resetAt?: number
 }
@@ -66,6 +68,8 @@ export interface SidebarQuotaWindowEntry {
 export interface SidebarQuotaEntry {
   /** Most-constrained window's remaining % (derived, for back-compat). */
   remainingPercent: number
+  /** Unrounded fraction in [0, 1]; absent in normalized version 1 data. */
+  remainingFraction?: number
   checkedAt?: number
   resetAt?: number
   /** Per-window breakdown. Omitted in pre-windows snapshots. */
@@ -75,6 +79,8 @@ export interface SidebarQuotaEntry {
 export interface SidebarAccountState {
   id: string
   label: string
+  /** Owner-only machine identity; never rendered by the TUI. */
+  email?: string
   enabled: boolean
   health: number
   current: boolean
@@ -95,7 +101,7 @@ export interface SidebarRoutingEntry {
   updatedAt: number
 }
 
-export interface SidebarStateV1 {
+export interface SidebarStateV2 {
   version: typeof SIDEBAR_STATE_VERSION
   checkedAt: number
   accounts: SidebarAccountState[]
@@ -105,8 +111,11 @@ export interface SidebarStateV1 {
   lastError?: string
 }
 
+/** Source compatibility for callers; normalized states now always use version 2. */
+export type SidebarStateV1 = SidebarStateV2
+
 /**
- * The subset of `SidebarStateV1` that a non-routing writer may set. The
+ * The subset of `SidebarStateV2` that a non-routing writer may set. The
  * fetch interceptor writes `activeRouting` directly via its own entry point
  * because routing is session-scoped, not machine-scoped.
  */
@@ -253,7 +262,7 @@ function normalizeSidebarState(input: unknown): SidebarStateV1 {
   }
   const record = input as Record<string, unknown>
   const version = record.version
-  if (version !== SIDEBAR_STATE_VERSION) {
+  if (version !== 1 && version !== SIDEBAR_STATE_VERSION) {
     return {
       ...DEFAULT_SIDEBAR_STATE,
       lastError: `unsupported-version:${stringifySafe(version)}`,
@@ -318,6 +327,7 @@ function normalizeAccount(input: unknown): SidebarAccountState | null {
   return {
     id,
     label,
+    ...(typeof record.email === 'string' ? { email: record.email } : {}),
     enabled,
     health,
     current,
@@ -347,6 +357,7 @@ function normalizeQuota(input: unknown): SidebarQuotaEntry | null {
   if (!isObject(input)) return null
   const record = input as Record<string, unknown>
   const remaining = toFiniteNumber(record.remainingPercent)
+  const fraction = toFiniteNumber(record.remainingFraction)
   if (remaining === null) return null
   const resetAt = toFiniteNumber(record.resetAt) ?? undefined
   const checkedAt = toFiniteNumber(record.checkedAt) ?? undefined
@@ -364,10 +375,12 @@ function normalizeQuota(input: unknown): SidebarQuotaEntry | null {
         )
         const ra = toFiniteNumber((w as Record<string, unknown>).resetAt)
         const ca = toFiniteNumber(w.checkedAt)
+        const rf = toFiniteNumber(w.remainingFraction)
         if ((win !== 'weekly' && win !== '5h') || rp === null) return null
         return {
           window: win as 'weekly' | '5h',
           remainingPercent: clampNumber(rp, 0, 100),
+          ...(rf !== null ? { remainingFraction: clampNumber(rf, 0, 1) } : {}),
           resetAt: ra ?? undefined,
           ...(ca !== null && ca >= 0 ? { checkedAt: ca } : {}),
         }
@@ -378,6 +391,9 @@ function normalizeQuota(input: unknown): SidebarQuotaEntry | null {
 
   return {
     remainingPercent: clampNumber(remaining, 0, 100),
+    ...(fraction !== null
+      ? { remainingFraction: clampNumber(fraction, 0, 1) }
+      : {}),
     resetAt,
     ...(checkedAt !== undefined ? { checkedAt } : {}),
     windows,
@@ -451,6 +467,7 @@ export function ensureSidebarStateDir(
   path: string = getSidebarStateFile(),
 ): void {
   mkdirSync(dirname(path), { recursive: true, mode: SIDEBAR_STATE_DIR_MODE })
+  chmodSync(dirname(path), SIDEBAR_STATE_DIR_MODE)
 }
 
 /**
@@ -482,15 +499,15 @@ export function pruneActiveRouting(
  * shape on callers (and so the TUI's compiled tree does not see the core
  * ManagedAccount shape beyond what's actually used).
  *
- * Deliberately excludes `email`: the sidebar/redaction boundary is a PII
- * firewall. Adding `email` here would re-introduce the leak this boundary
- * exists to prevent. Legacy profile labels are accepted but never serialized.
+ * Email is retained only for owner-only machine consumers. The renderer uses
+ * ordinal labels, never email. Legacy profile labels are never serialized.
  */
 export interface SidebarAccountRedactionInput {
   /** Position in the harness-visible account array. */
   index: number
   /** Legacy profile label; deliberately ignored by the redactor. */
   label?: string
+  email?: string
   enabled?: boolean
   current?: boolean
   coolingDownUntil?: number
@@ -710,6 +727,7 @@ export function projectQuotaPoolForSidebar(
           0,
           100,
         ),
+        remainingFraction: clampNumber(w.remainingFraction, 0, 1),
         resetAt:
           typeof w.resetTime === 'string' && w.resetTime.length > 0
             ? (() => {
@@ -722,6 +740,7 @@ export function projectQuotaPoolForSidebar(
 
   return {
     remainingPercent,
+    remainingFraction: clampNumber(fraction, 0, 1),
     resetAt,
     windows,
     ...(readingAt !== undefined ? { checkedAt: readingAt } : {}),
@@ -743,10 +762,9 @@ export function isAccountCurrent(
 }
 
 /**
- * Convert a live account snapshot into the redacted shape the TUI renders.
- * The redacted `SidebarAccountState` carries no email, refresh token, access
- * token, project ID, fingerprint, OAuth profile name, or other personal or
- * credential-shaped fields. Display labels are generated ordinal account names.
+ * Convert a live account into an owner-only machine snapshot. Known email
+ * survives for machine consumers, but display labels remain ordinal. Tokens,
+ * project IDs, fingerprints and OAuth profile names never cross this boundary.
  */
 export function redactAccountForSidebar(
   source: SidebarAccountRedactionInput,
@@ -796,6 +814,7 @@ export function redactAccountForSidebar(
   return {
     id,
     label,
+    ...(typeof source.email === 'string' ? { email: source.email } : {}),
     enabled,
     health,
     current,

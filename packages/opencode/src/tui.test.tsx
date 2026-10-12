@@ -196,6 +196,44 @@ describe('SidebarPanel', () => {
     testSetup.renderer.destroy()
   })
 
+  it('never renders or logs email from an owner-only v2 snapshot', async () => {
+    const email = 'private-identity@example.test'
+    const payload = writeState({
+      checkedAt: Date.now(),
+      accounts: [
+        {
+          id: 'acct-0',
+          label: 'Account 1',
+          email,
+          enabled: true,
+          health: 100,
+          current: true,
+          quota: {
+            gemini: {
+              remainingPercent: 42,
+              remainingFraction: 0.421234,
+              checkedAt: Date.now(),
+            },
+          },
+        },
+      ],
+    })
+    writeFileSync(fixture.statePath, JSON.stringify(payload), 'utf8')
+    const logger = makeCapturingLogger()
+    const setup = await testRender(
+      () => <SidebarPanel logger={logger} stateFile={fixture.statePath} />,
+      { width: 80, height: 24 },
+    )
+    try {
+      await setup.flush()
+      expect(setup.captureCharFrame()).toContain('Account 1')
+      expect(setup.captureCharFrame()).not.toContain(email)
+      expect(JSON.stringify(logger.entries)).not.toContain(email)
+    } finally {
+      setup.renderer.destroy()
+    }
+  })
+
   it('renders remaining-quota bars and shared figures in short fixed gutters', async () => {
     const future = Date.now() + 5 * 60 * 1000
     const payload = writeState({

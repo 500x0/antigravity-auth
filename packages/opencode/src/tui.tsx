@@ -285,7 +285,7 @@ interface InternalState {
 }
 
 const EMPTY_STATE: SidebarStateV1 = {
-  version: 1,
+  version: 2,
   checkedAt: 0,
   accounts: [],
   activeRouting: {},

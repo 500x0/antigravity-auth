@@ -35,6 +35,7 @@ import {
 import { createAccountCommandOAuthService } from './account-command-oauth'
 import { createAuthLoader } from './auth-loader'
 import { BackgroundQuotaRefresh } from './background-quota-refresh'
+import { BackgroundVaultQuotaRefresh } from './background-vault-quota-refresh'
 import { initDiskSignatureCache, shutdownDiskSignatureCache } from './cache'
 import {
   applyAntigravityProviderCatalog,
@@ -96,7 +97,6 @@ import type { RequestRoutingEntry } from './shared/request-services'
 import { createSourceSidebarPublisher } from './shared/source-sidebar'
 import { createVaultAccountMenuSections } from './shared/vault-menu'
 import {
-  checkVaultQuota,
   createVaultAccountPool,
   type VaultAccountPool,
   vaultAccountRowKey,
@@ -110,6 +110,8 @@ import {
 import type { GetAuth, PluginContext, PluginInput, PluginResult } from './types'
 import { createV1VaultActivationMethod } from './vault-activation'
 import { createOpenCodeVaultCustody } from './vault-custody'
+import { checkAndPublishVaultQuota } from './vault-quota-refresh'
+import { buildVaultSidebarProjection } from './vault-sidebar-projection'
 
 export type { PluginResult } from './types'
 
@@ -148,6 +150,7 @@ export interface CreateAntigravityPluginOptions {
    * without reaching into lifecycle internals.
    */
   _onPollerCreated?: (poller: BackgroundQuotaRefresh) => void
+  _onVaultPollerCreated?: (poller: BackgroundVaultQuotaRefresh) => void
 }
 
 export function registerQuotaManagerProducer(
@@ -214,6 +217,7 @@ export const createAntigravityPlugin =
     })
     // Store vault enrollment and account-source settings beside the shared pool.
     // Vault requests obtain credentials from Claustrum, never OpenCode's Google login.
+    let vaultQuotaPoller: BackgroundVaultQuotaRefresh | undefined
     const vaultCustody = createOpenCodeVaultCustody({
       accountFile: resolve(getStoragePath()),
       readHostSlot: async () => {
@@ -224,7 +228,10 @@ export const createAntigravityPlugin =
       // The request executor reports failed bearer authorization to Claustrum,
       // which decides whether its served credential needs replacement.
       reporterSource: 'direct',
-      onAuthorityChanged: () => scheduleSidebarPublication(),
+      onAuthorityChanged: (authority) => {
+        if (authority !== 'vault') vaultQuotaPoller?.abortTick()
+        scheduleSidebarPublication()
+      },
       onRosterChanged: () => scheduleSidebarPublication(),
     })
     let vaultPool:
@@ -281,6 +288,7 @@ export const createAntigravityPlugin =
         return manager.getAccounts().map((entry) => ({
           index: entry.index,
           label: entry.label,
+          email: entry.email,
           enabled: entry.enabled,
           current: isAccountCurrent(entry.index, activeByFamily),
           coolingDownUntil: entry.coolingDownUntil,
@@ -308,6 +316,7 @@ export const createAntigravityPlugin =
         return buildSidebarMachineStateFromAccounts(
           manager?.getAccounts().map((entry) => ({
             index: entry.index,
+            email: entry.email,
             enabled: entry.enabled,
             current: active ? isAccountCurrent(entry.index, active) : false,
             coolingDownUntil: entry.coolingDownUntil,
@@ -325,23 +334,13 @@ export const createAntigravityPlugin =
       vault: async () => {
         const { pool } = await currentVaultPool()
         await pool.sync()
-        const projection = buildSidebarMachineStateFromAccounts(
-          pool.selector.rows.map((entry) => ({
-            index: entry.index,
-            enabled: entry.enabled,
-            current: false,
-            coolingDownUntil: entry.coolingDownUntil,
-            healthScore: pool.selector.healthTracker.getScore(entry.index),
-            cachedQuota: entry.cachedQuota,
-            cachedQuotaUpdatedAt: entry.cachedQuotaUpdatedAt,
-          })),
+        const projection = buildVaultSidebarProjection(
+          pool,
+          await vaultCustody.readState(),
+          dependencies.clock.now(),
         )
         return {
           ...projection,
-          accounts: projection.accounts.map((account) => ({
-            ...account,
-            id: `vault-${account.id}`,
-          })),
           ...(projection.accounts.length === 0
             ? { lastError: VAULT_ACCOUNT_REMEDY }
             : {}),
@@ -445,6 +444,21 @@ export const createAntigravityPlugin =
       options._onPollerCreated?.(poller)
       poller.start()
       lifecycle.register({ dispose: () => poller.dispose() }, 'producer')
+      vaultQuotaPoller = new BackgroundVaultQuotaRefresh({
+        intervalMs: config.background_quota_refresh_interval_minutes * 60_000,
+        sidebarStateFile: getSidebarStateFile(),
+        readAuthority,
+        currentVaultPool,
+        readProviderState: () => vaultCustody.readState(),
+        publishSidebar: () => sidebarPublisher.publish(),
+        transport: dependencies.fetchImpl,
+        logger,
+        now: dependencies.clock.now,
+        random: dependencies.clock.random,
+      })
+      options._onVaultPollerCreated?.(vaultQuotaPoller)
+      vaultQuotaPoller.start()
+      lifecycle.register(vaultQuotaPoller, 'producer')
     }
 
     // Operator settings controller backs the /antigravity-* slash commands.
@@ -606,18 +620,22 @@ export const createAntigravityPlugin =
                   return selector
                 },
                 (signal) =>
-                  checkVaultQuota({
-                    pool,
-                    signal,
-                    fetchReading: (ref, check) =>
-                      fetchVaultAccountQuota({
-                        source,
-                        ref,
-                        signal: check,
-                        logger,
-                        transport: dependencies.fetchImpl,
-                      }),
-                  }),
+                  checkAndPublishVaultQuota(
+                    {
+                      pool,
+                      signal,
+                      now: dependencies.clock.now,
+                      fetchReading: (ref, check) =>
+                        fetchVaultAccountQuota({
+                          source,
+                          ref,
+                          signal: check,
+                          logger,
+                          transport: dependencies.fetchImpl,
+                        }),
+                    },
+                    () => sidebarPublisher.publish(),
+                  ),
               ),
             }),
           }

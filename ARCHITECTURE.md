@@ -462,9 +462,11 @@ Quota age comes from a finite, nonnegative quota-cache observation timestamp, no
 
 `packages/opencode/src/plugin/background-quota-refresh.ts` provides the jittered, unref-ed local quota/tier poller. Enrollment authority gates local work; it stays dormant in vault mode.
 
+The V1 `BackgroundVaultQuotaRefresh` uses the same config interval and jitter but only vault-served receipts, with a distinct renewable `bg-vault-quota-poll` fence. Before every physical request it re-reads the enrollment authority instead of relying on the mode at tick startup; disposal aborts and awaits the producer before sidebar drain. Manual and automatic vault checks share `checkAndPublishVaultQuota`, publishing only after readings were recorded against the account, route, credential and served record version that produced them. Vault sidebar projection reads matching provider-state quota, including updates made by another process, without overwriting in-memory selection state.
+
 Three-layer cross-process deduplication:
 
-1. **Freshness gate:** Reads `checkedAt` from the on-disk sidebar state; skips quota work when it is fresher than `max(intervalMs - 60_000, floor(intervalMs / 2))`. The `/2` floor ensures the gate still fires at the 1-minute minimum interval.
+1. **Freshness gate:** The local poller retains its sidebar publication-age gate. The vault poller reads durable provider state inside the fence after syncing the current pool. It looks up each row's account identity and requires the stored observation's route and credential IDs to match that row. A missing match, quota or valid observation time makes the tick due. Otherwise the oldest matching `cachedQuotaUpdatedAt` must reach `max(intervalMs - 60_000, floor(intervalMs / 2))`. Sidebar publications cannot postpone vault fetching; fresh readings written by another process skip redundant requests. The `/2` floor keeps the gate effective at the 1-minute minimum interval.
 2. **Advisory fenced lock:** Optimization allowing a single process to do network work when multiple wake simultaneously (`acquireFencedFileLock`). Held locks skip the tick.
 3. **Fail closed on lock error:** Lock exceptions skip the tick and add jitter to the next interval without attempting uncoordinated claim files.
 
@@ -591,11 +593,11 @@ The selector tracks rate limits by account/family/model/header style; repository
 
 ### Snapshot file
 
-`packages/opencode/src/sidebar-state.ts` defines `SidebarStateV1`. Its principal fields are:
+`packages/opencode/src/sidebar-state.ts` defines `SidebarStateV2` (`SidebarStateV1` remains a source-compatibility alias). Its principal fields are:
 
 ```ts
 {
-  version: 1,
+  version: 2,
   checkedAt: number,
   accounts: SidebarAccountState[],   // redacted — no tokens, no project IDs
   activeRouting: Record<sessionId, SidebarRoutingEntry>,
@@ -606,6 +608,8 @@ The selector tracks rate limits by account/family/model/header style; repository
 ```
 
 `getSidebarStateFile` uses `ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE`, otherwise `<xdg-state>/cortexkit/antigravity-auth/sidebar-state.json`. Writes use mode 0o600 and a 0o700 parent. Account quota entries may contain windows and captured tier, each with their own observation clock.
+
+The [sidebar contract](packages/opencode/docs/sidebar-contract.md) defines every field and the version policy. Readers accept v1 without inventing missing precision or reading times and refuse unknown major versions. V2 carries optional genuine email for owner-only machine consumers, unrounded `remainingFraction` for groups/windows, and each quota group's `checkedAt` from `cachedQuotaUpdatedAt`. Top-level `checkedAt` is publication time only; an undated quota is never current.
 
 ### RPC bearer/discovery
 
@@ -671,7 +675,7 @@ The snapshot is a redacted projection of the live pool. Redaction is a structura
 
 - `SidebarQuotaKey` is `gemini | non-gemini`; model quota groups and display pools are different concepts.
 - `SidebarRoutingEntry` carries `accountId`, `modelFamily`, `headerStyle`, `updatedAt` — no token, no project ID, no fingerprint.
-- `normalizeAccount` rejects any account missing `id` or `label` so a malformed disk snapshot cannot surface an empty box in the UI. Snapshot labels are generated ordinal names (`Account 1`, `Account 2`, …); OAuth profile names and email addresses never cross this boundary.
+- `normalizeAccount` rejects any account missing `id` or `label` so a malformed disk snapshot cannot surface an empty box in the UI. Snapshot labels are generated ordinal names (`Account 1`, `Account 2`, …); OAuth profile names never cross this boundary. V2 snapshots retain genuine email (PII) for owner-only machine consumers. Renderer redaction is unchanged: email never appears in sidebar text, logs or toasts.
 - The render import-graph tests reject credential-pipeline imports while allowing snapshot, formatter, RPC and host UI helpers.
 
 ### Token timing

@@ -22,6 +22,7 @@ import {
   type BackgroundQuotaRefreshOptions,
   type PollerAccountView,
 } from './background-quota-refresh'
+import type { BackgroundVaultQuotaRefresh } from './background-vault-quota-refresh'
 import { createAntigravityPlugin } from './index'
 import type { PluginClient, PluginInput } from './types'
 
@@ -2042,6 +2043,7 @@ describe('BackgroundQuotaRefresh wiring through createAntigravityPlugin', () => 
     directory: string,
     config: Record<string, unknown>,
     pollerCreatedCb?: (p: BackgroundQuotaRefresh) => void,
+    vaultPollerCreatedCb?: (p: BackgroundVaultQuotaRefresh) => void,
   ) {
     mkdirSync(join(directory, '.opencode'), { recursive: true })
     await Bun.write(
@@ -2052,6 +2054,7 @@ describe('BackgroundQuotaRefresh wiring through createAntigravityPlugin', () => 
     const input = makePluginInput(client, directory)
     return createAntigravityPlugin('google', {
       _onPollerCreated: pollerCreatedCb,
+      _onVaultPollerCreated: vaultPollerCreatedCb,
     })(input)
   }
 
@@ -2069,6 +2072,47 @@ describe('BackgroundQuotaRefresh wiring through createAntigravityPlugin', () => 
     // _onPollerCreated must not have been called — the block is guarded by
     // `if (config.background_quota_refresh)` and the seam is wired INSIDE it.
     expect(pollerCreated).toBe(false)
+  })
+
+  it('composes a vault producer under the same config flag and awaits disposal', async () => {
+    let vaultPoller: BackgroundVaultQuotaRefresh | undefined
+    const disabled = await makePlugin(
+      join(tempDir, 'vault-disabled'),
+      { background_quota_refresh: false },
+      undefined,
+      (poller) => {
+        vaultPoller = poller
+      },
+    )
+    await disabled.dispose()
+    expect(vaultPoller).toBeUndefined()
+    const enabled = await makePlugin(
+      join(tempDir, 'vault-enabled'),
+      {
+        background_quota_refresh: true,
+        background_quota_refresh_interval_minutes: 7,
+      },
+      undefined,
+      (poller) => {
+        vaultPoller = poller
+      },
+    )
+    expect(vaultPoller).toBeDefined()
+    const options = (
+      vaultPoller as unknown as {
+        options: { intervalMs: number; readAuthority(): Promise<string> }
+      }
+    ).options
+    expect(options.intervalMs).toBe(7 * 60_000)
+    expect(await options.readAuthority()).toBe('local')
+    let disposed = false
+    const original = vaultPoller!.dispose.bind(vaultPoller!)
+    vaultPoller!.dispose = async () => {
+      await original()
+      disposed = true
+    }
+    await enabled.dispose()
+    expect(disposed).toBe(true)
   })
 
   it('background_quota_refresh: true → exactly one poller is constructed and its dispose is registered', async () => {

@@ -181,6 +181,7 @@ const SUPPORTED_QUOTA_KEYS = [
 ] as const satisfies readonly CommandAccountRow['quota'][number]['key'][]
 
 interface LiveAccountSnapshot {
+  email?: string
   index: number
   refreshToken: string
   label?: string
@@ -394,7 +395,7 @@ export interface CommandDataServiceOptions {
       },
     ): Promise<CommandDataAccountQuotaResult[]>
   }
-  /** Path to the label-only sidebar state file. */
+  /** Path to the owner-only sidebar state file. */
   sidebarStateFile: string
   /**
    * Optional storage adapter. When provided, the service persists the
@@ -420,9 +421,10 @@ export interface CommandDataService {
    */
   listAccounts(): Promise<CommandAccountRow[]>
   /**
-   * Force-refresh quota through the shared quota manager, persist by
-   * refresh token, bump `cachedQuotaUpdatedAt`, and push a label-only
-   * sidebar snapshot. Returns the freshly persisted rows so the
+   * Force-refresh quota through the shared quota manager. Associate each
+   * result with its live refresh-token identity rather than an index that
+   * may have moved, persist it, and publish an owner-only sidebar snapshot.
+   * Returns the freshly persisted rows so the
    * dialog can re-render in place.
    *
    * Bypass flag is intentional: explicit user-triggered refreshes
@@ -489,58 +491,28 @@ export function createCommandDataService(
   const projectRows = (): CommandAccountRow[] =>
     accountManagerView.getAccounts().map(toCommandAccountRow)
 
-  // Map a CommandAccountRow back to the SidebarAccountRedactionInput shape.
-  // Extracted to prevent the "sixth dropped field" pattern: every field in
-  // CommandAccountRow that must reach the sidebar lives here once, not as an
-  // inline literal that a future author has to remember to update in two places.
+  // Keep dialog/RPC rows redacted and rounded. The owner-only sidebar uses
+  // private live metadata so known email and original quota precision survive.
   const toRedactionInput = (
     row: CommandAccountRow,
   ): SidebarAccountRedactionInput => {
-    const gemini = row.quota.find((q) => q.key === 'gemini')
-    const nonGemini = row.quota.find((q) => q.key === 'non-gemini')
-    // Map a CommandAccountRow quota entry to cachedQuota pool shape
-    // so projectQuotaPoolForSidebar (the canonical projection seam)
-    // carries the per-window breakdown into the sidebar state.
-    const toPool = (
-      q:
-        | {
-            remainingPercent: number | null
-            resetAt?: number
-            windows?: CommandAccountRow['quota'][number]['windows']
-          }
-        | undefined,
-    ) => {
-      if (!q || q.remainingPercent == null) return undefined
-      return {
-        remainingFraction: q.remainingPercent / 100,
-        resetTime:
-          typeof q.resetAt === 'number' && Number.isFinite(q.resetAt)
-            ? new Date(q.resetAt).toISOString()
-            : undefined,
-        windows: q.windows?.map((w) => ({
-          window: w.window,
-          remainingFraction: w.remainingPercent / 100,
-          resetTime:
-            typeof w.resetAt === 'number' && Number.isFinite(w.resetAt)
-              ? new Date(w.resetAt).toISOString()
-              : '',
-        })),
-      }
-    }
+    const live = accountManagerView
+      .getAccounts()
+      .find((entry) => entry.index === row.index)
     return {
       index: row.index,
-      label: row.label,
+      email: live?.email,
       enabled: row.enabled,
       current: row.current,
       healthScore: row.healthScore,
-      // Tier passes the redaction boundary unchanged (plan metadata, not PII).
-      // The stamp check was already done by toCommandAccountRow.
+      coolingDownUntil: row.coolingDownUntil,
       tier: row.tier,
-      cachedQuotaUpdatedAt: row.cachedQuotaUpdatedAt,
-      cachedQuota: {
-        gemini: toPool(gemini),
-        'non-gemini': toPool(nonGemini),
-      },
+      cachedQuota: live?.cachedQuota,
+      cachedQuotaUpdatedAt: live?.cachedQuotaUpdatedAt,
+      cachedQuotaAccountId: live?.cachedQuotaAccountId,
+      currentQuotaAccountId: live
+        ? quotaAccountIdentity(live.refreshToken)
+        : undefined,
     }
   }
 
