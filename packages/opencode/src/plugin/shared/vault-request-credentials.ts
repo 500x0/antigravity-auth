@@ -201,7 +201,9 @@ function storedResets(
 }
 
 /** The row's quota groups from a stored quota reading. */
-function cachedQuotaOf(quota: QuotaState): VaultAccountRow['cachedQuota'] {
+export function cachedQuotaOf(
+  quota: QuotaState,
+): VaultAccountRow['cachedQuota'] {
   const groups = quota.cachedQuota
   if (groups == null) return undefined
   const out: NonNullable<VaultAccountRow['cachedQuota']> = {}

@@ -219,6 +219,7 @@ function makeHarness(options: {
       return liveView.map((entry, index) => ({
         index,
         refreshToken: entry.refreshToken,
+        email: entry.email,
         label: entry.label,
         enabled: entry.enabled,
         active: index === liveCurrentIndex,
@@ -734,7 +735,7 @@ describe('createCommandDataService', () => {
     ).toBe(0.05)
   })
 
-  it('refreshQuota() writes a label-only sidebar snapshot carrying the fresh percentages', async () => {
+  it('refreshQuota() writes an owner-only sidebar snapshot carrying known email and precise quota', async () => {
     const refreshResults = new Map<string, AccountQuotaResult>([
       [
         'refresh-a',
@@ -744,7 +745,7 @@ describe('createCommandDataService', () => {
           quota: {
             groups: {
               'non-gemini': {
-                remainingFraction: 0.9,
+                remainingFraction: 0.901234,
                 resetTime: new Date(0).toISOString(),
                 modelCount: 1,
               },
@@ -779,9 +780,15 @@ describe('createCommandDataService', () => {
     expect(state.accounts).toHaveLength(1)
     expect(state.accounts[0]?.label).toBe('Account 1')
     expect(state.accounts[0]?.quota['non-gemini']?.remainingPercent).toBe(90)
-    // Sidebar must NOT carry email even though the source account does.
+    expect(state.accounts[0]?.quota['non-gemini']?.remainingFraction).toBe(
+      0.901234,
+    )
+    // Email belongs only to the owner-only snapshot, never to dialog rows.
     const serialized = JSON.stringify(state)
-    expect(serialized).not.toContain('@example.test')
+    expect(serialized).toContain('@example.test')
+    expect(JSON.stringify(await harness.service.listAccounts())).not.toContain(
+      '@example.test',
+    )
   })
 
   it('refreshQuota() tolerates an empty account pool and writes a clean sidebar', async () => {

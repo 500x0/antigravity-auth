@@ -1,0 +1,556 @@
+import { describe, expect, it } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type {
+  VaultAccountState,
+  VaultProviderStateFile,
+  VaultSendAdmission,
+} from '@cortexkit/antigravity-auth-core'
+import { readSidebarState, setSidebarMachineState } from '../sidebar-state'
+import { BackgroundQuotaRefresh } from './background-quota-refresh'
+import { BackgroundVaultQuotaRefresh } from './background-vault-quota-refresh'
+import {
+  fetchVaultAccountQuota,
+  type VaultQuotaCheckOptions,
+  type VaultQuotaSource,
+} from './quota'
+import { createVaultAccountMenuSections } from './shared/vault-menu'
+import { createVaultAccountPool } from './shared/vault-request-credentials'
+import { checkAndPublishVaultQuota } from './vault-quota-refresh'
+import { buildVaultSidebarProjection } from './vault-sidebar-projection'
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function fixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'vault-poller-'))
+  const stateFile = join(dir, 'sidebar-state.json')
+  let authority: 'vault' | 'local' | 'unreadable' = 'vault'
+  let now = 1_800_000_000_000
+  let physical = 0
+  let issued = 0
+  let writes = 0
+  let publishes = 0
+  const entered = deferred()
+  let wait: Promise<void> | undefined
+  const accounts: Record<string, VaultAccountState> = {}
+  const stored: VaultProviderStateFile = { schemaVersion: 1, accounts }
+  const routes = [0, 1].map((index) => ({
+    routeId: `route-${index}`,
+    credentialId: `credential-${index}`,
+    accountIdentity: `identity-${index}`,
+    label: `Vault ${index}`,
+    ...(index === 0 ? { email: 'known@example.test' } : {}),
+  }))
+  const source: VaultQuotaSource = {
+    send: async (ref, dispatch, options) => {
+      const admission: VaultSendAdmission = {
+        ...ref,
+        recordVersion: ++issued,
+        projectId: 'vault-project',
+        accessToken: `served-${issued}`,
+        expiresAtMs: null,
+      }
+      return dispatch(admission, options.signal)
+    },
+    attribution: (admission) => ({
+      routeId: admission.routeId,
+      credentialId: admission.credentialId,
+      accountIdentity: admission.accountIdentity,
+      recordVersion: admission.recordVersion,
+    }),
+  }
+  let refused = false
+  const pool = createVaultAccountPool({
+    source: {
+      refresh: async () => undefined,
+      routes: () => routes,
+      admit: async () => {
+        throw new Error('unused')
+      },
+      reportServedStatus: async () => false,
+    },
+    durable: {
+      source: {
+        attribution: source.attribution,
+        commitState: async (by, update) => {
+          if (refused) return { status: 'unchanged' }
+          const next = update(stored.accounts[by.accountIdentity])
+          const state = {
+            observed: {
+              routeId: by.routeId,
+              credentialId: by.credentialId,
+              recordVersion: by.recordVersion,
+            },
+            ...next,
+          }
+          accounts[by.accountIdentity] = state
+          writes++
+          return { status: 'written', state }
+        },
+      },
+      readState: async () => stored,
+    },
+  })
+  let badAnswer = false
+  const transport: NonNullable<VaultQuotaCheckOptions['transport']> = async (
+    url,
+    init,
+    extra,
+  ) => {
+    const signal = extra.signal ?? init.signal
+    physical++
+    entered.resolve()
+    if (wait) {
+      await Promise.race([
+        wait,
+        new Promise<void>((resolve) =>
+          signal?.addEventListener('abort', () => resolve(), { once: true }),
+        ),
+      ])
+      signal?.throwIfAborted()
+    }
+    return new Response(
+      JSON.stringify(
+        String(url).includes('retrieveUserQuotaSummary')
+          ? badAnswer
+            ? {}
+            : {
+                groups: [
+                  {
+                    displayName: 'Gemini Models',
+                    buckets: [
+                      {
+                        bucketId: 'gemini-weekly',
+                        displayName: 'Weekly',
+                        window: 'weekly',
+                        remainingFraction: 0.512345,
+                      },
+                    ],
+                  },
+                ],
+              }
+          : { buckets: [] },
+      ),
+      { status: 200 },
+    )
+  }
+  const options = {
+    intervalMs: 300_000,
+    sidebarStateFile: stateFile,
+    readAuthority: async () => authority,
+    currentVaultPool: async () => ({ source, pool }),
+    transport,
+    logger: { debug: () => {} },
+    now: () => now,
+    random: () => 0,
+    publishSidebar: async () => {
+      publishes++
+      now += 1_000
+      await setSidebarMachineState(
+        buildVaultSidebarProjection(pool, stored, now),
+        { stateFile },
+      )
+    },
+  }
+  const poller = new BackgroundVaultQuotaRefresh(options)
+  return {
+    options,
+    poller,
+    pool,
+    entered,
+    stateFile,
+    stored,
+    accounts,
+    get physical() {
+      return physical
+    },
+    get issued() {
+      return issued
+    },
+    get writes() {
+      return writes
+    },
+    get publishes() {
+      return publishes
+    },
+    get now() {
+      return now
+    },
+    authority: (value: typeof authority) => {
+      authority = value
+    },
+    advance: (ms: number) => {
+      now += ms
+    },
+    pause: (promise: Promise<void>) => {
+      wait = promise
+    },
+    refuse: () => {
+      refused = true
+    },
+    badAnswer: () => {
+      badAnswer = true
+    },
+    cleanup: async () => {
+      await poller.dispose()
+      rmSync(dir, { recursive: true, force: true })
+    },
+  }
+}
+
+describe('BackgroundVaultQuotaRefresh', () => {
+  it('tick records a reading at the fetch time and republishes the sidebar', async () => {
+    const f = fixture()
+    try {
+      await f.poller.tick()
+      expect(f.writes).toBe(2)
+      expect(f.physical).toBe(4)
+      expect(f.issued).toBe(f.physical)
+      expect(f.publishes).toBe(1)
+      expect(f.stored.accounts['identity-0']?.quota?.cachedQuotaUpdatedAt).toBe(
+        f.now - 1_000,
+      )
+      const state = readSidebarState(f.stateFile)
+      expect(state.checkedAt).toBe(f.now)
+      expect(state.accounts[0]?.email).toBe('known@example.test')
+      expect(state.accounts[1]).not.toHaveProperty('email')
+      expect(state.accounts[0]?.quota.gemini).toMatchObject({
+        checkedAt: f.now - 1_000,
+        remainingFraction: 0.512345,
+      })
+      expect(state.accounts[0]?.quota.gemini?.windows?.[0]?.checkedAt).toBe(
+        f.now - 1_000,
+      )
+    } finally {
+      await f.cleanup()
+    }
+  })
+})
+
+describe('vault poller fences and lifecycle', () => {
+  for (const mode of ['local', 'unreadable'] as const) {
+    it(`${mode} authority performs zero vault and zero local fetches`, async () => {
+      const f = fixture()
+      f.authority(mode)
+      let localFetches = 0
+      const local = new BackgroundQuotaRefresh({
+        intervalMs: 300_000,
+        sidebarStateFile: f.stateFile,
+        mayRun: async () => false,
+        getAccountManager: () => {
+          localFetches++
+          throw new Error('local manager must not open')
+        },
+        quotaManager: {
+          refreshAccounts: async () => {
+            localFetches++
+            return []
+          },
+        } as unknown as import('./quota').QuotaManager,
+        now: () => f.now,
+        random: () => 0,
+      })
+      try {
+        await f.poller.tick()
+        await (local as unknown as { runTick(): Promise<void> }).runTick()
+        expect(f.physical).toBe(0)
+        expect(f.issued).toBe(0)
+        expect(localFetches).toBe(0)
+      } finally {
+        await local.dispose()
+        await f.cleanup()
+      }
+    })
+  }
+
+  it('the local poller remains dormant in vault mode', async () => {
+    const f = fixture()
+    let localFetches = 0
+    const local = new BackgroundQuotaRefresh({
+      intervalMs: 300_000,
+      sidebarStateFile: f.stateFile,
+      mayRun: async () => (await f.options.readAuthority()) === 'local',
+      getAccountManager: () => {
+        localFetches++
+        throw new Error('local manager must not open')
+      },
+      quotaManager: {
+        refreshAccounts: async () => {
+          localFetches++
+          return []
+        },
+      } as unknown as import('./quota').QuotaManager,
+    })
+    try {
+      await (local as unknown as { runTick(): Promise<void> }).runTick()
+      expect(localFetches).toBe(0)
+      expect(f.physical).toBe(0)
+    } finally {
+      await local.dispose()
+      await f.cleanup()
+    }
+  })
+
+  it('a second process instance contending for the lock performs no fetch', async () => {
+    const f = fixture()
+    const resume = deferred()
+    f.pause(resume.promise)
+    let secondFetches = 0
+    const second = new BackgroundVaultQuotaRefresh({
+      ...f.options,
+      transport: async (url, init, extra) => {
+        secondFetches++
+        return f.options.transport(url, init, extra)
+      },
+    })
+    try {
+      const firstTick = f.poller.tick()
+      await f.entered.promise
+      await second.tick()
+      expect(secondFetches).toBe(0)
+      expect(f.writes).toBe(0)
+      resume.resolve()
+      await firstTick
+      expect(f.writes).toBe(2)
+    } finally {
+      resume.resolve()
+      await second.dispose()
+      await f.cleanup()
+    }
+  })
+
+  it('a fresh snapshot skips and rechecks freshness after lock acquisition', async () => {
+    const f = fixture()
+    const { acquireFencedFileLock } = await import(
+      '@cortexkit/antigravity-auth-core/file-lock'
+    )
+    const poller = new BackgroundVaultQuotaRefresh({
+      ...f.options,
+      acquireLock: async (options) => {
+        const lock = await acquireFencedFileLock(options)
+        await setSidebarMachineState(
+          { checkedAt: f.now - 239_999, accounts: [] },
+          { stateFile: f.stateFile },
+        )
+        return lock
+      },
+    })
+    try {
+      await poller.tick()
+      expect(f.physical).toBe(0)
+      expect(f.publishes).toBe(0)
+    } finally {
+      await poller.dispose()
+      await f.cleanup()
+    }
+  })
+
+  it('lock errors fail closed without fetching', async () => {
+    const f = fixture()
+    const poller = new BackgroundVaultQuotaRefresh({
+      ...f.options,
+      acquireLock: async () => {
+        throw new Error('I/O error')
+      },
+    })
+    try {
+      await poller.tick()
+      expect(f.physical).toBe(0)
+    } finally {
+      await poller.dispose()
+      await f.cleanup()
+    }
+  })
+
+  it('disposal aborts in-flight transport and stops further requests before drain', async () => {
+    const f = fixture()
+    f.pause(deferred().promise)
+    const { createPluginLifecycle } = await import('./lifecycle')
+    let drained = false
+    const lifecycle = createPluginLifecycle({
+      sessionRegistry: { clear() {} },
+      shutdownDiskSignatureCache: async () => {},
+      clearFetchState() {},
+      drainSidebarWrites: async () => {
+        drained = true
+        expect(f.writes).toBe(0)
+      },
+    })
+    lifecycle.register(f.poller, 'producer')
+    try {
+      const tick = f.poller.tick()
+      await f.entered.promise
+      const physical = f.physical
+      await lifecycle.dispose()
+      await tick
+      expect(drained).toBe(true)
+      await f.poller.tick()
+      expect(f.physical).toBe(physical)
+      expect(f.publishes).toBe(0)
+    } finally {
+      await lifecycle.dispose()
+      await f.cleanup()
+    }
+  })
+
+  it('an authority change during a reading prevents fallback and later account requests', async () => {
+    const f = fixture()
+    let physical = 0
+    const poller = new BackgroundVaultQuotaRefresh({
+      ...f.options,
+      transport: async () => {
+        physical++
+        f.authority('local')
+        return new Response('{}', { status: 500 })
+      },
+    })
+    try {
+      await poller.tick()
+      expect(physical).toBeLessThanOrEqual(2)
+      expect(physical).toBeGreaterThan(0)
+      expect(f.writes).toBe(0)
+      expect(f.publishes).toBe(0)
+    } finally {
+      await poller.dispose()
+      await f.cleanup()
+    }
+  })
+
+  for (const failure of ['refused', 'failed', 'unattributed'] as const) {
+    it(`${failure} readings neither publish nor advance observation time`, async () => {
+      const f = fixture()
+      try {
+        await f.poller.tick()
+        const before = readSidebarState(f.stateFile)
+        f.advance(300_000)
+        if (failure === 'refused') f.refuse()
+        if (failure === 'failed') f.badAnswer()
+        const poller =
+          failure === 'unattributed'
+            ? new BackgroundVaultQuotaRefresh({
+                ...f.options,
+                currentVaultPool: async () => {
+                  const current = await f.options.currentVaultPool()
+                  return {
+                    ...current,
+                    source: {
+                      ...current.source,
+                      attribution: () => {
+                        throw new Error('unattributed')
+                      },
+                    },
+                  }
+                },
+              })
+            : f.poller
+        try {
+          await poller.tick()
+        } finally {
+          if (poller !== f.poller) await poller.dispose()
+        }
+        expect(f.publishes).toBe(1)
+        expect(f.writes).toBe(2)
+        expect(readSidebarState(f.stateFile)).toEqual(before)
+      } finally {
+        await f.cleanup()
+      }
+    })
+  }
+})
+
+describe('vault manual quota and durable sidebar projection', () => {
+  it('manual Quota menu check republishes recorded quota with its observation time', async () => {
+    const f = fixture()
+    try {
+      await f.pool.sync()
+      const fetchAt = f.now
+      const { source, pool } = await f.options.currentVaultPool()
+      const sections = createVaultAccountMenuSections(
+        pool,
+        () => 'opaque-choice',
+        (signal) =>
+          checkAndPublishVaultQuota(
+            {
+              pool,
+              signal,
+              now: f.options.now,
+              fetchReading: (ref, check) =>
+                fetchVaultAccountQuota({
+                  source,
+                  ref,
+                  signal: check,
+                  logger: f.options.logger,
+                  transport: f.options.transport,
+                }),
+            },
+            f.options.publishSidebar,
+          ),
+      )
+      const quota = await sections.quota.build({ notify() {} })
+      const action = quota.actions?.find((entry) => entry.id === 'refresh')
+      expect(action).toBeDefined()
+      await action!.run({ values: {}, invocation: { notify() {} } })
+      expect(f.writes).toBe(2)
+      expect(f.publishes).toBe(1)
+      const sidebar = readSidebarState(f.stateFile)
+      expect(sidebar.accounts[0]?.quota.gemini?.checkedAt).toBe(fetchAt)
+      expect(sidebar.accounts[0]?.quota.gemini?.remainingFraction).toBe(
+        0.512345,
+      )
+      expect(sidebar.checkedAt).toBe(fetchAt + 1_000)
+    } finally {
+      await f.cleanup()
+    }
+  })
+
+  it('projects newer durable quota for an already-kept selector row without rehydrating selection state', async () => {
+    const f = fixture()
+    try {
+      await f.pool.sync()
+      const row = f.pool.selector.rows[0]!
+      row.cachedQuota = { gemini: { remainingFraction: 0.1, modelCount: 1 } }
+      row.cachedQuotaUpdatedAt = 10
+      f.accounts['identity-0'] = {
+        observed: {
+          routeId: row.route.routeId,
+          credentialId: row.route.credentialId,
+          recordVersion: 12,
+        },
+        quota: {
+          schemaVersion: 1,
+          cachedQuota: {
+            gemini: { remainingFraction: 0.812345, modelCount: 1 },
+          },
+          cachedQuotaUpdatedAt: 200,
+        },
+      }
+      await f.pool.sync()
+      expect(row.cachedQuotaUpdatedAt).toBe(10)
+      const projection = buildVaultSidebarProjection(f.pool, f.stored, 300)
+      expect(projection.accounts[0]?.quota.gemini).toMatchObject({
+        remainingFraction: 0.812345,
+        checkedAt: 200,
+      })
+      expect(projection.checkedAt).toBe(300)
+      f.accounts['identity-0'] = {
+        ...f.accounts['identity-0']!,
+        observed: {
+          ...f.accounts['identity-0']!.observed,
+          credentialId: 'different-credential',
+        },
+      }
+      expect(
+        buildVaultSidebarProjection(f.pool, f.stored, 400).accounts[0]?.quota,
+      ).toEqual({})
+    } finally {
+      await f.cleanup()
+    }
+  })
+})

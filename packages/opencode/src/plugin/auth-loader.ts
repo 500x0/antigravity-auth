@@ -458,6 +458,7 @@ export function createAuthLoader({
             return {
               index: entry.index,
               label: entry.label,
+              email: entry.email,
               enabled: entry.enabled,
               current: isAccountCurrent(entry.index, activeByFamily),
               coolingDownUntil: entry.coolingDownUntil,

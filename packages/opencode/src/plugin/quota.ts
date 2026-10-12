@@ -415,6 +415,7 @@ export async function checkAccountsQuota(
 export interface SidebarQuotaAccount {
   index: number
   label?: string
+  email?: string
   enabled?: boolean
   coolingDownUntil?: number
   cachedQuota?: AccountMetadataV3['cachedQuota']
@@ -498,6 +499,7 @@ export async function pushSidebarQuotaSnapshot(
         accounts.map((entry) => ({
           index: entry.index,
           label: entry.label,
+          email: entry.email,
           enabled: entry.enabled,
           current: activeByFamily
             ? isAccountCurrent(entry.index, activeByFamily)
