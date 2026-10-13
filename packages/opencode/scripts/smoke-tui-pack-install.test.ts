@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'bun:test'
-import { expectedCandidateGraph } from './smoke-tui-pack-install.ts'
+import {
+  expectedCandidateGraph,
+  installResolution,
+} from './smoke-tui-pack-install.ts'
 
 const product = '@cortexkit/opencode-antigravity-auth'
 const core = '@cortexkit/antigravity-auth-core'
 const metadata = { version: '3.0.0', corePin: '3.0.0' }
+const installCutoff = new Date('2026-05-14T12:00:00.000Z')
 const baseline = () => [
   [
     product,
@@ -273,5 +277,39 @@ describe('packed consumer graph comparison', () => {
     expect(() => expectedCandidateGraph(candidate(), metadata)).toThrow(
       'Unexpected historical product graph row',
     )
+  })
+})
+
+describe('packed install resolution cutoff', () => {
+  it('pins baseline and candidate npm install environments to the run cutoff', () => {
+    const baseline = installResolution(
+      'npm',
+      installCutoff,
+      installCutoff.getTime() + 2_500,
+    )
+    const candidate = installResolution(
+      'npm',
+      installCutoff,
+      installCutoff.getTime() + 7_500,
+    )
+
+    expect(baseline.env.npm_config_before).toBe(installCutoff.toISOString())
+    expect(candidate.env.npm_config_before).toBe(installCutoff.toISOString())
+  })
+
+  it('derives each Bun install minimum age from the same cutoff with one safe second', () => {
+    const baseline = installResolution(
+      'bun',
+      installCutoff,
+      installCutoff.getTime() + 2_500,
+    )
+    const candidate = installResolution(
+      'bun',
+      installCutoff,
+      installCutoff.getTime() + 7_500,
+    )
+
+    expect(baseline.args).toContain('--minimum-release-age=4')
+    expect(candidate.args).toContain('--minimum-release-age=9')
   })
 })

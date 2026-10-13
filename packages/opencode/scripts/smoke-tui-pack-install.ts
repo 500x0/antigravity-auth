@@ -391,6 +391,18 @@ export function consumerWitness(ui: boolean, contract: TuiContract): string {
   return `consumer.installed_resolution: 5 checks${ui ? `; consumer.ui045: ${UI_CHECKS[contract]} ${contract} checks` : ''}`
 }
 
+export function installResolution(
+  manager: 'npm' | 'bun',
+  cutoff: Date,
+  now = Date.now(),
+) {
+  const age = Math.ceil(Math.max(0, now - cutoff.getTime()) / 1000) + 1
+  const args = manager === 'bun' ? [`--minimum-release-age=${age}`] : []
+  const env =
+    manager === 'npm' ? { npm_config_before: cutoff.toISOString() } : {}
+  return { args, env }
+}
+
 async function install(
   workspace: string,
   name: string,
@@ -400,6 +412,7 @@ async function install(
   ui: boolean,
   scripts: boolean,
   contract: TuiContract,
+  cutoff: Date,
 ) {
   const root = join(workspace, name)
   await mkdir(root)
@@ -434,8 +447,14 @@ async function install(
     npm_config_audit: 'false',
     npm_config_fund: 'false',
   }
+  const resolution = installResolution(manager, cutoff)
   await mkdir(env.HOME, { recursive: true })
-  run(manager, ['install', ...(scripts ? [] : ['--ignore-scripts'])], root, env)
+  run(
+    manager,
+    ['install', ...resolution.args, ...(scripts ? [] : ['--ignore-scripts'])],
+    root,
+    { ...env, ...resolution.env },
+  )
   const installed = join(root, 'node_modules', productName)
   if ((await realpath(installed)) !== installed)
     throw new Error('consumer.installed_resolution: workspace link')
@@ -464,6 +483,7 @@ assert.equal(typeof (await import(${JSON.stringify(productName)})).GoogleOAuthPl
 }
 
 async function main() {
+  const cutoff = new Date()
   await verifyPrerequisites()
   run('bun', ['run', '--cwd', 'packages/core', 'build'], repo)
   run('bun', ['run', 'build'], PACKAGE_ROOT)
@@ -495,6 +515,7 @@ async function main() {
           ui,
           false,
           'baseline',
+          cutoff,
         )
         baselines.set(
           ui,
@@ -525,6 +546,7 @@ async function main() {
             ui,
             scripts,
             'candidate',
+            cutoff,
           )
           requireEqual(
             consumer.graph,
