@@ -14,20 +14,15 @@ import type {
   ThinkingTier,
 } from './types.ts'
 
-// Google documents every field below at https://ai.google.dev/api/generate-content#Schema
-// and https://googleapis.github.io/js-genai/release_docs/interfaces/types.Schema.html.
-// The 3.0.2 converter (git show 6e9de18d:packages/core/src/transform/gemini.ts) already
-// forwarded all of them: type/properties/items/required/enum/anyOf/description/default,
-// minimum/maximum and the length/cardinality limits, plus format/pattern/title/
-// nullable/propertyOrdering and singular example through its fallback assignment.
-// Preserve that documented intersection, not arbitrary JSON Schema fields: reports
-// reject exclusiveMinimum ("Unknown name") and non-string enums ("TYPE_STRING").
-// Plural examples and additionalProperties are not accepted on this boundary.
-// CLI fixtures retain request keys, not tool schemas, so they add no field evidence.
-// The older Claude cleaner (5d52ed0fa) describes VALIDATED-mode constraint
-// rejections, including Gemini, but 3.0.2's Gemini path used this converter without
-// that cleaner and forwarded the documented fields. Keep that production behavior;
-// only the OpenCode Claude path opts into the historical VALIDATED adaptation.
+// Antigravity validates tool parameters against Gemini's protobuf `Schema`, so a
+// field outside it fails the whole request with HTTP 400: an unknown keyword such
+// as `exclusiveMinimum` is rejected as `Unknown name "exclusiveMinimum"`, and a
+// non-string enum value as `TYPE_STRING`. Only fields of Google's documented Schema
+// pass (https://ai.google.dev/api/generate-content#Schema), and only those this
+// converter has already sent successfully on the Gemini path. Plural `examples` and
+// `additionalProperties` are not Schema fields. Claude requests opt into the
+// stricter `claudeValidated` adaptation below instead of forwarding the scalar
+// constraints and `title`.
 const ALLOWED_SCHEMA_FIELDS = new Set([
   'type',
   'properties',
@@ -193,9 +188,10 @@ function flattenClaudeUnion(
   const branches = anyOf.filter(isSchemaObject)
   if (!branches.length) return base
 
-  // The WebFetch tool validates format as text|markdown|html; selecting just one
-  // string-constant branch previously lost valid choices. Merge those enums, while
-  // retaining Claude's object/array/primitive preference for other unions.
+  // A union of string constants, such as a tool parameter allowing "text",
+  // "markdown" or "html", becomes one STRING enum with every choice. Keeping a
+  // single branch would make the tool reject the other values. Other unions keep
+  // one branch, preferring object, then array, then a primitive type.
   if (
     branches.length === anyOf.length &&
     branches.every(

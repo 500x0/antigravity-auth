@@ -258,11 +258,12 @@ export function cleanJSONSchemaForAntigravity(schema: any): any {
     return schema
   }
 
-  // Claude's backend rejects empty object parameters in VALIDATED mode.
-  // Replace unresolved $refs with description hints, choose one supported type
-  // from type arrays, and add placeholders to empty objects. The shared converter's
-  // Claude option then flattens unions and describes scalar constraints rather
-  // than forwarding fields that this backend's validation historically rejected.
+  // Claude requests run with VALIDATED function calling, whose schema validation
+  // rejects empty object parameters, unresolved $refs and type arrays. Replace
+  // $refs with description hints, choose one type from each type array, and give
+  // empty objects a placeholder property. The shared converter's Claude option
+  // then flattens unions and moves scalar constraints (lengths, pattern, format,
+  // default) into descriptions, which this validation also refuses.
   let result = convertRefsToHints(schema)
   result = addEnumHints(result)
   result = flattenTypeArrays(result)
