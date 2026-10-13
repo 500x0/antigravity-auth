@@ -259,14 +259,15 @@ export function cleanJSONSchemaForAntigravity(schema: any): any {
   }
 
   // Claude's backend rejects empty object parameters in VALIDATED mode.
-  // Convert unresolved references to text hints and type arrays to a single type
-  // before adding placeholder fields for empty objects. Normalize that completed
-  // schema with toGeminiSchema so all adapters share wire keywords and constraints.
+  // Replace unresolved $refs with description hints, choose one supported type
+  // from type arrays, and add placeholders to empty objects. The shared converter's
+  // Claude option then flattens unions and describes scalar constraints rather
+  // than forwarding fields that this backend's validation historically rejected.
   let result = convertRefsToHints(schema)
   result = addEnumHints(result)
   result = flattenTypeArrays(result)
   result = addEmptySchemaPlaceholder(result)
-  return toGeminiSchema(result)
+  return toGeminiSchema(result, { claudeValidated: true })
 }
 
 // ============================================================================

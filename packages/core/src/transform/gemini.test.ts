@@ -1814,3 +1814,103 @@ describe('Antigravity schema subset edge cases', () => {
     expect(JSON.stringify(schema)).toBe(before)
   })
 })
+
+describe('documented Gemini Schema compatibility', () => {
+  it('retains documented fields previously forwarded by the 3.0.2 converter', () => {
+    expect(
+      toGeminiSchema({
+        type: 'object',
+        title: 'Ordered input',
+        propertyOrdering: ['timestamp'],
+        example: { timestamp: '2026-10-13T00:00:00Z' },
+        examples: [{}],
+        properties: {
+          timestamp: {
+            type: 'string',
+            format: 'date-time',
+            pattern: '^2026-',
+            title: 'Timestamp',
+            nullable: true,
+            example: '2026-10-13T00:00:00Z',
+          },
+        },
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      title: 'Ordered input',
+      propertyOrdering: ['timestamp'],
+      example: { timestamp: '2026-10-13T00:00:00Z' },
+      properties: {
+        timestamp: {
+          type: 'STRING',
+          format: 'date-time',
+          pattern: '^2026-',
+          title: 'Timestamp',
+          nullable: true,
+          example: '2026-10-13T00:00:00Z',
+        },
+      },
+    })
+  })
+
+  it('merges zod-style allOf branches despite dropped keywords and retained annotations', () => {
+    expect(
+      toGeminiSchema({
+        allOf: [
+          {
+            type: 'object',
+            title: 'First',
+            additionalProperties: false,
+            $schema: 'https://json-schema.org/draft-07/schema#',
+            properties: { a: { type: 'string' } },
+            required: ['a'],
+          },
+          {
+            type: 'object',
+            title: 'Second',
+            additionalProperties: false,
+            properties: { b: { type: 'integer' } },
+            required: ['b'],
+          },
+        ],
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      title: 'First',
+      properties: {
+        a: { type: 'STRING' },
+        b: { type: 'INTEGER' },
+      },
+      required: ['a', 'b'],
+    })
+  })
+
+  it('merges identical shared properties without confusing them with real conflicts', () => {
+    expect(
+      toGeminiSchema({
+        allOf: [
+          {
+            type: 'object',
+            properties: { shared: { type: 'string', minLength: 1 } },
+            required: ['shared'],
+          },
+          {
+            type: 'object',
+            properties: {
+              extra: { type: 'boolean' },
+              shared: { minLength: 1, type: 'string' },
+            },
+            required: ['extra'],
+          },
+        ],
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: {
+        shared: { type: 'STRING', minLength: 1 },
+        extra: { type: 'BOOLEAN' },
+      },
+      required: ['shared', 'extra'],
+    })
+  })
+})

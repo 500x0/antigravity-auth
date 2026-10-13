@@ -2834,6 +2834,95 @@ describe('tool schema wire normalization', () => {
           .functionDeclarations[0].parameters
       }
 
+      it('retains documented Gemini Schema fields with the appropriate validation mode', () => {
+        const schema = wireSchema({
+          value: {
+            type: 'object',
+            title: 'Ordered input',
+            propertyOrdering: ['timestamp'],
+            example: { timestamp: '2026-10-13T00:00:00Z' },
+            examples: [{}],
+            properties: {
+              timestamp: {
+                type: 'string',
+                format: 'date-time',
+                pattern: '^2026-',
+                title: 'Timestamp',
+                nullable: true,
+                example: '2026-10-13T00:00:00Z',
+              },
+            },
+          },
+        })
+        expect(schema.properties.value).toEqual(
+          family === 'Claude'
+            ? {
+                type: 'OBJECT',
+                propertyOrdering: ['timestamp'],
+                example: { timestamp: '2026-10-13T00:00:00Z' },
+                properties: {
+                  timestamp: {
+                    type: 'STRING',
+                    nullable: true,
+                    example: '2026-10-13T00:00:00Z',
+                    description: 'format: date-time, pattern: ^2026-',
+                  },
+                },
+              }
+            : {
+                type: 'OBJECT',
+                title: 'Ordered input',
+                propertyOrdering: ['timestamp'],
+                example: { timestamp: '2026-10-13T00:00:00Z' },
+                properties: {
+                  timestamp: {
+                    type: 'STRING',
+                    format: 'date-time',
+                    pattern: '^2026-',
+                    title: 'Timestamp',
+                    nullable: true,
+                    example: '2026-10-13T00:00:00Z',
+                  },
+                },
+              },
+        )
+      })
+
+      it('merges zod-style intersections without losing later required properties', () => {
+        const schema = wireSchema({
+          value: {
+            allOf: [
+              {
+                type: 'object',
+                additionalProperties: false,
+                $schema: 'ignored',
+                title: 'First',
+                properties: { a: { type: 'string' } },
+                required: ['a'],
+              },
+              {
+                type: 'object',
+                additionalProperties: false,
+                title: 'Second',
+                properties: { b: { type: 'integer' } },
+                required: ['b'],
+              },
+            ],
+          },
+        })
+        expect(schema.properties.value).toEqual({
+          type: 'OBJECT',
+          ...(family === 'Claude'
+            ? { description: 'No extra properties allowed' }
+            : { title: 'First' }),
+          properties: {
+            a: { type: 'STRING' },
+            b: { type: 'INTEGER' },
+          },
+          required: ['a', 'b'],
+        })
+      })
+
       it('restricts enums to strings without changing value types', () => {
         const schema = wireSchema({
           nested: {
@@ -2900,7 +2989,13 @@ describe('tool schema wire normalization', () => {
         expect(schema.properties.thinking).toEqual({
           type: 'OBJECT',
           properties: {
-            value: { type: 'ARRAY', items: { type: 'STRING' } },
+            value: {
+              type: 'ARRAY',
+              items: { type: 'STRING' },
+              ...(family === 'Claude'
+                ? { description: 'No extra properties allowed' }
+                : {}),
+            },
           },
         })
         expect(schema.type).toBe('OBJECT')
@@ -2995,23 +3090,33 @@ describe('tool schema wire normalization', () => {
             ],
           },
         }).properties
-        expect(props.data.items).toEqual({
-          anyOf: [
-            {
-              type: 'OBJECT',
-              properties: {
-                flag: { type: 'BOOLEAN', description: 'Must be false.' },
+        expect(props.data.items).toEqual(
+          family === 'Claude'
+            ? {
+                type: 'OBJECT',
+                properties: {
+                  flag: { type: 'BOOLEAN', description: 'Must be false.' },
+                },
+                description: 'Accepts: object | boolean',
+              }
+            : {
+                anyOf: [
+                  {
+                    type: 'OBJECT',
+                    properties: {
+                      flag: { type: 'BOOLEAN', description: 'Must be false.' },
+                    },
+                  },
+                  {
+                    anyOf: [
+                      { type: 'BOOLEAN', description: 'Must be true.' },
+                      { type: 'INTEGER', description: 'Must be 3.' },
+                      { type: 'STRING', enum: ['x'] },
+                    ],
+                  },
+                ],
               },
-            },
-            {
-              anyOf: [
-                { type: 'BOOLEAN', description: 'Must be true.' },
-                { type: 'INTEGER', description: 'Must be 3.' },
-                { type: 'STRING', enum: ['x'] },
-              ],
-            },
-          ],
-        })
+        )
         expect(props.joined).toEqual({
           type: 'OBJECT',
           properties: {
@@ -3021,6 +3126,185 @@ describe('tool schema wire normalization', () => {
           required: ['a', 'b'],
         })
       })
+    })
+  }
+})
+
+describe('historical tool schema wire fixes', () => {
+  function request(model: string, tools: unknown[]) {
+    const prepared = prepareAntigravityRequest(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'Use the tool' }] }],
+          tools,
+        }),
+      },
+      'access-token',
+      'schema-history-project',
+      undefined,
+      'antigravity',
+    )
+    return JSON.parse(prepared.init.body as string).request
+  }
+
+  it('Claude preserves WebFetch format choices and the property named format', () => {
+    const body = request('antigravity-claude-sonnet-5-5-low', [
+      {
+        functionDeclarations: [
+          {
+            name: 'WebFetch',
+            parameters: {
+              type: 'object',
+              properties: {
+                format: {
+                  anyOf: [
+                    { const: 'text' },
+                    { const: 'markdown' },
+                    { const: 'html' },
+                  ],
+                },
+              },
+              required: ['format'],
+            },
+          },
+        ],
+      },
+    ])
+    expect(body.tools[0].functionDeclarations[0].parameters).toEqual({
+      type: 'OBJECT',
+      properties: {
+        format: { type: 'STRING', enum: ['text', 'markdown', 'html'] },
+      },
+      required: ['format'],
+    })
+  })
+
+  it('Claude retains scalar VALIDATED constraint hints and union flattening', () => {
+    const body = request('antigravity-claude-sonnet-5-5-low', [
+      {
+        functionDeclarations: [
+          {
+            name: 'validated',
+            parameters: {
+              type: 'object',
+              title: 'Not a validated field',
+              properties: {
+                text: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 10,
+                  pattern: '^x',
+                  format: 'date',
+                  default: 'x',
+                },
+                list: {
+                  type: 'array',
+                  minItems: 1,
+                  maxItems: 2,
+                  items: { type: 'string' },
+                },
+                choice: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+              },
+            },
+          },
+        ],
+      },
+    ])
+    expect(body.tools[0].functionDeclarations[0].parameters).toEqual({
+      type: 'OBJECT',
+      properties: {
+        text: {
+          type: 'STRING',
+          description:
+            'minLength: 1, maxLength: 10, pattern: ^x, format: date, default: x',
+        },
+        list: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'minItems: 1, maxItems: 2',
+        },
+        choice: { type: 'STRING', description: 'Accepts: string | number' },
+      },
+    })
+  })
+
+  for (const [family, model] of [
+    ['Gemini', 'antigravity-gemini-3.8-flash-low'],
+    ['Claude', 'antigravity-claude-sonnet-5-5-low'],
+    ['GPT-OSS', 'antigravity-gpt-oss-120b-medium'],
+  ]) {
+    it(`${family} strips additionalProperties and missing required names from the final schema`, () => {
+      const body = request(model!, [
+        {
+          functionDeclarations: [
+            {
+              name: 'mcp_tool',
+              parameters: {
+                type: 'object',
+                additionalProperties: false,
+                $schema: 'ignored',
+                properties: {
+                  name: { type: 'string' },
+                  data: { type: 'array' },
+                },
+                required: ['name', 'missing', 'data'],
+              },
+            },
+          ],
+        },
+      ])
+      expect(body.tools[0].functionDeclarations[0].parameters).toEqual({
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          data: { type: 'ARRAY', items: { type: 'STRING' } },
+        },
+        required: ['name', 'data'],
+        ...(family === 'Claude'
+          ? { description: 'No extra properties allowed' }
+          : {}),
+      })
+    })
+
+    it(`${family} does not reintroduce wrapper-level parameters or raw schemas`, () => {
+      const body = request(model!, [
+        {
+          type: 'function',
+          parameters: { type: 'string', readOnly: true },
+          function: {
+            name: 'wrapped_tool',
+            parameters: {
+              type: 'object',
+              properties: { enabled: { type: 'boolean', const: false } },
+              additionalProperties: false,
+            },
+          },
+        },
+      ])
+      expect(body.tools).toEqual([
+        {
+          functionDeclarations: [
+            {
+              name: 'wrapped_tool',
+              description:
+                family === 'Claude'
+                  ? '\n\n⚠️ STRICT PARAMETERS: enabled (BOOLEAN).'
+                  : '',
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  enabled: { type: 'BOOLEAN', description: 'Must be false.' },
+                },
+                ...(family === 'Claude'
+                  ? { description: 'No extra properties allowed' }
+                  : {}),
+              },
+            },
+          ],
+        },
+      ])
     })
   }
 })

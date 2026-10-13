@@ -2954,7 +2954,18 @@ describe('shared executor tool schema normalization', () => {
                     parameters: {
                       type: 'object',
                       readOnly: true,
+                      title: 'Ordered input',
+                      propertyOrdering: ['count', 'label'],
+                      example: { count: 3, label: 'x' },
                       properties: {
+                        label: {
+                          type: 'string',
+                          format: 'date-time',
+                          pattern: '^x',
+                          title: 'Label',
+                          nullable: true,
+                          example: 'x',
+                        },
                         count: {
                           type: 'integer',
                           const: 3,
@@ -2975,7 +2986,18 @@ describe('shared executor tool schema normalization', () => {
       const body = JSON.parse(String(h.calls[0]?.init?.body))
       expect(body.request.tools[0].functionDeclarations[0].parameters).toEqual({
         type: 'OBJECT',
+        title: 'Ordered input',
+        propertyOrdering: ['count', 'label'],
+        example: { count: 3, label: 'x' },
         properties: {
+          label: {
+            type: 'STRING',
+            format: 'date-time',
+            pattern: '^x',
+            title: 'Label',
+            nullable: true,
+            example: 'x',
+          },
           count: { type: 'INTEGER', minimum: 1, description: 'Must be 3.' },
         },
       })

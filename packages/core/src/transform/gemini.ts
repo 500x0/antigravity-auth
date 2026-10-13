@@ -14,21 +14,32 @@ import type {
   ThinkingTier,
 } from './types.ts'
 
-// Only these fields may reach Antigravity's protobuf-backed tool parameters.
-// HTTP 400 errors reject exclusiveMinimum ("Unknown name") and non-string enums
-// ("TYPE_STRING"). gemini.test.ts pins type/properties/items/required/description/
-// default, string enum and anyOf. Inclusive minimum/maximum and min/max Length,
-// Items and Properties retain this converter's existing numeric-field behavior.
-// For GPT-OSS, moveNumericConstraintsToDescription instead describes those fields:
-// its backend re-encodes numbers as strings before JSON Schema validation.
-// test-fixtures/agy-cli-*-stream-request.json and agy-cli-1.3.3/ omit tool schemas,
-// so those CLI captures cannot establish support for additional schema keywords.
+// Google documents every field below at https://ai.google.dev/api/generate-content#Schema
+// and https://googleapis.github.io/js-genai/release_docs/interfaces/types.Schema.html.
+// The 3.0.2 converter (git show 6e9de18d:packages/core/src/transform/gemini.ts) already
+// forwarded all of them: type/properties/items/required/enum/anyOf/description/default,
+// minimum/maximum and the length/cardinality limits, plus format/pattern/title/
+// nullable/propertyOrdering and singular example through its fallback assignment.
+// Preserve that documented intersection, not arbitrary JSON Schema fields: reports
+// reject exclusiveMinimum ("Unknown name") and non-string enums ("TYPE_STRING").
+// Plural examples and additionalProperties are not accepted on this boundary.
+// CLI fixtures retain request keys, not tool schemas, so they add no field evidence.
+// The older Claude cleaner (5d52ed0fa) describes VALIDATED-mode constraint
+// rejections, including Gemini, but 3.0.2's Gemini path used this converter without
+// that cleaner and forwarded the documented fields. Keep that production behavior;
+// only the OpenCode Claude path opts into the historical VALIDATED adaptation.
 const ALLOWED_SCHEMA_FIELDS = new Set([
   'type',
   'properties',
   'items',
   'required',
   'description',
+  'format',
+  'pattern',
+  'title',
+  'nullable',
+  'propertyOrdering',
+  'example',
   'default',
   'enum',
   'anyOf',
@@ -62,6 +73,8 @@ export interface GeminiSchemaOptions {
    * OpenAI JSON Schema validation. Move them to descriptions instead.
    */
   moveNumericConstraintsToDescription?: boolean
+  /** Flatten Claude unions, describe scalar constraints, and omit title in VALIDATED mode. */
+  claudeValidated?: boolean
 }
 
 function isSchemaObject(value: unknown): value is Record<string, unknown> {
@@ -70,6 +83,25 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
 
 function describeValue(value: unknown): string {
   return JSON.stringify(value) ?? String(value)
+}
+
+function sameSchemaValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length &&
+      left.every((value, index) => sameSchemaValue(value, right[index]))
+    )
+  }
+  if (!isSchemaObject(left) || !isSchemaObject(right)) return false
+  const keys = Object.keys(left)
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every(
+      (key) =>
+        Object.hasOwn(right, key) && sameSchemaValue(left[key], right[key]),
+    )
+  )
 }
 
 function mergeSchemaAllOf(
@@ -82,29 +114,36 @@ function mergeSchemaAllOf(
   const properties: Record<string, unknown> = {}
   const required = new Set<string>()
   const descriptions: string[] = []
+  const metadata: Record<string, unknown> = {}
   let unambiguous = allOf.length > 0
 
-  for (const [index, branch] of branches.entries()) {
+  for (const branch of branches) {
     if (
       !isSchemaObject(branch) ||
-      (index > 0 &&
-        branch.type === undefined &&
-        branch.properties === undefined) ||
       (branch.type !== undefined &&
         String(branch.type).toUpperCase() !== 'OBJECT') ||
-      (branch.properties !== undefined && !isSchemaObject(branch.properties)) ||
-      Object.keys(branch).some(
-        (key) =>
-          !['type', 'properties', 'required', 'description'].includes(key),
-      )
+      (branch.properties !== undefined && !isSchemaObject(branch.properties))
     ) {
       unambiguous = false
       break
     }
+    // Metadata comes from the first occurrence; dropped keywords cannot make
+    // otherwise compatible object intersections lose their later properties.
+    for (const [key, value] of Object.entries(branch)) {
+      if (
+        !['properties', 'required', 'description'].includes(key) &&
+        !Object.hasOwn(metadata, key)
+      )
+        metadata[key] = value
+    }
     if (typeof branch.description === 'string')
       descriptions.push(branch.description)
     for (const [name, property] of Object.entries(branch.properties ?? {})) {
-      if (Object.hasOwn(properties, name)) unambiguous = false
+      if (
+        Object.hasOwn(properties, name) &&
+        !sameSchemaValue(properties[name], property)
+      )
+        unambiguous = false
       properties[name] = property
     }
     if (Array.isArray(branch.required)) {
@@ -116,6 +155,7 @@ function mergeSchemaAllOf(
 
   if (unambiguous) {
     return {
+      ...metadata,
       type: 'object',
       properties,
       ...(required.size ? { required: [...required] } : {}),
@@ -134,6 +174,81 @@ function mergeSchemaAllOf(
   }
 }
 
+const CLAUDE_VALIDATED_HINT_FIELDS = new Set([
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+  'pattern',
+  'format',
+  'default',
+])
+
+function flattenClaudeUnion(
+  schema: Record<string, unknown>,
+  hints: string[],
+): Record<string, unknown> {
+  if (!Array.isArray(schema.anyOf) || schema.anyOf.length === 0) return schema
+  const { anyOf, ...base } = schema
+  const branches = anyOf.filter(isSchemaObject)
+  if (!branches.length) return base
+
+  // The WebFetch tool validates format as text|markdown|html; selecting just one
+  // string-constant branch previously lost valid choices. Merge those enums, while
+  // retaining Claude's object/array/primitive preference for other unions.
+  if (
+    branches.length === anyOf.length &&
+    branches.every(
+      (branch) =>
+        Array.isArray(branch.enum) &&
+        branch.enum.length > 0 &&
+        branch.enum.every((value) => typeof value === 'string') &&
+        (branch.type === undefined || branch.type === 'STRING') &&
+        !branch.properties &&
+        !branch.items,
+    )
+  ) {
+    return {
+      ...base,
+      type: 'STRING',
+      enum: [...new Set(branches.flatMap((branch) => branch.enum as string[]))],
+    }
+  }
+
+  const typeName = (branch: Record<string, unknown>) =>
+    branch.properties
+      ? 'object'
+      : branch.items
+        ? 'array'
+        : String(branch.type ?? 'null').toLowerCase()
+  const score = (branch: Record<string, unknown>) => {
+    const type = typeName(branch)
+    return type === 'object'
+      ? 3
+      : type === 'array'
+        ? 2
+        : type === 'null'
+          ? 0
+          : 1
+  }
+  let selected = branches[0]!
+  for (const branch of branches.slice(1)) {
+    if (score(branch) > score(selected)) selected = branch
+  }
+  const result = { ...base, ...selected }
+  if (typeof base.description === 'string' && base.description) {
+    result.description =
+      typeof selected.description === 'string' &&
+      selected.description &&
+      selected.description !== base.description
+        ? `${base.description} (${selected.description})`
+        : base.description
+  }
+  if (branches.length > 1)
+    hints.push(`Accepts: ${[...new Set(branches.map(typeName))].join(' | ')}`)
+  return result
+}
+
 export function toGeminiSchema(
   schema: unknown,
   options: GeminiSchemaOptions = {},
@@ -148,7 +263,7 @@ export function toGeminiSchema(
     schema as Record<string, unknown>,
     numericConstraintHints,
   )
-  const result: Record<string, unknown> = {}
+  let result: Record<string, unknown> = {}
 
   // First pass: collect all property names for required validation
   const propertyNames = new Set<string>()
@@ -161,6 +276,16 @@ export function toGeminiSchema(
   }
 
   for (const [key, value] of Object.entries(inputSchema)) {
+    if (options.claudeValidated) {
+      if (key === 'title') continue
+      if (key === 'additionalProperties' && value === false)
+        numericConstraintHints.push('No extra properties allowed')
+      if (CLAUDE_VALIDATED_HINT_FIELDS.has(key)) {
+        if (value !== undefined && typeof value !== 'object')
+          numericConstraintHints.push(`${key}: ${value}`)
+        continue
+      }
+    }
     if (key === 'const') {
       if (typeof value === 'string') result.enum = [value]
       else numericConstraintHints.push(`Must be ${describeValue(value)}.`)
@@ -270,6 +395,18 @@ export function toGeminiSchema(
           : Math.min(result[key], value)
     } else {
       result[key] = value
+    }
+  }
+
+  if (options.claudeValidated) {
+    result = flattenClaudeUnion(result, numericConstraintHints)
+    if (isSchemaObject(result.properties) && Array.isArray(result.required)) {
+      const properties = result.properties
+      const required = result.required.filter(
+        (name) => typeof name === 'string' && Object.hasOwn(properties, name),
+      )
+      if (required.length) result.required = required
+      else delete result.required
     }
   }
 
