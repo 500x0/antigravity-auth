@@ -185,7 +185,9 @@ jobs:
 
   mutations-main:
     name: Mutation proofs (full catalogue)
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Verification branches replay the full catalogue too, so a change is proven
+    # before it reaches main.
+    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/verify/'))) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     steps:
