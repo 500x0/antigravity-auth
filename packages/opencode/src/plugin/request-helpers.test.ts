@@ -1601,8 +1601,8 @@ describe('placeholder parameter for empty schemas', () => {
 })
 
 describe('cleanJSONSchemaForAntigravity', () => {
-  describe('enum merging from anyOf/oneOf', () => {
-    it('merges anyOf with const values into enum (WebFetch format pattern)', () => {
+  describe('preserving anyOf/oneOf alternatives', () => {
+    it('preserves anyOf string constants as string enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1618,16 +1618,12 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.format.enum).toEqual([
-        'text',
-        'markdown',
-        'html',
-      ])
-      expect(result.properties.format.anyOf).toBeUndefined()
-      expect(result.properties.format.type).toBe('string')
+      expect(result.properties.format).toEqual({
+        anyOf: [{ enum: ['text'] }, { enum: ['markdown'] }, { enum: ['html'] }],
+      })
     })
 
-    it('merges oneOf with const values into enum', () => {
+    it('converts oneOf string constants to anyOf enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1643,15 +1639,15 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.status.enum).toEqual([
-        'pending',
-        'active',
-        'completed',
+      expect(result.properties.status.anyOf).toEqual([
+        { enum: ['pending'] },
+        { enum: ['active'] },
+        { enum: ['completed'] },
       ])
       expect(result.properties.status.oneOf).toBeUndefined()
     })
 
-    it('merges anyOf with single-value enums into combined enum', () => {
+    it('preserves anyOf single-value enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1667,10 +1663,14 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.level.enum).toEqual(['low', 'medium', 'high'])
+      expect(result.properties.level.anyOf).toEqual([
+        { enum: ['low'] },
+        { enum: ['medium'] },
+        { enum: ['high'] },
+      ])
     })
 
-    it('merges anyOf with multi-value enums', () => {
+    it('preserves anyOf multi-value enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1682,11 +1682,9 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.color.enum).toEqual([
-        'red',
-        'blue',
-        'green',
-        'yellow',
+      expect(result.properties.color.anyOf).toEqual([
+        { enum: ['red', 'blue'], description: 'Allowed: red, blue' },
+        { enum: ['green', 'yellow'], description: 'Allowed: green, yellow' },
       ])
     })
 
@@ -1703,10 +1701,13 @@ describe('cleanJSONSchemaForAntigravity', () => {
       const result = cleanJSONSchemaForAntigravity(schema)
 
       expect(result.properties.data.enum).toBeUndefined()
-      expect(result.properties.data.type).toBe('string')
+      expect(result.properties.data.anyOf).toEqual([
+        { type: 'STRING' },
+        { type: 'NUMBER' },
+      ])
     })
 
-    it('preserves parent description when merging enum', () => {
+    it('preserves parent description alongside enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1719,7 +1720,10 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.format.enum).toEqual(['text', 'markdown'])
+      expect(result.properties.format.anyOf).toEqual([
+        { enum: ['text'] },
+        { enum: ['markdown'] },
+      ])
       expect(result.properties.format.description).toContain('Output format')
     })
   })

@@ -2798,3 +2798,229 @@ describe('current Claude warmup admission', () => {
     })
   })
 })
+
+describe('tool schema wire normalization', () => {
+  for (const [family, model] of [
+    ['Gemini', 'antigravity-gemini-3.8-flash-low'],
+    ['Claude', 'antigravity-claude-sonnet-5-5-low'],
+    ['GPT-OSS', 'antigravity-gpt-oss-120b-medium'],
+  ]) {
+    describe(family!, () => {
+      function wireSchema(properties: Record<string, unknown>) {
+        const prepared = prepareAntigravityRequest(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: 'Use the tool' }] }],
+              tools: [
+                {
+                  functionDeclarations: [
+                    {
+                      name: 'report_tool',
+                      parameters: { type: 'object', properties },
+                    },
+                  ],
+                },
+              ],
+            }),
+          },
+          'access-token',
+          'schema-test-project',
+          undefined,
+          'antigravity',
+        )
+        return JSON.parse(prepared.init.body as string).request.tools[0]
+          .functionDeclarations[0].parameters
+      }
+
+      it('restricts enums to strings without changing value types', () => {
+        const schema = wireSchema({
+          nested: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                off: { type: 'boolean', const: false },
+                on: { type: 'boolean', const: true },
+                count: { type: 'integer', const: 3 },
+                label: { type: 'string', const: 'x' },
+                choices: { type: 'integer', enum: [1, 2] },
+                mixed: { type: 'string', enum: ['x', false] },
+              },
+            },
+          },
+        })
+        const props = schema.properties.nested.items.properties
+        expect(props.off).toEqual({
+          type: 'BOOLEAN',
+          description: 'Must be false.',
+        })
+        expect(props.on).toEqual({
+          type: 'BOOLEAN',
+          description: 'Must be true.',
+        })
+        expect(props.count).toEqual({
+          type: 'INTEGER',
+          description: 'Must be 3.',
+        })
+        expect(props.label).toEqual({ type: 'STRING', enum: ['x'] })
+        expect(props.choices).toEqual({
+          type: 'INTEGER',
+          description: 'Allowed values: 1, 2.',
+        })
+        expect(props.mixed).toEqual({
+          type: 'STRING',
+          description: 'Allowed values: "x", false.',
+        })
+      })
+
+      it('drops unknown keywords at every schema depth', () => {
+        const schema = wireSchema({
+          thinking: {
+            type: 'object',
+            examples: [{}],
+            readOnly: true,
+            vendorExtension: 'bad',
+            properties: {
+              value: {
+                type: 'array',
+                $schema: 'ignored',
+                additionalProperties: false,
+                items: {
+                  type: 'string',
+                  examples: ['x'],
+                  readOnly: true,
+                  vendorExtension: 'bad',
+                },
+              },
+            },
+          },
+        })
+        expect(schema.properties.thinking).toEqual({
+          type: 'OBJECT',
+          properties: {
+            value: { type: 'ARRAY', items: { type: 'STRING' } },
+          },
+        })
+        expect(schema.type).toBe('OBJECT')
+      })
+
+      it('handles exclusive bounds and unsupported numeric constraints', () => {
+        const props = wireSchema({
+          count: {
+            type: 'integer',
+            minimum: 0,
+            exclusiveMinimum: 0,
+            maximum: 20,
+            exclusiveMaximum: 10,
+            multipleOf: 2,
+          },
+          amount: {
+            type: 'number',
+            minimum: 0,
+            exclusiveMinimum: true,
+            maximum: 10,
+            exclusiveMaximum: 9.5,
+          },
+          tighter: {
+            type: 'integer',
+            minimum: 5,
+            exclusiveMinimum: 0,
+            maximum: 6,
+            exclusiveMaximum: 10,
+          },
+        }).properties
+        if (family === 'GPT-OSS') {
+          expect(props.count).toEqual({
+            type: 'INTEGER',
+            description:
+              'minimum: 0, exclusiveMinimum: 0, maximum: 20, exclusiveMaximum: 10, multipleOf: 2',
+          })
+          expect(props.amount.description).toContain('exclusiveMinimum: true')
+          expect(props.amount.minimum).toBeUndefined()
+        } else {
+          expect(props.count).toEqual({
+            type: 'INTEGER',
+            minimum: 1,
+            maximum: 9,
+            description: 'multipleOf: 2',
+          })
+          expect(props.amount).toEqual({
+            type: 'NUMBER',
+            minimum: 0,
+            maximum: 10,
+            description: 'exclusiveMinimum: true, exclusiveMaximum: 9.5',
+          })
+          expect(props.tighter).toEqual({
+            type: 'INTEGER',
+            minimum: 5,
+            maximum: 6,
+          })
+        }
+      })
+
+      it('normalizes deeply nested unions and disjoint intersections', () => {
+        const props = wireSchema({
+          data: {
+            type: 'array',
+            items: {
+              anyOf: [
+                {
+                  type: 'object',
+                  properties: { flag: { type: 'boolean', const: false } },
+                },
+                {
+                  oneOf: [
+                    { type: 'boolean', const: true },
+                    { type: 'integer', const: 3 },
+                    { type: 'string', const: 'x' },
+                  ],
+                },
+              ],
+            },
+          },
+          joined: {
+            allOf: [
+              {
+                type: 'object',
+                properties: { a: { type: 'string', const: 'x' } },
+                required: ['a'],
+              },
+              {
+                type: 'object',
+                properties: { b: { type: 'boolean', const: true } },
+                required: ['b'],
+              },
+            ],
+          },
+        }).properties
+        expect(props.data.items).toEqual({
+          anyOf: [
+            {
+              type: 'OBJECT',
+              properties: {
+                flag: { type: 'BOOLEAN', description: 'Must be false.' },
+              },
+            },
+            {
+              anyOf: [
+                { type: 'BOOLEAN', description: 'Must be true.' },
+                { type: 'INTEGER', description: 'Must be 3.' },
+                { type: 'STRING', enum: ['x'] },
+              ],
+            },
+          ],
+        })
+        expect(props.joined).toEqual({
+          type: 'OBJECT',
+          properties: {
+            a: { type: 'STRING', enum: ['x'] },
+            b: { type: 'BOOLEAN', description: 'Must be true.' },
+          },
+          required: ['a', 'b'],
+        })
+      })
+    })
+  }
+})

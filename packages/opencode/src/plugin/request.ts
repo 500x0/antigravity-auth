@@ -2093,10 +2093,10 @@ function prepareAntigravityRequestIn(
             const normalizeSchema = (schema: any) => {
               const createPlaceholderSchema = (base: any = {}) => ({
                 ...base,
-                type: 'object',
+                type: 'OBJECT',
                 properties: {
                   [EMPTY_SCHEMA_PLACEHOLDER_NAME]: {
-                    type: 'boolean',
+                    type: 'BOOLEAN',
                     description: EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
                   },
                 },
@@ -2130,12 +2130,12 @@ function prepareAntigravityRequestIn(
                 typeof cleaned.properties === 'object' &&
                 Object.keys(cleaned.properties).length > 0
 
-              cleaned.type = 'object'
+              cleaned.type = 'OBJECT'
 
               if (!hasProperties) {
                 cleaned.properties = {
                   [EMPTY_SCHEMA_PLACEHOLDER_NAME]: {
-                    type: 'boolean',
+                    type: 'BOOLEAN',
                     description: EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
                   },
                 }

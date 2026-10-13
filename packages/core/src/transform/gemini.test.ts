@@ -832,17 +832,18 @@ describe('transform/gemini', () => {
       expect(anyOf[1]?.type).toBe('NUMBER')
     })
 
-    it('transforms oneOf schemas', () => {
+    it('converts oneOf to anyOf without losing branch types', () => {
       const schema = {
         oneOf: [{ type: 'boolean' }, { type: 'string' }],
       }
       const result = toGeminiSchema(schema) as Record<string, unknown>
-      const oneOf = result.oneOf as Array<Record<string, string>>
-      expect(oneOf[0]?.type).toBe('BOOLEAN')
-      expect(oneOf[1]?.type).toBe('STRING')
+      const anyOf = result.anyOf as Array<Record<string, string>>
+      expect(result.oneOf).toBeUndefined()
+      expect(anyOf[0]?.type).toBe('BOOLEAN')
+      expect(anyOf[1]?.type).toBe('STRING')
     })
 
-    it('transforms allOf schemas', () => {
+    it('merges disjoint allOf object schemas without losing property types', () => {
       const schema = {
         allOf: [
           { type: 'object', properties: { a: { type: 'string' } } },
@@ -850,18 +851,10 @@ describe('transform/gemini', () => {
         ],
       }
       const result = toGeminiSchema(schema) as Record<string, unknown>
-      const allOf = result.allOf as Array<Record<string, unknown>>
-      expect(allOf[0]?.type).toBe('OBJECT')
-      const props0 = allOf[0]?.properties as Record<
-        string,
-        Record<string, string>
-      >
-      expect(props0.a?.type).toBe('STRING')
-      const props1 = allOf[1]?.properties as Record<
-        string,
-        Record<string, string>
-      >
-      expect(props1.b?.type).toBe('NUMBER')
+      expect(result).toEqual({
+        type: 'OBJECT',
+        properties: { a: { type: 'STRING' }, b: { type: 'NUMBER' } },
+      })
     })
 
     it('preserves enum values', () => {
@@ -1627,5 +1620,197 @@ describe('transform/gemini', () => {
       expect(tools[0]).toHaveProperty('functionDeclarations')
       expect(tools[1]).toHaveProperty('googleSearch')
     })
+  })
+})
+
+describe('Antigravity schema subset edge cases', () => {
+  it('retains property names that look like schema keywords and leaves default data alone', () => {
+    expect(
+      toGeminiSchema({
+        type: 'object',
+        vendorExtension: true,
+        properties: {
+          readOnly: { type: 'boolean', const: false },
+          const: { type: 'string', const: 'x' },
+          thinking: {
+            type: 'object',
+            default: { readOnly: true, const: 3 },
+            properties: { x: { type: 'string' } },
+          },
+        },
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: {
+        readOnly: { type: 'BOOLEAN', description: 'Must be false.' },
+        const: { type: 'STRING', enum: ['x'] },
+        thinking: {
+          type: 'OBJECT',
+          default: { readOnly: true, const: 3 },
+          properties: { x: { type: 'STRING' } },
+        },
+      },
+    })
+  })
+
+  it('hints object and null enum values rather than stringifying their wire types', () => {
+    expect(
+      toGeminiSchema({
+        type: 'object',
+        description: 'Value',
+        enum: [null, { x: 3 }],
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      description: 'Value (Allowed values: null, {"x":3}.)',
+    })
+    expect(
+      toGeminiSchema({ type: 'boolean', const: false, enum: [false, true] }),
+    ).toEqual({
+      type: 'BOOLEAN',
+      description: 'Must be false., Allowed values: false, true.',
+    })
+  })
+
+  it('folds fractional integer bounds regardless of keyword order and retains tighter bounds', () => {
+    expect(
+      toGeminiSchema({
+        type: 'integer',
+        exclusiveMinimum: 1.5,
+        minimum: 0,
+        exclusiveMaximum: 9.5,
+        maximum: 20,
+      }),
+    ).toEqual({
+      type: 'INTEGER',
+      minimum: 2,
+      maximum: 9,
+    })
+    expect(
+      toGeminiSchema({
+        type: 'INTEGER',
+        exclusiveMinimum: 0,
+        minimum: 5,
+        exclusiveMaximum: 10,
+        maximum: 6,
+      }),
+    ).toEqual({
+      type: 'INTEGER',
+      minimum: 5,
+      maximum: 6,
+    })
+  })
+
+  it('hints boolean exclusive modifiers without folding them as numbers', () => {
+    expect(
+      toGeminiSchema({
+        type: 'integer',
+        minimum: 0,
+        maximum: 10,
+        exclusiveMinimum: true,
+        exclusiveMaximum: false,
+      }),
+    ).toEqual({
+      type: 'INTEGER',
+      minimum: 0,
+      maximum: 10,
+      description: 'exclusiveMinimum: true, exclusiveMaximum: false',
+    })
+  })
+
+  it('keeps the first ambiguous allOf branch and explains the dropped intersection', () => {
+    expect(
+      toGeminiSchema({
+        description: 'Choice',
+        allOf: [
+          {
+            type: 'object',
+            properties: { x: { type: 'string' } },
+            required: ['x'],
+          },
+          {
+            type: 'object',
+            properties: { x: { type: 'integer' } },
+            required: ['x'],
+          },
+        ],
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: { x: { type: 'STRING' } },
+      required: ['x'],
+      description:
+        'Choice (allOf: using the first branch; other intersection constraints omitted.)',
+    })
+    expect(
+      toGeminiSchema({
+        allOf: [{ type: 'number', minimum: 1 }, { type: 'string' }],
+      }),
+    ).toEqual({
+      type: 'NUMBER',
+      minimum: 1,
+      description:
+        'allOf: using the first branch; other intersection constraints omitted.',
+    })
+  })
+
+  it('unions required names across disjoint allOf branches and filters missing properties', () => {
+    expect(
+      toGeminiSchema({
+        type: 'object',
+        properties: { base: { type: 'string' } },
+        required: ['base'],
+        allOf: [
+          {
+            type: 'object',
+            properties: { first: { type: 'string' } },
+            required: ['first', 'missing'],
+          },
+          {
+            type: 'object',
+            properties: { second: { type: 'number' } },
+            required: ['second', 'first'],
+          },
+        ],
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: {
+        base: { type: 'STRING' },
+        first: { type: 'STRING' },
+        second: { type: 'NUMBER' },
+      },
+      required: ['base', 'first', 'second'],
+    })
+  })
+
+  it('preserves existing anyOf when oneOf is also present', () => {
+    expect(
+      toGeminiSchema({
+        anyOf: [{ type: 'boolean' }],
+        oneOf: [{ type: 'string', const: 'x' }],
+      }),
+    ).toEqual({
+      anyOf: [{ type: 'BOOLEAN' }],
+      description: 'oneOf: additional union constraints omitted.',
+    })
+  })
+
+  it('normalizes idempotently without mutating the source', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        count: {
+          type: 'integer',
+          const: 3,
+          exclusiveMinimum: 0,
+          multipleOf: 2,
+        },
+      },
+    }
+    const before = JSON.stringify(schema)
+    const normalized = toGeminiSchema(schema)
+    expect(toGeminiSchema(normalized)).toEqual(normalized)
+    expect(JSON.stringify(schema)).toBe(before)
   })
 })

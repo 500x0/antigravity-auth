@@ -14,44 +14,32 @@ import type {
   ThinkingTier,
 } from './types.ts'
 
-/**
- * Transform a JSON Schema to Gemini-compatible format.
- * Based on @google/genai SDK's processJsonSchema() function.
- *
- * Key transformations:
- * - Converts type values to uppercase (object -> OBJECT)
- * - Removes unsupported fields like additionalProperties, $schema
- * - Recursively processes nested schemas (properties, items, anyOf, etc.)
- *
- * @param schema - A JSON Schema object or primitive value
- * @returns Gemini-compatible schema
- *
- * Fields that Gemini API rejects and must be removed from schemas.
- * Antigravity uses strict protobuf-backed JSON validation.
- */
-const UNSUPPORTED_SCHEMA_FIELDS = new Set([
-  'additionalProperties',
-  '$schema',
-  '$id',
-  '$comment',
-  '$ref',
-  '$defs',
-  'definitions',
-  'const',
-  'contentMediaType',
-  'contentEncoding',
-  'if',
-  'then',
-  'else',
-  'not',
-  'patternProperties',
-  'unevaluatedProperties',
-  'unevaluatedItems',
-  'dependentRequired',
-  'dependentSchemas',
-  'propertyNames',
-  'minContains',
-  'maxContains',
+// Only these fields may reach Antigravity's protobuf-backed tool parameters.
+// HTTP 400 errors reject exclusiveMinimum ("Unknown name") and non-string enums
+// ("TYPE_STRING"). gemini.test.ts pins type/properties/items/required/description/
+// default, string enum and anyOf. Inclusive minimum/maximum and min/max Length,
+// Items and Properties retain this converter's existing numeric-field behavior.
+// For GPT-OSS, moveNumericConstraintsToDescription instead describes those fields:
+// its backend re-encodes numbers as strings before JSON Schema validation.
+// test-fixtures/agy-cli-*-stream-request.json and agy-cli-1.3.3/ omit tool schemas,
+// so those CLI captures cannot establish support for additional schema keywords.
+const ALLOWED_SCHEMA_FIELDS = new Set([
+  'type',
+  'properties',
+  'items',
+  'required',
+  'description',
+  'default',
+  'enum',
+  'anyOf',
+  'minimum',
+  'maximum',
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+  'minProperties',
+  'maxProperties',
 ])
 
 const NUMERIC_SCHEMA_CONSTRAINTS = new Set([
@@ -76,6 +64,76 @@ export interface GeminiSchemaOptions {
   moveNumericConstraintsToDescription?: boolean
 }
 
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function describeValue(value: unknown): string {
+  return JSON.stringify(value) ?? String(value)
+}
+
+function mergeSchemaAllOf(
+  schema: Record<string, unknown>,
+  hints: string[],
+): Record<string, unknown> {
+  if (!Array.isArray(schema.allOf)) return schema
+  const { allOf, ...base } = schema
+  const branches = [base, ...allOf]
+  const properties: Record<string, unknown> = {}
+  const required = new Set<string>()
+  const descriptions: string[] = []
+  let unambiguous = allOf.length > 0
+
+  for (const [index, branch] of branches.entries()) {
+    if (
+      !isSchemaObject(branch) ||
+      (index > 0 &&
+        branch.type === undefined &&
+        branch.properties === undefined) ||
+      (branch.type !== undefined &&
+        String(branch.type).toUpperCase() !== 'OBJECT') ||
+      (branch.properties !== undefined && !isSchemaObject(branch.properties)) ||
+      Object.keys(branch).some(
+        (key) =>
+          !['type', 'properties', 'required', 'description'].includes(key),
+      )
+    ) {
+      unambiguous = false
+      break
+    }
+    if (typeof branch.description === 'string')
+      descriptions.push(branch.description)
+    for (const [name, property] of Object.entries(branch.properties ?? {})) {
+      if (Object.hasOwn(properties, name)) unambiguous = false
+      properties[name] = property
+    }
+    if (Array.isArray(branch.required)) {
+      for (const name of branch.required) {
+        if (typeof name === 'string') required.add(name)
+      }
+    }
+  }
+
+  if (unambiguous) {
+    return {
+      type: 'object',
+      properties,
+      ...(required.size ? { required: [...required] } : {}),
+      ...(descriptions.length ? { description: descriptions.join(' ') } : {}),
+    }
+  }
+
+  hints.push(
+    'allOf: using the first branch; other intersection constraints omitted.',
+  )
+  const first = isSchemaObject(allOf[0]) ? allOf[0] : {}
+  return {
+    ...base,
+    ...first,
+    ...(base.description ? { description: base.description } : {}),
+  }
+}
+
 export function toGeminiSchema(
   schema: unknown,
   options: GeminiSchemaOptions = {},
@@ -85,9 +143,12 @@ export function toGeminiSchema(
     return schema
   }
 
-  const inputSchema = schema as Record<string, unknown>
-  const result: Record<string, unknown> = {}
   const numericConstraintHints: string[] = []
+  const inputSchema = mergeSchemaAllOf(
+    schema as Record<string, unknown>,
+    numericConstraintHints,
+  )
+  const result: Record<string, unknown> = {}
 
   // First pass: collect all property names for required validation
   const propertyNames = new Set<string>()
@@ -100,10 +161,58 @@ export function toGeminiSchema(
   }
 
   for (const [key, value] of Object.entries(inputSchema)) {
-    // Skip unsupported fields that Gemini API rejects
-    if (UNSUPPORTED_SCHEMA_FIELDS.has(key)) {
+    if (key === 'const') {
+      if (typeof value === 'string') result.enum = [value]
+      else numericConstraintHints.push(`Must be ${describeValue(value)}.`)
       continue
     }
+
+    if (NUMERIC_SCHEMA_CONSTRAINTS.has(key)) {
+      const exclusive = key === 'exclusiveMinimum' || key === 'exclusiveMaximum'
+      if (
+        exclusive &&
+        !options.moveNumericConstraintsToDescription &&
+        String(inputSchema.type).toUpperCase() === 'INTEGER' &&
+        typeof value === 'number' &&
+        Number.isFinite(value)
+      ) {
+        const lower = key === 'exclusiveMinimum'
+        const bound = lower ? Math.floor(value) + 1 : Math.ceil(value) - 1
+        const inclusiveKey = lower ? 'minimum' : 'maximum'
+        const existing = inputSchema[inclusiveKey]
+        if (Number.isSafeInteger(bound)) {
+          result[inclusiveKey] =
+            typeof existing === 'number'
+              ? lower
+                ? Math.max(existing, bound)
+                : Math.min(existing, bound)
+              : bound
+          continue
+        }
+      }
+      if (
+        options.moveNumericConstraintsToDescription ||
+        exclusive ||
+        key === 'multipleOf'
+      ) {
+        if (['string', 'number', 'boolean'].includes(typeof value))
+          numericConstraintHints.push(`${key}: ${value}`)
+        continue
+      }
+    }
+
+    if (key === 'oneOf' && Array.isArray(value)) {
+      // Retain an existing anyOf rather than overwriting a separate union.
+      if (!Array.isArray(inputSchema.anyOf))
+        result.anyOf = value.map((item) => toGeminiSchema(item, options))
+      else
+        numericConstraintHints.push(
+          'oneOf: additional union constraints omitted.',
+        )
+      continue
+    }
+
+    if (!ALLOWED_SCHEMA_FIELDS.has(key)) continue
 
     if (key === 'type' && typeof value === 'string') {
       // Convert type to uppercase for Gemini API
@@ -124,25 +233,17 @@ export function toGeminiSchema(
     } else if (key === 'items' && typeof value === 'object') {
       // Transform array items schema
       result[key] = toGeminiSchema(value, options)
-    } else if (
-      (key === 'anyOf' || key === 'oneOf' || key === 'allOf') &&
-      Array.isArray(value)
-    ) {
+    } else if (key === 'anyOf' && Array.isArray(value)) {
       // Transform union type schemas
       result[key] = value.map((item) => toGeminiSchema(item, options))
     } else if (key === 'enum' && Array.isArray(value)) {
-      // Keep enum values as-is
-      result[key] = value
-    } else if (
-      options.moveNumericConstraintsToDescription &&
-      NUMERIC_SCHEMA_CONSTRAINTS.has(key)
-    ) {
-      if (typeof value === 'string' || typeof value === 'number') {
-        numericConstraintHints.push(`${key}: ${value}`)
+      if (value.every((item) => typeof item === 'string')) {
+        if (typeof inputSchema.const !== 'string') result.enum = value
+      } else {
+        numericConstraintHints.push(
+          `Allowed values: ${value.map(describeValue).join(', ')}.`,
+        )
       }
-    } else if (key === 'default' || key === 'examples') {
-      // Keep default and examples as-is
-      result[key] = value
     } else if (key === 'required' && Array.isArray(value)) {
       // Filter required array to only include properties that exist
       // This fixes: "parameters.required[X]: property is not defined"
@@ -158,6 +259,15 @@ export function toGeminiSchema(
         // If there are no properties, keep required as-is (might be a schema without properties)
         result[key] = value
       }
+    } else if (
+      (key === 'minimum' || key === 'maximum') &&
+      typeof result[key] === 'number' &&
+      typeof value === 'number'
+    ) {
+      result[key] =
+        key === 'minimum'
+          ? Math.max(result[key], value)
+          : Math.min(result[key], value)
     } else {
       result[key] = value
     }

@@ -206,7 +206,10 @@ function convertMessages(
   return contents
 }
 
-function convertTools(tools: Tool[] | undefined): GeminiTool[] | undefined {
+function convertTools(
+  tools: Tool[] | undefined,
+  model?: string,
+): GeminiTool[] | undefined {
   if (!tools?.length) return undefined
   return [
     {
@@ -216,7 +219,11 @@ function convertTools(tools: Tool[] | undefined): GeminiTool[] | undefined {
       functionDeclarations: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parameters: toGeminiSchema(tool.parameters),
+        parameters: toGeminiSchema(tool.parameters, {
+          moveNumericConstraintsToDescription: model
+            ?.replace(/^antigravity-/, '')
+            .startsWith('gpt-oss-'),
+        }),
       })),
     },
   ]
@@ -279,7 +286,7 @@ export function buildGeminiRequest(
 
   const { systemPrompt, tools } = resolveInstructionState(context)
 
-  const geminiTools = convertTools(tools)
+  const geminiTools = convertTools(tools, options?.model)
   if (geminiTools) request.tools = geminiTools
 
   if (systemPrompt.trim()) {
