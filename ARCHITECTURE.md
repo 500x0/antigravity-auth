@@ -206,7 +206,7 @@ The render roots do not import the credential pipeline. `packages/opencode/scrip
 
 `tui/command-dialogs.tsx` renders the shared `/antigravity` menu with host dialog primitives. Common-auth commands own action dispatch, confirmation and invocation isolation; the renderer returns selected actions over RPC. GA's native TUI root is `src/ga/tui/host-ga.tsx`.
 
-`createCommandDataService`, the former dialog read/refresh and pool-mutation service, has been removed because the shared menu already owns those operations. `plugin/command-data.ts` retains only cached, privacy-safe account-row projection for account OAuth replies; quota refresh and account mutations are handled by the shared menu and repository collaborators. Request dumps remain available through the Diagnostics menu switch, but there is no separate `/gemini-dump` argument parser or command renderer.
+`plugin/command-data.ts` holds only the cached, privacy-safe account-row projection used in account OAuth replies; quota refresh and account mutations belong to the shared menu and its repository collaborators. Request dumps are controlled by the Diagnostics menu switch; there is no separate `/gemini-dump` command.
 
 ### File logger
 
