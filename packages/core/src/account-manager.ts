@@ -464,15 +464,19 @@ export class AccountManager {
             usage: () => this.requestSaveToDisk(),
             stale: (account, label) => this.ignoreStale(account, label),
           },
-      // A repository-backed manager gets its own new trackers. A pool-file
-      // manager without supplied trackers shares the process-wide ones
-      // (`getHealthTracker`, `getTokenTracker`), as it always has.
+      // A repository-backed manager gets its own new trackers, which run on
+      // this manager's clock. A pool-file manager without supplied trackers
+      // shares the process-wide ones (`getHealthTracker`, `getTokenTracker`).
       healthTracker:
         options.healthTracker ??
-        (repositoryBacked ? new HealthScoreTracker() : getHealthTracker),
+        (repositoryBacked
+          ? new HealthScoreTracker({}, this.now)
+          : getHealthTracker),
       tokenTracker:
         options.tokenTracker ??
-        (repositoryBacked ? new TokenBucketTracker() : getTokenTracker),
+        (repositoryBacked
+          ? new TokenBucketTracker({}, this.now)
+          : getTokenTracker),
       now: this.now,
       random: options.random ?? (() => Math.random()),
       pid: options.pid ?? process.pid,

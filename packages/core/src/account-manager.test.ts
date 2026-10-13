@@ -1249,6 +1249,19 @@ describe('reloading a repository-backed AccountManager', () => {
     ).toEqual([replacedB, refD])
   })
 
+  it('runs the trackers it creates on its own clock', async () => {
+    const { manager } = await loaded()
+    manager.healthTracker.recordFailure(0)
+    manager.tokenTracker.consume(0, 7)
+    const score = manager.healthTracker.getScore(0)
+    const tokens = manager.tokenTracker.getTokens(0)
+    // Real time passes while the injected clock stands still; neither tracker
+    // may recover on the wall clock.
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(manager.healthTracker.getScore(0)).toBe(score)
+    expect(manager.tokenTracker.getTokens(0)).toBe(tokens)
+  })
+
   it("reindexes only its own trackers, never another manager's", async () => {
     const first = await loaded()
     const now2 = () => now
