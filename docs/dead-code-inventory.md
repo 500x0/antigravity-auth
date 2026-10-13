@@ -54,7 +54,7 @@ The inventory step changes only this document, before any runtime deletion. Afte
 
 ## Mutation checks
 
-Review of the committed inventory (`ee29ddb2e457761c8b460ba5bdec79b8d257ae62`) approved removing the tests-only service and retired argument renderer, while keeping live projection, diagnostic capture and upgrade paths. Approval required the kept projection assertions to run directly and demonstrate their guards before the old service harness was removed. Those five tests were retargeted and passed (5 tests, 22 assertions), all nine projection controls below then failed individually, and all five tests passed again after restoration. Only the 35 service-only tests and two retired-command tests were deleted; live dump and location-state tests were not changed.
+Review of the committed inventory (`ee29ddb2e457761c8b460ba5bdec79b8d257ae62`) approved removing the tests-only service and retired argument renderer, while keeping live projection, diagnostic capture and upgrade paths. Approval required the kept projection assertions to run directly and demonstrate their guards before the old service harness was removed. Those five tests were retargeted and passed (5 tests, 22 assertions), all ten projection controls below then failed individually, and all five tests passed again after restoration. Only the 35 service-only tests and two retired-command tests were deleted; live dump and location-state tests were not changed.
 
 The following TOML describes replayable guard breaks for a future root `mutations.toml`, which CI can execute with `ckdev-mutate`; adding that catalogue and its CI wiring is a separate change. `expect_red` names the exact full Bun test, with whitespace expressed as `\s` and regex metacharacters escaped. Each control is one exact-text replacement, uses a fresh core build so emitted core imports cannot conceal a source mutation, and has been run on Linux with Bun 1.4.2. No root catalogue or CI file was changed.
 
@@ -123,6 +123,18 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^projectCommandAccountRows\srenders\san\sunstamped\slegacy\ssnapshot\s\(fail\sopen\s—\sno\sstamp\smeans\sno\smismatch\)$']
+
+[[control]]
+id = "command-projection-cache-wiring"
+guards = "Cached canonical readings reach the quota normalizer instead of being discarded at its input."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],"
+new = "    undefined, // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\snormalizes\slegacy\squota\skeys\sand\ssilently\sskips\struly\sunknown\skeys$']
 
 [[control]]
 id = "command-projection-legacy-normalization"
@@ -238,6 +250,7 @@ The safe sequence for every break was: stage the live implementation/tests with 
 | `command-projection-cache-only` | `expect(fetchSpy).not.toHaveBeenCalled()` received 3 calls, expected 0. The spy resolves locally; no live network request is attempted. | `command-data.ts: 1 insertion(+)` → empty |
 | `command-projection-quota-identity` | Mismatched cache must yield `quota: []`; received a Gemini reading at 50%. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
 | `command-projection-unstamped-legacy` | Unstamped cache must contain Gemini at 50%; received `[]`. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
+| `command-projection-cache-wiring` | Cached canonical Gemini must project at 50%; received `undefined` when the cache was discarded before normalization. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
 | `command-projection-legacy-normalization` | Legacy Claude cache must project as non-Gemini at 90%; received `undefined`, while canonical Gemini still passed at 50%. | `command-data.ts: 1 insertion(+), 3 deletions(-)` → empty |
 | `command-projection-percentages` | Exact quota array expected percentages 70 and 40; received 1 and 0. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
 | `command-projection-reset-times` | Exact quota array expected non-Gemini `resetAt: 0`; received `undefined`. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
@@ -247,7 +260,7 @@ The safe sequence for every break was: stage the live implementation/tests with 
 | `pi-vault-placeholder-recognition` | `expect(result.stopReason).toBe('stop')` received `error` (`stream.test.ts:1678`). | `stream.ts: 1 insertion(+), 1 deletion(-)` → empty |
 | `gemini-dump-project-redaction` | Dump bytes must not contain `secret-proj-1234567890`; received the raw project ID (`gemini-dump.test.ts:122`). | `gemini-dump.ts: 1 insertion(+), 1 deletion(-)` → empty |
 
-An exploratory break that discarded the entire cache also failed the normalization test, but is not catalogued: the retained control passes raw cached groups through without converting legacy Claude keys to non-Gemini. The **legacy** non-Gemini assertion fails while canonical Gemini survives.
+An initial cache-wiring break discarded all cached readings before normalization. It is recorded separately from the normalization-specific break: the cache-wiring test fails at the canonical Gemini assertion, while bypassing legacy-key conversion fails only at the legacy non-Gemini assertion.
 
 ## Verification results
 
@@ -266,7 +279,7 @@ All gates ran on the Linux runner. Tool versions: Bun **1.4.2**, TypeScript **6.
 | Direct `projectCommandAccountRows` suite after service deletion | Passed; 5 tests, 22 assertions. |
 | Prepared public-consumer run of the five projection tests, three kept dump tests, and named refusal/migration/Pi-marker controls | Passed after restoration; 11 tests in 5 files, 74 assertions. Only the narrow supplemental run filtered unrelated tests; the full root gate above did not. |
 | `bun test --isolate packages/opencode/src/plugin/shared/location-state.test.ts` | Passed unchanged; 36 tests, 205 assertions, including dump switch/isolation and collision-free IDs. |
-| TOML/control-target validation (Python 3.14.4) | Passed; 13 parsed controls, each `old` occurs exactly once in its live target, each replacement contains the break marker, and no live source contains a break marker. |
+| TOML/control-target validation (Python 3.14.4) | Passed; 14 parsed controls, each `old` occurs exactly once in its live target, each replacement contains the break marker, and no live source contains a break marker. |
 | Source diagnostics | Partial: TypeScript language-server startup failed parsing the environment's mise configuration. Biome reported no changed-file diagnostics; authoritative root TypeScript checks passed. |
 
 ### Full source-suite limitations
