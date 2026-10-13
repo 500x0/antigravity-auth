@@ -4,12 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  buildGeminiDumpStatusSummary,
   createGeminiDumpResponseTransform,
   dumpGeminiRequest,
-  executeGeminiDumpCommand,
-  getGeminiDumpDirectory,
-  parseGeminiDumpCommandAction,
   resetGeminiDumpState,
   setGeminiDumpEnabled,
 } from './gemini-dump'
@@ -33,31 +29,6 @@ afterEach(() => {
     process.env.OPENCODE_ANTIGRAVITY_GEMINI_DUMP = originalDumpEnabled
   }
   resetGeminiDumpState()
-})
-
-describe('gemini dump command', () => {
-  it('parses status/on/off/usage actions', () => {
-    expect(parseGeminiDumpCommandAction('')).toEqual({ type: 'status' })
-    expect(parseGeminiDumpCommandAction('on')).toEqual({ type: 'enable' })
-    expect(parseGeminiDumpCommandAction('off')).toEqual({ type: 'disable' })
-    expect(parseGeminiDumpCommandAction('wat')).toEqual({ type: 'usage' })
-  })
-
-  it('renders status and toggle replies', () => {
-    const dir = tempDir()
-    process.env.OPENCODE_ANTIGRAVITY_GEMINI_DUMP_DIR = dir
-    setGeminiDumpEnabled(false)
-
-    expect(getGeminiDumpDirectory()).toBe(dir)
-    expect(buildGeminiDumpStatusSummary()).toContain('Enabled: disabled')
-    expect(executeGeminiDumpCommand({ argumentsText: 'on' })).toContain(
-      'Gemini Dump Enabled',
-    )
-    expect(executeGeminiDumpCommand({ argumentsText: 'off' })).toContain(
-      'Gemini Dump Disabled',
-    )
-    rmSync(dir, { recursive: true, force: true })
-  })
 })
 
 describe('gemini wire dump', () => {

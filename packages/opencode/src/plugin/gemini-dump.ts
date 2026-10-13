@@ -8,11 +8,6 @@ import { redactJsonBodyString } from './logging-utils'
 export const GEMINI_DUMP_COMMAND_NAME = 'gemini-dump'
 
 const DUMP_STATUS_TITLE = '## Gemini Dump Status'
-const DUMP_ENABLED_TITLE = '## Gemini Dump Enabled'
-const DUMP_DISABLED_TITLE = '## Gemini Dump Disabled'
-const DUMP_USAGE_TITLE = '## Gemini Dump Usage'
-const DUMP_USAGE =
-  'Usage: `/gemini-dump`, `/gemini-dump on`, or `/gemini-dump off`.'
 const DUMP_DIR_ENV = 'OPENCODE_ANTIGRAVITY_GEMINI_DUMP_DIR'
 const DEFAULT_DUMP_DIR = join(tmpdir(), 'opencode-antigravity-gemini-dumps')
 // Dumps contain full prompts, tool outputs, and generated content. On shared
@@ -25,12 +20,6 @@ const DUMP_FILE_MODE = 0o600
 // millisecond cannot overwrite each other's files; whether dumping is enabled
 // is per location (see createGeminiDumpState).
 let nextDumpId = 0
-
-export type GeminiDumpCommandAction =
-  | { type: 'status' }
-  | { type: 'enable' }
-  | { type: 'disable' }
-  | { type: 'usage' }
 
 export interface GeminiDumpContext {
   id: string
@@ -68,7 +57,6 @@ export interface GeminiDumpState {
   /** Status text reflecting this location's switch unless `enabled` is given. */
   buildStatusSummary(input?: { enabled?: boolean }): string
   /** Command reply reflecting this location's switch unless `enabled` is given. */
-  executeCommand(input: { argumentsText: string; enabled?: boolean }): string
 }
 
 /** Initial switch value when a location supplies none: the environment flag. */
@@ -89,8 +77,6 @@ export function createGeminiDumpState(
     dumpRequest: (input) => (enabled ? writeGeminiDump(input) : null),
     buildStatusSummary: (input) =>
       renderGeminiDumpStatus(input?.enabled ?? enabled),
-    executeCommand: (input) =>
-      renderGeminiDumpCommand(input.argumentsText, input.enabled ?? enabled),
   }
 }
 
@@ -116,22 +102,6 @@ export function getGeminiDumpDirectory() {
   return process.env[DUMP_DIR_ENV] || DEFAULT_DUMP_DIR
 }
 
-export function parseGeminiDumpCommandAction(
-  argumentsText: string,
-): GeminiDumpCommandAction {
-  const normalized = argumentsText.trim().split(/\s+/).filter(Boolean)
-  if (normalized.length === 0) return { type: 'status' }
-  if (normalized.length === 1 && normalized[0] === 'on')
-    return { type: 'enable' }
-  if (normalized.length === 1 && normalized[0] === 'off')
-    return { type: 'disable' }
-  return { type: 'usage' }
-}
-
-export function buildGeminiDumpStatusSummary(input?: { enabled?: boolean }) {
-  return legacyDumpState.buildStatusSummary(input)
-}
-
 function renderGeminiDumpStatus(enabled: boolean): string {
   return [
     DUMP_STATUS_TITLE,
@@ -140,38 +110,6 @@ function renderGeminiDumpStatus(enabled: boolean): string {
     `- Directory: ${getGeminiDumpDirectory()}`,
     '- Captures: final Antigravity request body plus raw response SSE/text chunks',
     '- Warning: dumps contain prompt/session content; turn this off after debugging',
-  ].join('\n')
-}
-
-export function executeGeminiDumpCommand(input: {
-  argumentsText: string
-  enabled?: boolean
-}) {
-  return legacyDumpState.executeCommand(input)
-}
-
-function renderGeminiDumpCommand(
-  argumentsText: string,
-  enabled: boolean,
-): string {
-  const action = parseGeminiDumpCommandAction(argumentsText)
-
-  if (action.type === 'status') return renderGeminiDumpStatus(enabled)
-
-  if (action.type === 'enable') {
-    return [DUMP_ENABLED_TITLE, '', renderGeminiDumpStatus(true)].join('\n')
-  }
-
-  if (action.type === 'disable') {
-    return [DUMP_DISABLED_TITLE, '', renderGeminiDumpStatus(false)].join('\n')
-  }
-
-  return [
-    DUMP_USAGE_TITLE,
-    '',
-    DUMP_USAGE,
-    '',
-    renderGeminiDumpStatus(enabled),
   ].join('\n')
 }
 
