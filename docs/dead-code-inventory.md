@@ -54,213 +54,28 @@ The inventory step changes only this document, before any runtime deletion. Afte
 
 ## Mutation checks
 
-Review of the committed inventory (`ee29ddb2e457761c8b460ba5bdec79b8d257ae62`) approved removing the tests-only service and retired argument renderer, while keeping live projection, diagnostic capture and upgrade paths. Approval required the kept projection assertions to run directly and demonstrate their guards before the old service harness was removed. Those five tests were retargeted and passed (5 tests, 22 assertions), all ten projection controls below then failed individually, and all five tests passed again after restoration. Only the 35 service-only tests and two retired-command tests were deleted; live dump and location-state tests were not changed.
+Review of the committed inventory (`ee29ddb2e457761c8b460ba5bdec79b8d257ae62`) approved removing the tests-only service and retired argument renderer, while keeping live projection, diagnostic capture and upgrade paths. Approval required the kept projection assertions to run directly and demonstrate their guards before the old service harness was removed. Those five tests were retargeted and passed (5 tests, 22 assertions), all ten projection controls listed in the catalogue then failed individually, and all five tests passed again after restoration. Only the 35 service-only tests and two retired-command tests were deleted; live dump and location-state tests were not changed.
 
-The following TOML describes replayable guard breaks for a future root `mutations.toml`, which CI can execute with `ckdev-mutate`; adding that catalogue and its CI wiring is a separate change. `expect_red` names the exact full Bun test, with whitespace expressed as `\s` and regex metacharacters escaped. Each control is one exact-text replacement, uses a fresh core build so emitted core imports cannot conceal a source mutation, and has been run on Linux with Bun 1.4.2. No root catalogue or CI file was changed.
+The standing replay instructions and exact production anchors now live in the root [mutation catalogue](../mutations.toml). Its rows are checked and replayed by the pinned `ckdev-mutate` runner in CI: `mutations-pr` selects the PR diff, `mutations-main` replays all rows on main, and scheduled/manual runs add broad package coverage. Each row rebuilds imported core output and selects its exact named test; offline migration also uses the root test script's public-consumer wrapper.
 
+The 14 controls recorded while removing the tests-only command service and retired dump renderer are retained under these catalogue IDs:
 
-```toml
-[[control]]
-id = "command-projection-ordinal-labels"
-guards = "Stored profile labels never replace ordinal account labels in the account reply."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = '  const label = `Account ${entry.index + 1}`'
-new = '  const label = entry.label ?? `Account ${entry.index + 1}` // NON-VACUITY BREAK'
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+- `command-projection-ordinal-labels`
+- `command-projection-email-redaction`
+- `command-projection-cache-only`
+- `command-projection-quota-identity`
+- `command-projection-unstamped-legacy`
+- `command-projection-cache-wiring`
+- `command-projection-legacy-normalization`
+- `command-projection-percentages`
+- `command-projection-reset-times`
+- `command-projection-both-quota-groups`
+- `unmigrated-pool-refusal`
+- `offline-migration-independent-cursors`
+- `pi-vault-placeholder-recognition`
+- `gemini-dump-project-redaction`
 
-[[control]]
-id = "command-projection-email-redaction"
-guards = "The privacy-safe account reply never serializes the stored email."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = '''      cachedQuotaAccountId: entry.cachedQuotaAccountId,
-    }),
-  )'''
-new = '''      cachedQuotaAccountId: entry.cachedQuotaAccountId,
-    }),
-  ).map((row, index) => ({ ...row, email: storage.accounts[index]?.email })) // NON-VACUITY BREAK'''
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
-
-[[control]]
-id = "command-projection-cache-only"
-guards = "Opening or reopening the account view reads cached quota without network I/O."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "  if (!storage) return []"
-new = "  if (!storage) return []\n  void fetch('https://projection-mutation.invalid') // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sis\sa\spure\scache\sread\s—\sopening\sperforms\szero\sfetch\scalls$']
-
-[[control]]
-id = "command-projection-quota-identity"
-guards = "Cached quota stamped for another refresh-token identity is not rendered."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "    entry.cachedQuotaAccountId !== quotaAccountIdentity(entry.refreshToken)"
-new = "    entry.cachedQuotaAccountId === quotaAccountIdentity(entry.refreshToken) // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sdrops\sa\squota\ssnapshot\swhen\sthe\sidentity\sstamp\sdoes\snot\smatch\sthe\scurrent\saccount$']
-
-[[control]]
-id = "command-projection-unstamped-legacy"
-guards = "An unstamped legacy quota cache remains readable because absence of a stamp is not a mismatch."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "    entry.cachedQuotaAccountId &&"
-new = "    (!entry.cachedQuotaAccountId || entry.cachedQuotaAccountId) && // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\srenders\san\sunstamped\slegacy\ssnapshot\s\(fail\sopen\s—\sno\sstamp\smeans\sno\smismatch\)$']
-
-[[control]]
-id = "command-projection-cache-wiring"
-guards = "Cached canonical readings reach the quota normalizer instead of being discarded at its input."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],"
-new = "    undefined, // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\snormalizes\slegacy\squota\skeys\sand\ssilently\sskips\struly\sunknown\skeys$']
-
-[[control]]
-id = "command-projection-legacy-normalization"
-guards = "Legacy model quota keys normalize into the supported display groups without losing their reading."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = '''  const cached = normalizeLegacyCachedQuota(
-    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],
-  )'''
-new = "  const cached = rawCached // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\snormalizes\slegacy\squota\skeys\sand\ssilently\sskips\struly\sunknown\skeys$']
-
-[[control]]
-id = "command-projection-percentages"
-guards = "Remaining fractions project as rounded percentages rather than rounded unit fractions."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "        ? Math.round(fraction * 100)"
-new = "        ? Math.round(fraction) // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
-
-[[control]]
-id = "command-projection-reset-times"
-guards = "Valid reset timestamps survive cached quota projection, including epoch zero."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "      if (Number.isFinite(parsed)) resetAt = parsed"
-new = "      if (Number.isFinite(parsed)) resetAt = undefined // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
-
-[[control]]
-id = "command-projection-both-quota-groups"
-guards = "Both Gemini and non-Gemini cached quota groups appear in the account reply."
-file = "packages/opencode/src/plugin/command-data.ts"
-old = "  for (const key of SUPPORTED_QUOTA_KEYS) {"
-new = "  for (const key of SUPPORTED_QUOTA_KEYS.slice(0, 1)) { // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/command-data.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
-```
-
-```toml
-[[control]]
-id = "unmigrated-pool-refusal"
-guards = "An existing legacy pool requires offline migration rather than fresh-store initialization."
-file = "packages/opencode/src/plugin/storage.ts"
-old = "      status: 'migration-required',"
-new = "      status: 'initialization-required', // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/storage.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/storage.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^openAccountStore\sanswers\smigration-required\sfor\san\sexisting\spool\sfile\swithout\sa\sstore,\snaming\sthe\soffline\scommand$']
-
-[[control]]
-id = "offline-migration-independent-cursors"
-guards = "Offline migration preserves the legacy global cursor independently of family cursors."
-file = "packages/core/src/account-migration.ts"
-old = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = value"
-new = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = key === 'activeIndex' ? 0 : value // NON-VACUITY BREAK"
-test_file = "test/common-auth-010-store/migration-crash.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate test/common-auth-010-store/migration-crash.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^genuine\spublic-store\soffline\smigration\simports\sfull\srows,\scredential\sstamps,\sfield\spresence,\sorder\sand\sindependent\scursors\sthen\sverifies\sactive\sno-op$']
-
-[[control]]
-id = "pi-vault-placeholder-recognition"
-guards = "The exact non-secret Pi custody marker admits vault-only dispatch using the served credential."
-file = "packages/pi/src/stream.ts"
-old = "        if (options?.apiKey !== placeholderKey)"
-new = "        if (options?.apiKey === placeholderKey) // NON-VACUITY BREAK"
-test_file = "packages/pi/src/stream.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^vault\snative-slot\sadmission\suses\sonly\sthe\sserved\svault\scredential\swhen\sPi\sresolves\sthe\sexact\splaceholder$']
-
-[[control]]
-id = "gemini-dump-project-redaction"
-guards = "The live request dump masks project identity before writing the body to disk."
-file = "packages/opencode/src/plugin/gemini-dump.ts"
-old = "  writeFileSync(context.files.request, redactJsonBodyString(input.body), {"
-new = "  writeFileSync(context.files.request, input.body, { // NON-VACUITY BREAK"
-test_file = "packages/opencode/src/plugin/gemini-dump.test.ts"
-runner = "command"
-command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/gemini-dump.test.ts -t \"$1\"", "--", "{test}"]
-test_count_pattern = "Ran {count} test"
-expect_red = ['^gemini\swire\sdump\sredacts\sproject\sIDs\sfrom\sthe\sdumped\srequest\sbody$']
-```
-
-### Observed failures and restoration
-
-For each control, the command above was run with its exact full test name as `-t` (escaped as a regex for the parentheses in the unstamped-cache name). Every red run reported **0 pass, 1 fail**, with no other failed test or error; all other tests in its file were filtered, not claimed as passing. Failures were assertions, not timeouts. The selected tests passed before the breaks and after restoration. No OpenCode/Pi duplicate implementations were merged into core.
-
-The safe sequence for every break was: stage the live implementation/tests with `git add` of the specific paths; confirm `git diff --stat` was empty; apply one exact replacement; capture the non-empty diff below; run the named test; restore with `git checkout -- <target> && touch <target>`; confirm `git diff --stat` was empty again. Checkout restored the staged live bytes, not an older revision. The actual breaks were made only in this isolated Git working copy and the disposable Linux copy used by the test runner, never the operator's original checkout or generated embeddings.
-
-| Control id | Named failing assertion | Applied diff-stat → restored diff-stat |
-| --- | --- | --- |
-| `command-projection-ordinal-labels` | Serialized reply must not contain `Primary`; it contained the stored label. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-email-redaction` | Serialized reply must not contain `refresh-a@example.test`; it contained the stored email. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-cache-only` | `expect(fetchSpy).not.toHaveBeenCalled()` received 3 calls, expected 0. The spy resolves locally; no live network request is attempted. | `command-data.ts: 1 insertion(+)` → empty |
-| `command-projection-quota-identity` | Mismatched cache must yield `quota: []`; received a Gemini reading at 50%. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-unstamped-legacy` | Unstamped cache must contain Gemini at 50%; received `[]`. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-cache-wiring` | Cached canonical Gemini must project at 50%; received `undefined` when the cache was discarded before normalization. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-legacy-normalization` | Legacy Claude cache must project as non-Gemini at 90%; received `undefined`, while canonical Gemini still passed at 50%. | `command-data.ts: 1 insertion(+), 3 deletions(-)` → empty |
-| `command-projection-percentages` | Exact quota array expected percentages 70 and 40; received 1 and 0. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-reset-times` | Exact quota array expected non-Gemini `resetAt: 0`; received `undefined`. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `command-projection-both-quota-groups` | Exact quota array expected both groups; non-Gemini was missing. | `command-data.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `unmigrated-pool-refusal` | `expect(opening.status).toBe('migration-required')` received `initialization-required` (`storage.test.ts:796`). | `storage.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `offline-migration-independent-cursors` | Store routing must match `activeIndex: 7`; received 0, with the family cursors retained (`migration-crash.test.ts:806`). | `account-migration.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `pi-vault-placeholder-recognition` | `expect(result.stopReason).toBe('stop')` received `error` (`stream.test.ts:1678`). | `stream.ts: 1 insertion(+), 1 deletion(-)` → empty |
-| `gemini-dump-project-redaction` | Dump bytes must not contain `secret-proj-1234567890`; received the raw project ID (`gemini-dump.test.ts:122`). | `gemini-dump.ts: 1 insertion(+), 1 deletion(-)` → empty |
-
-An initial cache-wiring break discarded all cached readings before normalization. It is recorded separately from the normalization-specific break: the cache-wiring test fails at the canonical Gemini assertion, while bypassing legacy-key conversion fails only at the legacy non-Gemini assertion.
+The original isolated Linux checks reported **0 passing tests, 1 failing test** for each production mutation, with all other tests filtered rather than claimed as passing; the selected tests passed before mutation and after byte restoration. The cache-wiring break discarded canonical readings before normalization; the separate legacy-normalization break retained canonical readings but lost legacy non-Gemini keys. No OpenCode/Pi implementations were merged into core. The verification results below remain the historical cleanup results, not a claim that a later CI replay has completed.
 
 ## Verification results
 

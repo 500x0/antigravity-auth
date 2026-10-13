@@ -1,0 +1,271 @@
+# Standing mutation proofs for Antigravity's core, OpenCode and Pi adapters.
+# Each row earns its place by guarding a silent, costly failure: leaking account
+# identity, reading the wrong credential source, doing local work during vault
+# custody, serving an unmigrated pool, fabricating quota age, or breaking a wire
+# contract. It pairs one exact, single-occurrence production replacement with
+# one exact Bun test that must pass normally and fail under NON-VACUITY BREAK.
+# ckdev-mutate validates anchors and test names, runs the green control before
+# the break, checks the named red test, then restores the original bytes.
+#
+# Commands rebuild core for every run because adapters import emitted core.
+# Migration tests use the root test script's public-consumer preparation wrapper
+# and its owned temporary roots. Anchored selectors encode whitespace as \s and
+# escape regex punctuation; an empty selection is not a mutation proof.
+#
+# Windows migration syncFile access (O_RDWR rather than O_RDONLY) has no
+# Linux-runnable behavioral test of the Windows branch. It is deliberately not
+# catalogued here; .github/workflows/windows-migration.yml remains its platform gate.
+
+[[control]]
+id = "command-projection-ordinal-labels"
+guards = "Stored profile labels never replace ordinal account labels in the account reply."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = '  const label = `Account ${entry.index + 1}`'
+new = '  const label = entry.label ?? `Account ${entry.index + 1}` // NON-VACUITY BREAK'
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+
+[[control]]
+id = "command-projection-email-redaction"
+guards = "The privacy-safe account reply never serializes the stored email."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = '''      cachedQuotaAccountId: entry.cachedQuotaAccountId,
+    }),
+  )'''
+new = '''      cachedQuotaAccountId: entry.cachedQuotaAccountId,
+    }),
+  ).map((row, index) => ({ ...row, email: storage.accounts[index]?.email })) // NON-VACUITY BREAK'''
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+
+[[control]]
+id = "command-projection-cache-only"
+guards = "Opening or reopening the account view reads cached quota without network I/O."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "  if (!storage) return []"
+new = "  if (!storage) return []\n  void fetch('https://projection-mutation.invalid') // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sis\sa\spure\scache\sread\s—\sopening\sperforms\szero\sfetch\scalls$']
+
+[[control]]
+id = "command-projection-quota-identity"
+guards = "Cached quota stamped for another refresh-token identity is not rendered."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "    entry.cachedQuotaAccountId !== quotaAccountIdentity(entry.refreshToken)"
+new = "    entry.cachedQuotaAccountId === quotaAccountIdentity(entry.refreshToken) // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sdrops\sa\squota\ssnapshot\swhen\sthe\sidentity\sstamp\sdoes\snot\smatch\sthe\scurrent\saccount$']
+
+[[control]]
+id = "command-projection-unstamped-legacy"
+guards = "An unstamped legacy quota cache remains readable because absence of a stamp is not a mismatch."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "    entry.cachedQuotaAccountId &&"
+new = "    (!entry.cachedQuotaAccountId || entry.cachedQuotaAccountId) && // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\srenders\san\sunstamped\slegacy\ssnapshot\s\(fail\sopen\s—\sno\sstamp\smeans\sno\smismatch\)$']
+
+[[control]]
+id = "command-projection-cache-wiring"
+guards = "Cached canonical readings reach the quota normalizer instead of being discarded at its input."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],"
+new = "    undefined, // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\snormalizes\slegacy\squota\skeys\sand\ssilently\sskips\struly\sunknown\skeys$']
+
+[[control]]
+id = "command-projection-legacy-normalization"
+guards = "Legacy model quota keys normalize into the supported display groups without losing their reading."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = '''  const cached = normalizeLegacyCachedQuota(
+    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],
+  )'''
+new = "  const cached = rawCached // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\snormalizes\slegacy\squota\skeys\sand\ssilently\sskips\struly\sunknown\skeys$']
+
+[[control]]
+id = "command-projection-percentages"
+guards = "Remaining fractions project as rounded percentages rather than rounded unit fractions."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "        ? Math.round(fraction * 100)"
+new = "        ? Math.round(fraction) // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+
+[[control]]
+id = "command-projection-reset-times"
+guards = "Valid reset timestamps survive cached quota projection, including epoch zero."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "      if (Number.isFinite(parsed)) resetAt = parsed"
+new = "      if (Number.isFinite(parsed)) resetAt = undefined // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+
+[[control]]
+id = "command-projection-both-quota-groups"
+guards = "Both Gemini and non-Gemini cached quota groups appear in the account reply."
+file = "packages/opencode/src/plugin/command-data.ts"
+old = "  for (const key of SUPPORTED_QUOTA_KEYS) {"
+new = "  for (const key of SUPPORTED_QUOTA_KEYS.slice(0, 1)) { // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/command-data.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^projectCommandAccountRows\sreturns\sprivacy-safe\srows\swith\sordinal\slabels,\sboth\squota\sgroups,\spercentages\sand\sreset\stimes$']
+
+[[control]]
+id = "unmigrated-pool-refusal"
+guards = "An existing legacy pool requires offline migration rather than fresh-store initialization."
+file = "packages/opencode/src/plugin/storage.ts"
+old = "      status: 'migration-required',"
+new = "      status: 'initialization-required', // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/storage.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/storage.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^openAccountStore\sanswers\smigration-required\sfor\san\sexisting\spool\sfile\swithout\sa\sstore,\snaming\sthe\soffline\scommand$']
+
+[[control]]
+id = "offline-migration-independent-cursors"
+guards = "Offline migration preserves the legacy global cursor independently of family cursors."
+file = "packages/core/src/account-migration.ts"
+old = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = value"
+new = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = key === 'activeIndex' ? 0 : value // NON-VACUITY BREAK"
+test_file = "test/common-auth-010-store/migration-crash.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate test/common-auth-010-store/migration-crash.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^genuine\spublic-store\soffline\smigration\simports\sfull\srows,\scredential\sstamps,\sfield\spresence,\sorder\sand\sindependent\scursors\sthen\sverifies\sactive\sno-op$']
+
+[[control]]
+id = "pi-vault-placeholder-recognition"
+guards = "The exact non-secret Pi custody marker admits vault-only dispatch using the served credential."
+file = "packages/pi/src/stream.ts"
+old = "        if (options?.apiKey !== placeholderKey)"
+new = "        if (options?.apiKey === placeholderKey) // NON-VACUITY BREAK"
+test_file = "packages/pi/src/stream.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^vault\snative-slot\sadmission\suses\sonly\sthe\sserved\svault\scredential\swhen\sPi\sresolves\sthe\sexact\splaceholder$']
+
+[[control]]
+id = "gemini-dump-project-redaction"
+guards = "The live request dump masks project identity before writing the body to disk."
+file = "packages/opencode/src/plugin/gemini-dump.ts"
+old = "  writeFileSync(context.files.request, redactJsonBodyString(input.body), {"
+new = "  writeFileSync(context.files.request, input.body, { // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/gemini-dump.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/gemini-dump.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^gemini\swire\sdump\sredacts\sproject\sIDs\sfrom\sthe\sdumped\srequest\sbody$']
+
+[[control]]
+id = "v1-unmigrated-loader-refusal"
+guards = "The V1 loader returns native offline-migration 412 refusals without opening or serving the legacy pool."
+file = "packages/opencode/src/plugin/auth-loader.ts"
+old = '''    if (opening.status === 'migration-required') {
+      localUnavailable = true
+      currentRequestSource = 'local'
+      return finishLoad(provider)
+    }'''
+new = '''    if (false && opening.status === 'migration-required') { // NON-VACUITY BREAK
+      localUnavailable = true
+      currentRequestSource = 'local'
+      return finishLoad(provider)
+    }'''
+test_file = "packages/opencode/src/plugin/auth-loader.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/auth-loader.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^createAuthLoader\skeeps\san\sunmigrated\slocal\starget\sunavailable\swith\sdefault\sproducers,\spreserves\spassthrough\sand\scancellation,\sand\sdelegates\sfresh\svault\sauthority$']
+
+[[control]]
+id = "opencode-retired-claude-admission"
+guards = "OpenCode refuses retired Claude 4.6 selections before account selection, refresh, warmup or physical send."
+file = "packages/core/src/model-registry.ts"
+old = "    ) && getAgyNativeModel(route) === undefined"
+new = "    ) && false // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^retired\sClaude\sadmission\srefuses\suser\sselections\sbefore\sselection,\srefresh,\swarmup\sor\sphysical\ssend$']
+
+[[control]]
+id = "pi-local-retired-claude-admission"
+guards = "Pi refuses retired Claude 4.6 local requests before project discovery or physical transport."
+file = "packages/core/src/model-registry.ts"
+old = "    ) && getAgyNativeModel(route) === undefined"
+new = "    ) && false // NON-VACUITY BREAK"
+test_file = "packages/pi/src/stream.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^retired\sClaude\srequests\srefuses\slocal\srequests\sbefore\sproject\sdiscovery\sor\sphysical\stransport$']
+
+[[control]]
+id = "pi-vault-retired-claude-admission"
+guards = "Pi refuses retired Claude 4.6 vault requests before obtaining a served credential."
+file = "packages/core/src/model-registry.ts"
+old = "    ) && getAgyNativeModel(route) === undefined"
+new = "    ) && false // NON-VACUITY BREAK"
+test_file = "packages/pi/src/stream.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^retired\sClaude\srequests\srefuses\svault\srequests\sbefore\sobtaining\sa\scredential$']
+
+[[control]]
+id = "local-quota-vault-dormancy"
+guards = "Local quota polling performs no local account or credential work while vault custody is active."
+file = "packages/opencode/src/plugin/background-quota-refresh.ts"
+old = "    this.mayRun = options.mayRun"
+new = "    this.mayRun = undefined // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/background-vault-quota-refresh.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^vault\spoller\sfences\sand\slifecycle\sthe\slocal\spoller\sremains\sdormant\sin\svault\smode$']
+
+[[control]]
+id = "vault-quota-durable-freshness"
+guards = "Fresh sidebar publications never fabricate durable quota observation age or postpone a due vault fetch."
+file = "packages/opencode/src/plugin/background-vault-quota-refresh.ts"
+old = "        const at = quota?.cachedQuotaUpdatedAt"
+new = "        const at = now // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/background-vault-quota-refresh.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^vault\spoller\sfences\sand\slifecycle\sfrequent\ssidebar\spublications\sdo\snot\spostpone\sold\sdurable\sreadings$']
