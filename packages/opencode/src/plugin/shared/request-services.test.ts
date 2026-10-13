@@ -2934,3 +2934,75 @@ describe('retired Claude admission', () => {
     }
   })
 })
+
+describe('shared executor tool schema normalization', () => {
+  it('sanitizes tool declarations on the GA send path', async () => {
+    const h = harness({ respond: async () => okJson() })
+    const executor = createRequestExecutor(h.deps)
+    try {
+      const response = await executor.execute(
+        modelUrl('antigravity-gemini-3.8-flash-low', 'generateContent'),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'Use the tool' }] }],
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    name: 'report_tool',
+                    parameters: {
+                      type: 'object',
+                      readOnly: true,
+                      title: 'Ordered input',
+                      propertyOrdering: ['count', 'label'],
+                      example: { count: 3, label: 'x' },
+                      properties: {
+                        label: {
+                          type: 'string',
+                          format: 'date-time',
+                          pattern: '^x',
+                          title: 'Label',
+                          nullable: true,
+                          example: 'x',
+                        },
+                        count: {
+                          type: 'integer',
+                          const: 3,
+                          exclusiveMinimum: 0,
+                          vendorExtension: true,
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      )
+      expect(response.status).toBe(200)
+      expect(h.calls).toHaveLength(1)
+      const body = JSON.parse(String(h.calls[0]?.init?.body))
+      expect(body.request.tools[0].functionDeclarations[0].parameters).toEqual({
+        type: 'OBJECT',
+        title: 'Ordered input',
+        propertyOrdering: ['count', 'label'],
+        example: { count: 3, label: 'x' },
+        properties: {
+          label: {
+            type: 'STRING',
+            format: 'date-time',
+            pattern: '^x',
+            title: 'Label',
+            nullable: true,
+            example: 'x',
+          },
+          count: { type: 'INTEGER', minimum: 1, description: 'Must be 3.' },
+        },
+      })
+    } finally {
+      await executor.dispose()
+    }
+  })
+})

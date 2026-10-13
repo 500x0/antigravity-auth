@@ -1601,8 +1601,8 @@ describe('placeholder parameter for empty schemas', () => {
 })
 
 describe('cleanJSONSchemaForAntigravity', () => {
-  describe('enum merging from anyOf/oneOf', () => {
-    it('merges anyOf with const values into enum (WebFetch format pattern)', () => {
+  describe('Claude VALIDATED union adaptation', () => {
+    it('merges anyOf string constants into enum without losing choices', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1618,16 +1618,13 @@ describe('cleanJSONSchemaForAntigravity', () => {
 
       const result = cleanJSONSchemaForAntigravity(schema)
 
-      expect(result.properties.format.enum).toEqual([
-        'text',
-        'markdown',
-        'html',
-      ])
-      expect(result.properties.format.anyOf).toBeUndefined()
-      expect(result.properties.format.type).toBe('string')
+      expect(result.properties.format).toEqual({
+        type: 'STRING',
+        enum: ['text', 'markdown', 'html'],
+      })
     })
 
-    it('merges oneOf with const values into enum', () => {
+    it('merges oneOf string constants into enum without losing choices', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1648,10 +1645,11 @@ describe('cleanJSONSchemaForAntigravity', () => {
         'active',
         'completed',
       ])
+      expect(result.properties.status.anyOf).toBeUndefined()
       expect(result.properties.status.oneOf).toBeUndefined()
     })
 
-    it('merges anyOf with single-value enums into combined enum', () => {
+    it('merges anyOf single-value enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1670,7 +1668,7 @@ describe('cleanJSONSchemaForAntigravity', () => {
       expect(result.properties.level.enum).toEqual(['low', 'medium', 'high'])
     })
 
-    it('merges anyOf with multi-value enums', () => {
+    it('merges anyOf multi-value enum branches', () => {
       const schema = {
         type: 'object',
         properties: {
@@ -1703,10 +1701,13 @@ describe('cleanJSONSchemaForAntigravity', () => {
       const result = cleanJSONSchemaForAntigravity(schema)
 
       expect(result.properties.data.enum).toBeUndefined()
-      expect(result.properties.data.type).toBe('string')
+      expect(result.properties.data).toEqual({
+        type: 'STRING',
+        description: 'Accepts: string | number',
+      })
     })
 
-    it('preserves parent description when merging enum', () => {
+    it('preserves parent description alongside merged enums', () => {
       const schema = {
         type: 'object',
         properties: {

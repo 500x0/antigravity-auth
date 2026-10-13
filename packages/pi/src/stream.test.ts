@@ -1729,3 +1729,107 @@ describe('retired Claude requests', () => {
     expect(fetchWithAgyCliTransportMock).not.toHaveBeenCalled()
   })
 })
+
+describe('Pi final tool schema wire normalization', () => {
+  for (const model of [
+    'antigravity-gemini-3.8-flash-low',
+    'antigravity-claude-sonnet-5-5-low',
+    'antigravity-gpt-oss-120b-medium',
+  ]) {
+    it(`sanitizes report schemas before sending ${model}`, async () => {
+      const context = normalizeContext({
+        tools: [
+          {
+            name: 'report_tool',
+            description: 'Report',
+            parameters: Type.Unsafe({
+              type: 'object',
+              readOnly: true,
+              examples: [{}],
+              title: 'Ordered input',
+              propertyOrdering: ['thinking', 'count', 'label'],
+              example: { label: 'x' },
+              properties: {
+                label: {
+                  type: 'string',
+                  format: 'date-time',
+                  pattern: '^x',
+                  title: 'Label',
+                  nullable: true,
+                  example: 'x',
+                },
+                thinking: {
+                  type: 'array',
+                  items: {
+                    oneOf: [
+                      { type: 'boolean', const: false },
+                      { type: 'boolean', const: true },
+                      { type: 'integer', const: 3 },
+                      { type: 'string', const: 'x' },
+                    ],
+                  },
+                },
+                count: {
+                  type: 'integer',
+                  exclusiveMinimum: 0,
+                  multipleOf: 2,
+                  vendorExtension: true,
+                },
+              },
+            }),
+          },
+        ],
+        messages: [{ role: 'user', content: 'Use the tool', timestamp: 11 }],
+      })
+      fetchWithAgyCliTransportMock.mockImplementationOnce(async () =>
+        terminalTextResponse(),
+      )
+      const { result } = await collectStream(
+        streamCortexKitAntigravity(fakeModel(model), context, {
+          apiKey: 'test-token',
+          sessionId: `schema-${model}`,
+        }),
+      )
+      expect(result.stopReason).not.toBe('error')
+      const body = JSON.parse(
+        String(fetchWithAgyCliTransportMock.mock.calls.at(-1)?.[1]?.body),
+      )
+      expect(body.request.tools[0].functionDeclarations[0].parameters).toEqual({
+        type: 'OBJECT',
+        title: 'Ordered input',
+        propertyOrdering: ['thinking', 'count', 'label'],
+        example: { label: 'x' },
+        properties: {
+          label: {
+            type: 'STRING',
+            format: 'date-time',
+            pattern: '^x',
+            title: 'Label',
+            nullable: true,
+            example: 'x',
+          },
+          thinking: {
+            type: 'ARRAY',
+            items: {
+              anyOf: [
+                { type: 'BOOLEAN', description: 'Must be false.' },
+                { type: 'BOOLEAN', description: 'Must be true.' },
+                { type: 'INTEGER', description: 'Must be 3.' },
+                { type: 'STRING', enum: ['x'] },
+              ],
+            },
+          },
+          count: model.includes('gpt-oss')
+            ? {
+                type: 'INTEGER',
+                description: 'exclusiveMinimum: 0, multipleOf: 2',
+              }
+            : { type: 'INTEGER', minimum: 1, description: 'multipleOf: 2' },
+        },
+      })
+      expect(body.request.toolConfig).toEqual({
+        functionCallingConfig: { mode: 'VALIDATED' },
+      })
+    })
+  }
+})

@@ -599,3 +599,109 @@ describe('buildGeminiRequest with Pi transcript system messages', () => {
     expect(buildGeminiRequest(normalizeContext(flat))).toEqual(fromFlat)
   })
 })
+
+describe('Pi tool schema wire normalization', () => {
+  function parameters(
+    schema: Record<string, unknown>,
+    model = 'antigravity-gemini-3.8-flash-low',
+  ) {
+    const request = buildGeminiRequest(
+      ctx({
+        tools: [
+          {
+            name: 'report_tool',
+            description: 'Report',
+            parameters: Type.Unsafe(schema),
+          },
+        ],
+      }),
+      { model },
+    )
+    return JSON.parse(JSON.stringify(request)).tools[0].functionDeclarations[0]
+      .parameters
+  }
+
+  it('normalizes nested non-string constants and enums', () => {
+    expect(
+      parameters({
+        type: 'array',
+        items: {
+          anyOf: [
+            { type: 'boolean', const: false },
+            { type: 'boolean', const: true },
+            { type: 'integer', const: 3 },
+            { type: 'string', const: 'x' },
+            { type: 'integer', enum: [1, 2] },
+          ],
+        },
+      }),
+    ).toEqual({
+      type: 'ARRAY',
+      items: {
+        anyOf: [
+          { type: 'BOOLEAN', description: 'Must be false.' },
+          { type: 'BOOLEAN', description: 'Must be true.' },
+          { type: 'INTEGER', description: 'Must be 3.' },
+          { type: 'STRING', enum: ['x'] },
+          { type: 'INTEGER', description: 'Allowed values: 1, 2.' },
+        ],
+      },
+    })
+  })
+
+  it('drops unknown keywords and folds integer exclusive bounds', () => {
+    expect(
+      parameters({
+        type: 'object',
+        readOnly: true,
+        examples: [{}],
+        properties: {
+          count: {
+            type: 'integer',
+            exclusiveMinimum: 0,
+            exclusiveMaximum: 10,
+            multipleOf: 2,
+            vendorExtension: true,
+          },
+        },
+      }),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: {
+        count: {
+          type: 'INTEGER',
+          minimum: 1,
+          maximum: 9,
+          description: 'multipleOf: 2',
+        },
+      },
+    })
+  })
+
+  it('moves GPT-OSS numeric constraints to descriptions', () => {
+    expect(
+      parameters(
+        {
+          type: 'object',
+          properties: {
+            count: {
+              type: 'integer',
+              minimum: 0,
+              exclusiveMinimum: true,
+              multipleOf: 2,
+            },
+          },
+        },
+        'antigravity-gpt-oss-120b-medium',
+      ),
+    ).toEqual({
+      type: 'OBJECT',
+      properties: {
+        count: {
+          type: 'INTEGER',
+          description: 'minimum: 0, exclusiveMinimum: true, multipleOf: 2',
+        },
+      },
+    })
+  })
+})
