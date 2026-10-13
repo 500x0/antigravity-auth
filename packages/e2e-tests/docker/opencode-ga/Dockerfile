@@ -1,5 +1,6 @@
-# ECR serves the same official Node image index as Docker Hub, without a Hub pull.
-FROM public.ecr.aws/docker/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+# ECR and Google's public mirror serve the pinned official Node image without a Docker Hub pull.
+ARG BASE_IMAGE=public.ecr.aws/docker/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM ${BASE_IMAGE}
 ARG SOURCE_REVISION
 ENV GA_SOURCE_REVISION="${SOURCE_REVISION}"
 

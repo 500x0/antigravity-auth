@@ -7,6 +7,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 IMAGE="antigravity-auth-e2e-ga"
+BASE_IMAGE_DIGEST="sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+ECR_BASE_IMAGE="public.ecr.aws/docker/library/node:24-bookworm-slim@${BASE_IMAGE_DIGEST}"
+MIRROR_BASE_IMAGE="mirror.gcr.io/library/node@${BASE_IMAGE_DIGEST}"
 HOST_TEST_MODE="--run"
 if [[ "${1:-}" == --smoke ]]; then
   HOST_TEST_MODE="--smoke"
@@ -41,6 +44,12 @@ trap 'rm -rf "$CONTEXT"' EXIT
 # Only committed files enter the build context, so an ignored or untracked
 # local file cannot supply a pin, fixture or measurement.
 git -C "$REPO_ROOT" archive "$REVISION" | tar -x -C "$CONTEXT"
+DOCKERFILE="$CONTEXT/packages/e2e-tests/docker/opencode-ga/Dockerfile"
+if ! grep -Fqx "ARG BASE_IMAGE=$ECR_BASE_IMAGE" \
+  "$DOCKERFILE"; then
+  echo 'Dockerfile base image default does not match the runner digest' >&2
+  exit 2
+fi
 INPUTS=(
   packages/e2e-tests/docker/ga-binary-pin.json
   packages/opencode/docs/opencode2-ga-2.0.22-contract.md
@@ -58,9 +67,43 @@ done
 command -v timeout >/dev/null 2>&1 || { echo 'GNU timeout is required on the native measuring host' >&2; exit 2; }
 RESULTS="$(mktemp -d "${TMPDIR:-/tmp}/agy-ga-results.XXXXXXXX")"
 printf 'GA evidence output: %s\n' "$RESULTS"
-timeout --signal=TERM --kill-after=10s 1200s docker build --platform linux/amd64 \
+LAST_PULL_ERROR=""
+pull_base_image() {
+  local image_ref="$1"
+  local attempt output exit_code
+  local -a backoff_seconds=(10 30)
+  for attempt in 1 2 3; do
+    printf 'Pulling GA base image %s (attempt %s/3)\n' "$image_ref" "$attempt" >&2
+    if output="$(timeout --signal=TERM --kill-after=10s 300s docker pull --platform linux/amd64 "$image_ref" 2>&1)"; then
+      printf '%s\n' "$output"
+      LAST_PULL_ERROR=""
+      return 0
+    else
+      exit_code=$?
+      printf '%s\n' "$output" >&2
+      LAST_PULL_ERROR="${output##*$'\n'}"
+      [[ -n "$LAST_PULL_ERROR" ]] || LAST_PULL_ERROR="docker pull exited with status $exit_code"
+    fi
+    if (( attempt < 3 )); then
+      sleep "${backoff_seconds[$((attempt - 1))]}"
+    fi
+  done
+  return 1
+}
+BASE_IMAGE_REF=""
+if pull_base_image "$ECR_BASE_IMAGE"; then
+  BASE_IMAGE_REF="$ECR_BASE_IMAGE"
+elif pull_base_image "$MIRROR_BASE_IMAGE"; then
+  BASE_IMAGE_REF="$MIRROR_BASE_IMAGE"
+else
+  printf 'Unable to pull GA base image from %s or %s. Last error: %s\n' \
+    "$ECR_BASE_IMAGE" "$MIRROR_BASE_IMAGE" "$LAST_PULL_ERROR" >&2
+  exit 1
+fi
+timeout --signal=TERM --kill-after=10s 1200s docker build --pull=false --platform linux/amd64 \
+  --build-arg "BASE_IMAGE=$BASE_IMAGE_REF" \
   --build-arg "SOURCE_REVISION=$REVISION" \
-  --file "$CONTEXT/packages/e2e-tests/docker/opencode-ga/Dockerfile" \
+  --file "$DOCKERFILE" \
   --tag "$IMAGE" "$CONTEXT"
 # Provenance is measured here, outside the container. An arm64 controller must
 # invoke this runner on the independent native machine, not label QEMU as native.

@@ -847,6 +847,10 @@ describe('GA shell runner fixture preflight, not native host certification', () 
       const input = 'packages/e2e-tests/src/owned-input.ts'
       for (const [path, contents] of [
         [runner, readFileSync(join(HERE, 'run-opencode-ga-test.sh'), 'utf8')],
+        [
+          'packages/e2e-tests/docker/opencode-ga/Dockerfile',
+          readFileSync(join(HERE, 'opencode-ga/Dockerfile'), 'utf8'),
+        ],
         ['packages/e2e-tests/docker/ga-binary-pin.json', '{}'],
         [
           'packages/opencode/docs/opencode2-ga-2.0.22-contract.md',
@@ -864,7 +868,7 @@ describe('GA shell runner fixture preflight, not native host certification', () 
       })
       writeFileSync(
         join(bin, 'docker'),
-        '#!/bin/bash\nif [[ "$1" == info ]]; then echo amd64; else echo OWNED_DOCKER_BUILD_BOUNDARY; exit 42; fi\n',
+        '#!/bin/bash\nif [[ "$1" == info ]]; then echo amd64; elif [[ "$1" == pull ]]; then exit 0; else echo OWNED_DOCKER_BUILD_BOUNDARY; exit 42; fi\n',
         { mode: 0o700 },
       )
       writeFileSync(join(bin, 'timeout'), '#!/bin/bash\nshift 3\nexec "$@"\n', {
@@ -905,9 +909,33 @@ describe('GA shell runner fixture preflight, not native host certification', () 
 
 test('Docker bootstrap avoids Hub and verifies Bun before extraction', () => {
   const source = readFileSync(join(HERE, 'opencode-ga/Dockerfile'), 'utf8')
+  const baseImageDigest =
+    'sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20'
   expect(source).toContain(
-    'FROM public.ecr.aws/docker/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20',
+    `ARG BASE_IMAGE=public.ecr.aws/docker/library/node:24-bookworm-slim@${baseImageDigest}`,
   )
+  expect(source).toContain('FROM ${BASE_IMAGE}')
+  expect(source.split('\n').filter((line) => line.startsWith('FROM '))).toEqual([
+    'FROM ${BASE_IMAGE}',
+  ])
+  const script = readFileSync(join(HERE, 'run-opencode-ga-test.sh'), 'utf8')
+  expect(script).toContain(`BASE_IMAGE_DIGEST="${baseImageDigest}"`)
+  expect(script.split(baseImageDigest)).toHaveLength(2)
+  const baseImageReferences = script
+    .split('\n')
+    .filter(
+      (line) =>
+        line.includes('public.ecr.aws/') || line.includes('mirror.gcr.io/'),
+    )
+  expect(baseImageReferences).toEqual([
+    'ECR_BASE_IMAGE="public.ecr.aws/docker/library/node:24-bookworm-slim@${BASE_IMAGE_DIGEST}"',
+    'MIRROR_BASE_IMAGE="mirror.gcr.io/library/node@${BASE_IMAGE_DIGEST}"',
+  ])
+  expect(script).toContain('docker pull --platform linux/amd64 "$image_ref"')
+  expect(script).toContain('--build-arg "BASE_IMAGE=$BASE_IMAGE_REF"')
+  expect(script).toContain('--pull=false')
+  expect(script).not.toContain('docker.io')
+  expect(script).not.toContain('hub.docker.com')
   expect(source).not.toContain('# syntax=')
   expect(source).not.toContain('FROM oven/bun')
   expect(source).not.toContain('FROM node:')
