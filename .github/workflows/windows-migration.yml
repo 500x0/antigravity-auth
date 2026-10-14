@@ -5,8 +5,10 @@ on:
       ref:
         required: false
         type: string
+  # Verification branches run it too, so Windows-affecting changes are proven
+  # before they reach main.
   push:
-    branches: [main]
+    branches: [main, 'verify/**']
   pull_request:
     branches: [main]
 permissions:
