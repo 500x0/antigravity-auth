@@ -318,8 +318,8 @@ describe('Pi /antigravity menu', () => {
   it('names the missing read grant when the approved vault serves Pi no accounts', async () => {
     emptyRoster = true
     const grant = [
-      'The vault operator approved Pi, but the vault gives Pi no Antigravity accounts yet.',
-      'The vault operator grants read access with: ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read',
+      "The vault operator approved Pi, but Pi can't see any Antigravity accounts in the vault yet.",
+      'If the operator has not granted Pi read access yet, they run: ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read',
     ]
     const { menu } = await openPiMenu()
     const requested = await apply(menu, 'vault', 'request-access')

@@ -188,7 +188,7 @@ describe('Pi vault setup', () => {
     expect(status.hostSlot).toBe('dormant')
     const text = `${JSON.stringify(status)}\n${formatPiVaultSetupStatus(status).join('\n')}`
     expect(text).not.toContain(ENROLLMENT_SECRET)
-    expect(formatPiVaultSetupStatus(status)).toContain(SET_ASIDE)
+    expect(formatPiVaultSetupStatus(status)).toContain(CUSTODY)
   })
 
   it('runs the enrollment ceremony only from an explicit step and closes each connection', async () => {
@@ -416,7 +416,7 @@ describe('Pi vault menu section', () => {
     const forget = action(content, 'forget')
     expect(forget.irreversible).toBe(true)
     expect(forget.confirm).toBe(
-      'Disconnect Pi from the vault? Using the vault again needs a new approval from the vault operator.',
+      'Disconnect this computer from the vault? Pi goes back to its own login, and using the vault here again needs a new approval from the vault operator.',
     )
     await forget.run({ values: {}, invocation: invocation().value })
     expect(existsSync(setup.paths.tokenPath)).toBe(false)
@@ -494,11 +494,10 @@ const GRANT =
   'ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read'
 
 // The Vault section's status lines, as a newcomer reads them.
-const LOCAL = "Using Pi's own login for Antigravity, not the vault."
-const CUSTODY = 'Using the vault for Antigravity accounts.'
-const NOT_SIGNED_IN =
-  "Not signed in with Pi's own login. Run /login to sign in."
-const SET_ASIDE = "Pi's own login is set aside while Pi uses the vault."
+const LOCAL =
+  "Using Pi's own login, not the vault, but you are not signed in. Run /login to sign in."
+const CUSTODY =
+  "Using the vault for Antigravity accounts; Pi's own login is set aside."
 const WAITING =
   'Vault access: waiting for the vault operator to approve this request.'
 const APPROVED = 'Vault access: approved by the vault operator.'
@@ -510,7 +509,7 @@ function pendingSteps(approve: string): string[] {
     'Next, the vault operator runs these outside Pi:',
     approve,
     `2. Grant read access: ${GRANT}`,
-    'Both are needed: an approval without the grant gives Pi no accounts.',
+    'Both are needed: without the grant, Pi can see no accounts in the vault.',
     '3. Pi switches to the vault once it sees the approval. Choose Request vault access to check again.',
   ]
 }
@@ -525,8 +524,8 @@ const PENDING_EXISTS = [
 ]
 
 const NO_ACCOUNTS = [
-  'The vault operator approved Pi, but the vault gives Pi no Antigravity accounts yet.',
-  `The vault operator grants read access with: ${GRANT}`,
+  "The vault operator approved Pi, but Pi can't see any Antigravity accounts in the vault yet.",
+  `If the operator has not granted Pi read access yet, they run: ${GRANT}`,
 ]
 
 /**
@@ -619,9 +618,8 @@ describe('Pi vault enrollment guidance', () => {
     expect(content.lines).toEqual([
       LOCAL,
       WAITING,
-      NOT_SIGNED_IN,
       ...pendingSteps(APPROVE_REQUEST_1),
-      'Disconnect from the vault comes back once the vault operator approves or denies this request. To cancel the request, the vault operator runs ck auth enroll deny --request-id request-1; then choose Request vault access here.',
+      "You can't disconnect while this request waits for the vault operator. To withdraw it, ask the vault operator to run ck auth enroll deny --request-id request-1, then choose Request vault access here so Pi sees the answer.",
     ])
     expect(content.actions?.map((entry) => entry.id)).toEqual([
       'request-access',
@@ -656,11 +654,11 @@ describe('Pi vault enrollment guidance', () => {
     const content = await build(
       createPiVaultSection({ setup: async () => setup }),
     )
-    expect(content.lines?.slice(3)).toEqual([
+    expect(content.lines?.slice(2)).toEqual([
       ...pendingSteps(
         '1. Find the request from antigravity-auth-pi with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>',
       ),
-      'Disconnect from the vault comes back once the vault operator approves or denies this request. To cancel the request, the vault operator runs ck auth enroll deny --request-id <id>; then choose Request vault access here.',
+      "You can't disconnect while this request waits for the vault operator. To withdraw it, ask the vault operator to run ck auth enroll deny --request-id <id>, then choose Request vault access here so Pi sees the answer.",
     ])
   })
 
@@ -689,7 +687,6 @@ describe('Pi vault enrollment guidance', () => {
     expect((await build(section)).lines).toEqual([
       CUSTODY,
       APPROVED,
-      SET_ASIDE,
       ...NO_ACCOUNTS,
     ])
   })
@@ -720,7 +717,6 @@ describe('Pi vault enrollment guidance', () => {
     expect(content.lines).toEqual([
       LOCAL,
       APPROVED,
-      NOT_SIGNED_IN,
       'Next: choose Use the vault to have Pi use these accounts.',
     ])
     expect(content.actions?.map((entry) => entry.id)).toContain('use-vault')
@@ -751,7 +747,6 @@ describe('Pi vault enrollment guidance', () => {
     expect(content.lines).toEqual([
       LOCAL,
       PENDING_EXISTS_STATE,
-      NOT_SIGNED_IN,
       ...PENDING_EXISTS,
     ])
     expect(content.actions?.map((entry) => entry.id)).toEqual([
@@ -847,7 +842,7 @@ describe.skipIf(process.platform === 'win32')(
     }
 
     const sentence = (folder: string) =>
-      `The vault token can't be saved because ${folder} is shared with other users. Make it owned by you and not writable by your group or by others, then try again.`
+      `The vault key can't be saved because the folder ${folder} can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.`
 
     it('reports the refusal as a failure that names the folder, without the raw error', async () => {
       const { setup, shared } = await sharedFolderSetup(['approved'])

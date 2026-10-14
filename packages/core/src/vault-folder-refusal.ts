@@ -55,7 +55,7 @@ export const SHARED_VAULT_TOKEN_FOLDER_CODE = 'vault-folder-shared'
 
 /** The one sentence a menu shows for a refusal `sharedVaultTokenFolder` recognized. */
 export function sharedVaultTokenFolderText(folder: string): string {
-  return `The vault token can't be saved because ${folder} is shared with other users. Make it owned by you and not writable by your group or by others, then try again.`
+  return `The vault key can't be saved because the folder ${folder} can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.`
 }
 
 /**

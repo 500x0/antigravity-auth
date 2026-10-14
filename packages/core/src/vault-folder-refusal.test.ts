@@ -64,7 +64,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(sharedVaultTokenFolderOutcome(error)).toEqual({
         ok: false,
         code: SHARED_VAULT_TOKEN_FOLDER_CODE,
-        text: `The vault token can't be saved because ${shared} is shared with other users. Make it owned by you and not writable by your group or by others, then try again.`,
+        text: `The vault key can't be saved because the folder ${shared} can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.`,
       })
     })
 
@@ -115,7 +115,7 @@ describe.skipIf(process.platform === 'win32')(
 
     it('says what to change in one sentence', () => {
       expect(sharedVaultTokenFolderText('/home/me/shared')).toBe(
-        "The vault token can't be saved because /home/me/shared is shared with other users. Make it owned by you and not writable by your group or by others, then try again.",
+        "The vault key can't be saved because the folder /home/me/shared can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.",
       )
     })
   },

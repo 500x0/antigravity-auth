@@ -471,7 +471,7 @@ describe('Vault section enrollment guidance', () => {
       expect(result).toEqual({
         ok: false,
         code: 'vault-folder-shared',
-        text: `The vault token can't be saved because ${config} is shared with other users. Make it owned by you and not writable by your group or by others, then try again.`,
+        text: `The vault key can't be saved because the folder ${config} can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.`,
       })
       expect(JSON.stringify(result)).not.toContain('not private')
     },
