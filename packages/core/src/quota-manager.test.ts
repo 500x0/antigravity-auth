@@ -158,6 +158,40 @@ describe('classifyQuotaGroup', () => {
 })
 
 describe('aggregateQuota', () => {
+  it('keeps authoritative Argon per-model readings without attributing a weekly Gemini pool', () => {
+    const { aggregateQuota, classifyQuotaGroup } = createQuotaManager({
+      fetchAccountQuota: makeHarness().fetch,
+      keyOf: keyOfAccount,
+    })
+    const models = Object.fromEntries(
+      ['low', 'medium', 'high'].map((effort) => [
+        `gemini-4-argon-${effort}`,
+        {
+          displayName: `Gemini 4 Argon (${effort})`,
+          quotaInfo: {
+            remainingFraction: 0.75,
+            resetTime: '2026-10-14T17:46:06Z',
+          },
+        },
+      ]),
+    )
+    const summary = aggregateQuota(models)
+    expect(summary.groups).toEqual({})
+    expect(summary.modelCount).toBe(3)
+    expect(summary.perModel).toHaveLength(3)
+    for (const reading of summary.perModel ?? []) {
+      expect(reading).toMatchObject({
+        group: null,
+        remainingFraction: 0.75,
+        resetTime: '2026-10-14T17:46:06Z',
+      })
+      expect(
+        classifyQuotaGroup(reading.modelId, reading.displayName),
+      ).toBeNull()
+    }
+    expect(classifyQuotaGroup('antigravity-gemini-4-argon')).toBeNull()
+    expect(classifyQuotaGroup('gemini-3.8-flash-low')).toBe('gemini')
+  })
   it('aggregates per-model entries into groups by minimum remaining', () => {
     const { aggregateQuota } = createQuotaManager({
       fetchAccountQuota: makeHarness().fetch,

@@ -184,6 +184,15 @@ export class AgyRequestSessionStore {
 
 // Historical metadata remains readable; host admission refuses these retired routes.
 const HISTORICAL_AGY_MODEL_ENUMS: Readonly<Record<string, string>> = {
+  'gemini-3.1-pro-low': 'MODEL_PLACEHOLDER_M36',
+  'gemini-3.1-pro-high': 'MODEL_PLACEHOLDER_M37',
+  'gemini-pro-agent': 'MODEL_PLACEHOLDER_M16',
+  'gemini-3.6-flash-low': 'MODEL_PLACEHOLDER_M73',
+  'gemini-3.6-flash-medium': 'MODEL_PLACEHOLDER_M72',
+  'gemini-3.6-flash-high': 'MODEL_PLACEHOLDER_M71',
+  'gemini-3.7-flash-low': 'MODEL_PLACEHOLDER_M300',
+  'gemini-3.7-flash-medium': 'MODEL_PLACEHOLDER_M299',
+  'gemini-3.7-flash-high': 'MODEL_PLACEHOLDER_M298',
   'claude-sonnet-4-6': 'MODEL_PLACEHOLDER_M35',
   'claude-opus-4-6-thinking': 'MODEL_PLACEHOLDER_M26',
 }

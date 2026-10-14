@@ -47,16 +47,23 @@ The extension registers the Antigravity model catalog under the
 `google` provider, including:
 
 - `antigravity-gemini-3.8-flash`
-- `antigravity-gemini-3.7-flash`
-- `antigravity-gemini-3.6-flash`
+- `antigravity-gemini-4-argon`
 - `antigravity-gemini-3.5-flash`
-- `antigravity-gemini-3.1-pro`
 - `antigravity-claude-sonnet-5-5`
 - `antigravity-claude-opus-5-5`
 
 Claude 5.5 supports low, medium and high effort, a 1,000,000-token context and
 128,000-token output limit. Retired Claude 4.6 requests refuse before credential
 acquisition or transport; they are not redirected to 5.5.
+Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
+Antigravity. Their grouped and native tier selectors also refuse before
+credential acquisition or transport, without aliases; history stays readable.
+
+Gemini 4 Argon requires **Google AI Ultra** and supports low, medium and high
+effort (medium by default), with 1,048,576 context and 65,536 output tokens.
+It uses Antigravity only. Argon's per-model remaining quota and reset time are
+reported separately because the redacted quota summary does not identify an
+Argon weekly shared-quota bucket; weekly pool attribution remains unverified.
 - `antigravity-gpt-oss-120b-medium`
 
 The image-generation model is currently OpenCode-only because Pi's provider event

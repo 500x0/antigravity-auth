@@ -38,11 +38,22 @@ examples do not define a supported Claude 5.5 effort.
 
 ## Gemini
 
-The grouped `antigravity-gemini-3.5-flash`, `3.6-flash`, `3.7-flash` and
-`3.8-flash` entries expose low, medium and high variants.
-`antigravity-gemini-3.1-pro` exposes low and high. These selectors retain the
+The grouped `antigravity-gemini-3.5-flash`, `antigravity-gemini-3.8-flash` and
+`antigravity-gemini-4-argon` entries expose low, medium and high variants.
+These selectors retain the
 plugin's family-specific routing; do not infer a wire model or token budget solely
 from the variant's display name.
+
+Gemini 4 Argon requires **Google AI Ultra** and defaults to medium, matching the
+official CLI. It sends an uppercase thinking level with no thinking budget and
+defaults to 65,536 output tokens; a caller's output cap still wins. Only LOW is
+captured on the wire; MEDIUM/HIGH follow catalog levels 2/3 in `test-fixtures/agy-cli-1.3.5/argon-model-metadata.json` and are unverified live.
+The native LOW request omits toolConfig. The adapter applies that omission to the
+whole Argon family; MEDIUM/HIGH omission remains unverified live.
+
+Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
+Antigravity. Grouped and native tier selectors refuse without aliases or
+redirects. Historical transcripts remain readable.
 
 ```bash
 opencode run "Hello" --model=google/antigravity-gemini-3.8-flash --variant=medium

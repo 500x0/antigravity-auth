@@ -1,4 +1,4 @@
-import { getAgyNativeModel } from '../model-registry.ts'
+import { getAgyNativeModel, isGeminiArgonModel } from '../model-registry.ts'
 
 const ADAPTIVE_LEVELS: Readonly<Record<number, string>> = {
   1: 'LOW',
@@ -20,7 +20,17 @@ export function applyAgyNativeGenerationConfig(
   }
   delete generationConfig.max_output_tokens
 
-  if (native.supportsAdaptiveThinking && native.thinkingLevel !== undefined) {
+  if (isGeminiArgonModel(wireModel) && native.thinkingLevel !== undefined) {
+    // The 1.3.5 native-argon-low fixture observes LOW without thinkingBudget;
+    // MEDIUM/HIGH are inferred from the server catalog's numeric efforts.
+    generationConfig.thinkingConfig = {
+      includeThoughts: true,
+      thinkingLevel: ADAPTIVE_LEVELS[native.thinkingLevel],
+    }
+  } else if (
+    native.supportsAdaptiveThinking &&
+    native.thinkingLevel !== undefined
+  ) {
     // LOW matches test-fixtures/agy-cli-1.3.3/native-opus-low.json.
     // Other efforts use schema-derived-thinking.json in that directory;
     // the adaptive config retains its zero budget and explicit effort.

@@ -533,6 +533,48 @@ afterEach(() => {
 })
 
 describe('resolvePiAntigravityModel', () => {
+  it('sends grouped Argon with medium default and all requested levels without budgets', async () => {
+    for (const effort of [undefined, 'low', 'medium', 'high'] as const) {
+      for (const cap of [undefined, 2048]) {
+        fetchWithAgyCliTransportMock.mockImplementationOnce(async () =>
+          sseResponse([
+            'data: {"response":{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}]}}\n\n',
+          ]),
+        )
+        const model = {
+          ...fakeModel('antigravity-gemini-4-argon'),
+          reasoning: true,
+        }
+        const result = await collectStream(
+          streamCortexKitAntigravity(model, userContext(), {
+            apiKey: 'test-token',
+            reasoning: effort,
+            maxTokens: cap,
+            sessionId: `argon-${effort}-${cap}`,
+          }),
+        )
+        expect(result.result.stopReason).toBe('stop')
+        const call = fetchWithAgyCliTransportMock.mock.calls.at(-1)
+        const body = JSON.parse(String(call?.[1]?.body))
+        const level = effort ?? 'medium'
+        expect(body.model).toBe(`gemini-4-argon-${level}`)
+        expect(body.request.generationConfig).toEqual({
+          maxOutputTokens: cap ?? 65536,
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: level.toUpperCase(),
+          },
+        })
+        expect(body.request.labels.model_enum).toBe(
+          {
+            low: 'MODEL_PLACEHOLDER_M419',
+            medium: 'MODEL_PLACEHOLDER_M418',
+            high: 'MODEL_PLACEHOLDER_M417',
+          }[level],
+        )
+      }
+    }
+  })
   it('prepares captured low and schema-derived efforts using genuine Pi registration models', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agy-133-pi-catalog-'))
     try {
@@ -595,7 +637,7 @@ describe('resolvePiAntigravityModel', () => {
           )
           expect(Object.keys(body)).toEqual(fixture.envelope_keys)
           expect(new Headers(call?.[1]?.headers).get('User-Agent')).toMatch(
-            /^antigravity\/cli\/1\.3\.3 .*cl=996823801;/,
+            /^antigravity\/cli\/1\.3\.5 .*cl=998863838;/,
           )
         }
         fetchWithAgyCliTransportMock.mockImplementationOnce(async () =>
@@ -688,6 +730,41 @@ describe('resolvePiAntigravityModel', () => {
 })
 
 describe('finalizePiAntigravityRequest', () => {
+  it('omits toolConfig for every Argon route and grouped selector but keeps VALIDATED for other Gemini', () => {
+    for (const model of [
+      'gemini-4-argon-low',
+      'gemini-4-argon-medium',
+      'gemini-4-argon-high',
+      'antigravity-gemini-4-argon',
+      'gemini-3.8-flash-low',
+    ]) {
+      const request: Record<string, unknown> = {
+        contents: [{ role: 'user', parts: [{ text: 'Use read' }] }],
+        tools: [
+          {
+            functionDeclarations: [
+              { name: 'read', parameters: { type: 'OBJECT' } },
+            ],
+          },
+        ],
+        toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      }
+      finalizePiAntigravityRequest(request, model, {
+        session: {
+          conversationId: 'synthetic-conversation',
+          trajectoryId: 'synthetic-trajectory',
+          numericSessionId: '1',
+        },
+        timestamp: 1,
+      })
+      if (model.includes('argon'))
+        expect(request).not.toHaveProperty('toolConfig')
+      else
+        expect(request.toolConfig).toEqual({
+          functionCallingConfig: { mode: 'VALIDATED' },
+        })
+    }
+  })
   it('adds AGY session metadata and VALIDATED tool configuration', () => {
     const request: Record<string, unknown> = {
       generationConfig: { thinkingConfig: { thinkingBudget: 10_000 } },
@@ -985,31 +1062,19 @@ describe('streamCortexKitAntigravity', () => {
     ])
   })
 
-  it('sends the captured Gemini 3.7 high budget and model enum on the wire', async () => {
-    await runStream(
-      {
-        ...fakeModel('antigravity-gemini-3.7-flash'),
-        reasoning: true,
-      },
-      sseResponse([
-        'data: {"response":{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}}\n\n',
-      ]),
-      'gemini-37-high-wire',
-      undefined,
-      'high',
+  it('refuses the withdrawn Gemini 3.7 high selection instead of sending its historical budget', async () => {
+    const observed = await collectStream(
+      streamCortexKitAntigravity(
+        { ...fakeModel('antigravity-gemini-3.7-flash'), reasoning: true },
+        userContext(),
+        { apiKey: 'test-token', reasoning: 'high' },
+      ),
     )
-
-    const call = fetchWithAgyCliTransportMock.mock.calls.at(-1)
-    const body = JSON.parse(String(call?.[1]?.body))
-    expect(body.model).toBe('gemini-3.7-flash-high')
-    expect(body.request.generationConfig.thinkingConfig).toEqual({
-      includeThoughts: true,
-      thinkingBudget: -1,
-    })
-    expect(body.request.labels.model_enum).toBe('MODEL_PLACEHOLDER_M298')
-    expect(call?.[1]?.headers?.['User-Agent']).toContain(
-      'antigravity/cli/1.3.3',
+    expect(observed.result.stopReason).toBe('error')
+    expect(observed.result.errorMessage).toBe(
+      'This Antigravity model is no longer offered. Choose another model.',
     )
+    expect(fetchWithAgyCliTransportMock).not.toHaveBeenCalled()
   })
 
   it('sends the captured Gemini 3.8 high budget and model enum on the wire', async () => {
@@ -1035,7 +1100,7 @@ describe('streamCortexKitAntigravity', () => {
     })
     expect(body.request.labels.model_enum).toBe('MODEL_PLACEHOLDER_M318')
     expect(call?.[1]?.headers?.['User-Agent']).toContain(
-      'antigravity/cli/1.3.3',
+      'antigravity/cli/1.3.5',
     )
   })
 
@@ -1694,6 +1759,45 @@ describe('vault native-slot admission', () => {
 })
 
 describe('retired Claude requests', () => {
+  it('refuses withdrawn Gemini routes locally and in vault custody with zero sends', async () => {
+    const send = mock(async () => {
+      throw new Error('Unexpected vault credential acquisition')
+    })
+    const stream = createCortexKitAntigravityVaultStream(
+      send,
+      'synthetic-placeholder',
+    )
+    const routes = ['gemini-pro-agent']
+    for (const family of [
+      'gemini-3.1-pro',
+      'gemini-3.6-flash',
+      'gemini-3.7-flash',
+    ]) {
+      const efforts =
+        family === 'gemini-3.1-pro'
+          ? ['low', 'high']
+          : ['low', 'medium', 'high']
+      routes.push(family, ...efforts.map((effort) => `${family}-${effort}`))
+    }
+    for (const route of routes) {
+      for (const prefix of ['', 'antigravity-']) {
+        for (const run of [streamCortexKitAntigravity, stream]) {
+          const observed = await collectStream(
+            run(fakeModel(prefix + route), userContext(), {
+              apiKey: run === stream ? 'synthetic-placeholder' : 'test-token',
+            }),
+          )
+          expect(observed.result.stopReason).toBe('error')
+          expect(observed.result.errorMessage).toBe(
+            'This Antigravity model is no longer offered. Choose another model.',
+          )
+        }
+      }
+    }
+    expect(send).not.toHaveBeenCalled()
+    expect(ensureProjectContextMock).not.toHaveBeenCalled()
+    expect(fetchWithAgyCliTransportMock).not.toHaveBeenCalled()
+  })
   it('refuses local requests before project discovery or physical transport', async () => {
     const observed = await collectStream(
       streamCortexKitAntigravity(

@@ -1,0 +1,316 @@
+{
+  "endpoint": "/v1internal:streamGenerateContent",
+  "http_version": "HTTP/1.1",
+  "header_order": [
+    "Host",
+    "User-Agent",
+    "Transfer-Encoding",
+    "Authorization",
+    "Content-Type",
+    "Accept-Encoding"
+  ],
+  "user_agent": "antigravity/cli/1.3.5 (aidev_client; os_type=darwin; arch=arm64; cl=998863838; auth_method=consumer)",
+  "envelope_keys": [
+    "project",
+    "requestId",
+    "request",
+    "model",
+    "userAgent",
+    "requestType"
+  ],
+  "requests": [
+    {
+      "model": "gemini-4-argon-low",
+      "request_keys": [
+        "contents",
+        "systemInstruction",
+        "tools",
+        "labels",
+        "generationConfig",
+        "sessionId"
+      ],
+      "native_generation_config": {
+        "maxOutputTokens": 65536,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "as_sent_generation_config": {
+        "maxOutputTokens": 2048,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "native_tool_config": null,
+      "contents_shape": [
+        {
+          "role": "user",
+          "parts_keys": [
+            [
+              "text"
+            ]
+          ]
+        }
+      ],
+      "label_keys": [
+        "cascade_id",
+        "last_step_index",
+        "model_enum",
+        "request_id",
+        "root_cascade_id",
+        "trajectory_id",
+        "used_claude",
+        "used_claude_conservative",
+        "used_non_gemini_model"
+      ],
+      "native_labels": {
+        "last_step_index": "0",
+        "model_enum": "MODEL_PLACEHOLDER_M419",
+        "used_claude": "false",
+        "used_claude_conservative": "false",
+        "used_non_gemini_model": "false"
+      }
+    },
+    {
+      "model": "gemini-4-argon-low",
+      "request_keys": [
+        "contents",
+        "systemInstruction",
+        "tools",
+        "labels",
+        "generationConfig",
+        "sessionId"
+      ],
+      "native_generation_config": {
+        "maxOutputTokens": 65536,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "as_sent_generation_config": {
+        "maxOutputTokens": 2048,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "native_tool_config": null,
+      "contents_shape": [
+        {
+          "role": "user",
+          "parts_keys": [
+            [
+              "text"
+            ]
+          ]
+        }
+      ],
+      "label_keys": [
+        "cascade_id",
+        "last_step_index",
+        "model_enum",
+        "request_id",
+        "root_cascade_id",
+        "trajectory_id",
+        "used_claude",
+        "used_claude_conservative",
+        "used_non_gemini_model"
+      ],
+      "native_labels": {
+        "last_step_index": "0",
+        "model_enum": "MODEL_PLACEHOLDER_M419",
+        "used_claude": "false",
+        "used_claude_conservative": "false",
+        "used_non_gemini_model": "false"
+      }
+    },
+    {
+      "model": "gemini-4-argon-low",
+      "request_keys": [
+        "contents",
+        "systemInstruction",
+        "tools",
+        "labels",
+        "generationConfig",
+        "sessionId"
+      ],
+      "native_generation_config": {
+        "maxOutputTokens": 65536,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "as_sent_generation_config": {
+        "maxOutputTokens": 2048,
+        "thinkingConfig": {
+          "includeThoughts": true,
+          "thinkingLevel": "LOW"
+        }
+      },
+      "native_tool_config": null,
+      "contents_shape": [
+        {
+          "role": "user",
+          "parts_keys": [
+            [
+              "text"
+            ]
+          ]
+        },
+        {
+          "role": "model",
+          "parts_keys": [
+            [
+              "functionCall",
+              "thoughtSignature"
+            ]
+          ]
+        },
+        {
+          "role": "model",
+          "parts_keys": [
+            [
+              "functionResponse"
+            ]
+          ]
+        }
+      ],
+      "label_keys": [
+        "cascade_id",
+        "last_step_index",
+        "model_enum",
+        "request_id",
+        "root_cascade_id",
+        "trajectory_id",
+        "used_claude",
+        "used_claude_conservative",
+        "used_non_gemini_model"
+      ],
+      "native_labels": {
+        "last_step_index": "2",
+        "model_enum": "MODEL_PLACEHOLDER_M419",
+        "used_claude": "false",
+        "used_claude_conservative": "false",
+        "used_non_gemini_model": "false"
+      }
+    }
+  ],
+  "responses": [
+    {
+      "family": "gemini-4-argon",
+      "http_status": 200,
+      "finish_reasons": [
+        "STOP"
+      ],
+      "response_text_is_ok": true,
+      "response_text_chars": 2,
+      "usage": [
+        {
+          "promptTokenCount": 12834,
+          "candidatesTokenCount": 1,
+          "totalTokenCount": 12835
+        },
+        {
+          "promptTokenCount": 12834,
+          "candidatesTokenCount": 5,
+          "totalTokenCount": 12839
+        }
+      ],
+      "body_ends_with_frame_separator": true,
+      "response_envelope_keys": [
+        "candidates",
+        "modelVersion",
+        "responseId",
+        "usageMetadata"
+      ],
+      "response_part_key_sets": [
+        [
+          "text"
+        ],
+        [
+          "text",
+          "thoughtSignature"
+        ]
+      ]
+    },
+    {
+      "family": "gemini-4-argon",
+      "http_status": 200,
+      "finish_reasons": [
+        "STOP"
+      ],
+      "response_text_is_ok": false,
+      "response_text_chars": 0,
+      "usage": [
+        {
+          "promptTokenCount": 12852,
+          "candidatesTokenCount": 89,
+          "totalTokenCount": 12941
+        },
+        {
+          "promptTokenCount": 12852,
+          "candidatesTokenCount": 95,
+          "totalTokenCount": 12947
+        }
+      ],
+      "body_ends_with_frame_separator": true,
+      "response_envelope_keys": [
+        "candidates",
+        "modelVersion",
+        "responseId",
+        "usageMetadata"
+      ],
+      "response_part_key_sets": [
+        [
+          "functionCall",
+          "thoughtSignature"
+        ],
+        [
+          "text"
+        ]
+      ]
+    },
+    {
+      "family": "gemini-4-argon",
+      "http_status": 200,
+      "finish_reasons": [
+        "STOP"
+      ],
+      "response_text_is_ok": false,
+      "response_text_chars": 18,
+      "usage": [
+        {
+          "promptTokenCount": 13175,
+          "candidatesTokenCount": 5,
+          "totalTokenCount": 13180
+        },
+        {
+          "promptTokenCount": 13175,
+          "candidatesTokenCount": 9,
+          "totalTokenCount": 13184,
+          "cachedContentTokenCount": 10806
+        }
+      ],
+      "body_ends_with_frame_separator": true,
+      "response_envelope_keys": [
+        "candidates",
+        "modelVersion",
+        "responseId",
+        "usageMetadata"
+      ],
+      "response_part_key_sets": [
+        [
+          "text"
+        ],
+        [
+          "text",
+          "thoughtSignature"
+        ]
+      ]
+    }
+  ]
+}

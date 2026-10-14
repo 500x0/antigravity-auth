@@ -24,6 +24,7 @@ import {
   type FetchAvailableModelsOptions,
   fetchWithAgyCliTransport,
   getPublicModelDefinitions,
+  isRetiredAgyModel,
   loadCommonAuthCommands,
   type loadManagedProject,
   type OAuthAuthDetails,
@@ -1373,7 +1374,8 @@ export interface GaRetryEvent {
 /**
  * Whether the plugin owns a Google request: every title request (the host
  * may pick an off-catalog title model) and any request for a model this
- * plugin registered. Everything else passes through untouched.
+ * plugin registered or withdrew. Withdrawn selections must reach shared
+ * admission rather than passing through to the host's Google transport.
  */
 export function isGaOwnedRequest(
   event: Pick<GaHttpRequestEvent, 'kind' | 'model'>,
@@ -1383,7 +1385,11 @@ export function isGaOwnedRequest(
   // check repeats that scope so a host that widened it still passes other
   // providers through untouched.
   if (event.model.providerID !== GA_PROVIDER_ID) return false
-  return event.kind === 'title' || isRegisteredModel(event.model.id)
+  return (
+    event.kind === 'title' ||
+    isRegisteredModel(event.model.id) ||
+    isRetiredAgyModel(event.model.id)
+  )
 }
 
 /**
@@ -1428,7 +1434,7 @@ export function adaptGaHttpResponse(
 /**
  * Retry hook body. The bridge's job runner rotates accounts and retries
  * endpoints itself; a host retry on top would repeat that whole sequence.
- * Only this plugin's registered models are affected.
+ * Registered and withdrawn models are affected; withdrawn selections must not retry.
  */
 export function decideGaRetry(
   event: GaRetryEvent,
@@ -1436,7 +1442,7 @@ export function decideGaRetry(
 ): void {
   if (
     event.model.providerID === GA_PROVIDER_ID &&
-    isRegisteredModel(event.model.id)
+    (isRegisteredModel(event.model.id) || isRetiredAgyModel(event.model.id))
   ) {
     event.decision = { retry: false }
   }
