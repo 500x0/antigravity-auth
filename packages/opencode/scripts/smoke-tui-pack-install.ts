@@ -26,7 +26,7 @@ import { sha256 } from './embed-common-auth'
 const repo = resolve(PACKAGE_ROOT, '../..')
 const productName = '@cortexkit/opencode-antigravity-auth'
 const coreName = '@cortexkit/antigravity-auth-core'
-const baselineRevision = '45625093922278e7d8f1f1415df42bbc0ca1883e'
+export const baselineRevision = '45625093922278e7d8f1f1415df42bbc0ca1883e'
 function run(
   command: string,
   args: string[],
@@ -302,25 +302,63 @@ async function installedGraph(root: string, prefix = ''): Promise<unknown[]> {
   )
 }
 
-async function baseline(workspace: string) {
+export async function baseline(workspace: string) {
   const root = join(workspace, 'baseline')
   await mkdir(root)
   const archive = join(root, 'source.tar')
   run(
     'git',
-    ['archive', baselineRevision, 'packages/opencode', '-o', archive],
+    [
+      'archive',
+      baselineRevision,
+      'packages/opencode',
+      'packages/core',
+      '-o',
+      archive,
+    ],
     repo,
   )
   run('tar', ['-xf', archive, '-C', root], repo)
   const packageRoot = join(root, 'packages/opencode')
-  // Reuse compiler dependency links only while building the archived baseline.
-  // The installed consumers below are separate fresh-tar installs with no workspace links.
+  const coreRoot = join(root, 'packages/core')
   await symlink(
-    join(PACKAGE_ROOT, 'node_modules'),
-    join(packageRoot, 'node_modules'),
+    join(repo, 'packages/core/node_modules'),
+    join(coreRoot, 'node_modules'),
     'dir',
   )
   await symlink(join(repo, 'node_modules'), join(root, 'node_modules'), 'dir')
+  run(
+    join(repo, 'node_modules/.bin/tsc'),
+    ['-p', 'tsconfig.build.json'],
+    coreRoot,
+  )
+
+  // Reuse compiler dependency links only while building the archived baseline.
+  // The installed consumers below are separate fresh-tar installs with no workspace links.
+  // Keep this overlay private so selecting the archived core never changes the
+  // current workspace's node_modules links.
+  const packageModules = join(packageRoot, 'node_modules')
+  const currentPackageModules = join(PACKAGE_ROOT, 'node_modules')
+  await mkdir(packageModules)
+  for (const name of await readdir(currentPackageModules)) {
+    const source = join(currentPackageModules, name)
+    const target = join(packageModules, name)
+    if (name !== '@cortexkit') {
+      await symlink(source, target, 'dir')
+      continue
+    }
+
+    await mkdir(target)
+    for (const scopedName of await readdir(source))
+      await symlink(
+        scopedName === 'antigravity-auth-core'
+          ? coreRoot
+          : join(source, scopedName),
+        join(target, scopedName),
+        'dir',
+      )
+  }
+
   run(
     join(repo, 'node_modules/.bin/tsc'),
     ['-p', 'tsconfig.build.json'],

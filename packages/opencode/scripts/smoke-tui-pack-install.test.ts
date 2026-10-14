@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test'
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  baselineRevision,
+  baseline as buildBaseline,
   expectedCandidateGraph,
   installResolution,
 } from './smoke-tui-pack-install.ts'
@@ -8,6 +13,37 @@ const product = '@cortexkit/opencode-antigravity-auth'
 const core = '@cortexkit/antigravity-auth-core'
 const metadata = { version: '3.0.0', corePin: '3.0.0' }
 const installCutoff = new Date('2026-05-14T12:00:00.000Z')
+
+describe('historical baseline build', () => {
+  it('archives the baseline core revision and bundles against that core', async () => {
+    expect(baselineRevision).toBe('45625093922278e7d8f1f1415df42bbc0ca1883e')
+
+    const workspace = await mkdtemp(join(tmpdir(), 'smoke-tui-baseline-'))
+    try {
+      const packageRoot = await buildBaseline(workspace)
+      const coreRoot = join(workspace, 'baseline/packages/core')
+      const coreLink = join(
+        packageRoot,
+        'node_modules/@cortexkit/antigravity-auth-core',
+      )
+      expect(await realpath(coreLink)).toBe(await realpath(coreRoot))
+      expect(
+        JSON.parse(await readFile(join(coreRoot, 'package.json'), 'utf8'))
+          .version,
+      ).toBe('2.2.1')
+
+      for (const entry of ['index', 'cli']) {
+        const bundle = await readFile(
+          join(packageRoot, 'dist', `${entry}.js`),
+          'utf8',
+        )
+        expect(bundle).not.toContain('isGeminiArgonModel')
+      }
+    } finally {
+      await rm(workspace, { force: true, recursive: true })
+    }
+  }, 30_000)
+})
 const baseline = () => [
   [
     product,
