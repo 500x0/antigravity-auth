@@ -1,6 +1,64 @@
 # common-auth 0.15.0 safe-parent candidate verification
 
-## Current fourth candidate
+## Current fifth candidate
+
+The reviewer supplied the replacement built from [common-auth commit `f936c532`](https://github.com/cortexkit/common-auth/commit/f936c532). The archive SHA-256 and the uncompressed tar SHA-256 were both remeasured before the archive was used.
+
+- Archive: `tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz`, 260,448 bytes
+- Archive SHA-256: `38c2873c8ed904ed77abc20dacf108136b8fe9d91099270ae84d895f94163e77`
+- Uncompressed tar SHA-256: `a4f5593843e0ed22c325477fe37eae47329de09119f022d6d83e907dc66cd372`
+- SRI: `sha512-5kmX26fdYnep/kvRvGr6t1irL0r5DySOonG9AoE7DIZEHD5ZmlUwEvL6VUgPb409ZSQBH9GUPk4kO3nCTkko/A==`
+- OpenCode embedded publication files: 158 files, 859,103 bytes
+- Core embedded publication files: 131 files, 730,840 bytes
+- Full admitted publication: 191 members, 971,546 payload bytes
+- Private compiler lock SHA-256: `cf4052bf75b65b75ed7921456b9e39cfb9d8f8828191655a6e881a847ebde036`
+
+The compiler lock was refreshed offline with lifecycle scripts disabled. Bun retained the previous archive checksum when only the bytes at the same local dependency path were replaced. Temporarily changing that dependency path forced Bun to read the new archive and record its checksum; the canonical path was then restored. Only the archive integrity entry changed in the compiler lock; unrelated compiler resolutions and the exact private-files `0.2.1` runtime pins remain intact. Both embedded trees and provenance were regenerated only by `bun packages/opencode/scripts/embed-common-auth.ts` and `bun packages/core/scripts/embed-common-auth.ts`.
+
+The fifth candidate restores common-auth 0.14.2's POSIX filesystem behavior: it does not ask private-files to validate the containing directory's ancestors. Windows private-file behavior remains the candidate owner's unchanged implementation, pending Windows CI. The isolated runtime-dependency staging remains because private-files is still a declared dependency and the fixtures should mirror a real install. No renderer proof, behavioral assertion, fixture requirement or mutation row was weakened.
+
+### Fifth-candidate Linux gates
+
+Tools: Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, Biome 2.5.3, ckdev-mutate 0.12.0. Every requested gate ran on Linux, with core built first. Fresh `bun install --frozen-lockfile --ignore-scripts --force` runs at the repository root and in `tools/common-auth-build` replaced dependencies preinstalled for older archives before testing this one. Runner dependency preparation and pack/install smoke used network; the committed lock refresh itself was offline.
+
+| Gate | Result |
+| --- | --- |
+| `bun run --cwd packages/core build` | Passed; 131 embedded files copied |
+| `bun run typecheck` | Passed; workspace/script checks and 78 strict embedded declaration roots |
+| `bun run build` | Passed; core, OpenCode, Pi and both raw/runtime TUI roots |
+| Graph suite, unchanged | Passed: eight tests, 141 assertions; includes both dynamic-only renderer/server proofs |
+| `test/common-auth-0113-producer/closure.test.ts` | Passed: eight tests, 1,329 assertions; verifies exact published-file reachability and hashes, with unchanged expected import edges |
+| `bun run test` | **Failed only on three runner prerequisites**: 3,367 passed, three failed; 3,370 tests across 173 files, 18,347 assertions |
+| `bun run test:e2e` | Passed: 79 tests, 529 assertions |
+| `bun run --cwd packages/opencode smoke:tui` with network | Passed: four fresh packs, eight product and four baseline consumers; Linux packed private-files resolution checks included |
+| `bun run format:check` | Passed: 452 files |
+| `bun run lint` | Passed: 452 files |
+| `ckdev-mutate check` | Passed: catalogue anchors and exact test names verified |
+| `ckdev-mutate run --all` | Passed: all **25** controls caught, including `offline-migration-independent-cursors` |
+
+The full unit failures are grouped by the actual captured errors:
+
+1. `embed.clean_input`: Docker executable absent (`ENOENT`, `spawnSync docker`).
+2. `build.repo_hygiene` and `build.private_toolchain`: their frozen offline compiler installs fail because the required cache is empty (`--offline: "@opentui/core" is not in the cache`, followed by other compiler dependencies). `scripts/prepare-common-auth-public-consumer.ts`, used by `bun run test`, resets HOME and omits `COMMON_AUTH_BUN_CACHE` and `BUN_INSTALL_CACHE_DIR` from the child environment.
+
+There are no remaining candidate-behavior failures in this Linux run. The prior ancestry refusals, indirect migration/Pi assertions and RPC child timeout no longer fail, despite unchanged runner ownership: job uid/gid 999/986 and `node_modules` mounts uid/gid 1000/1000, mode 0775. The third/fourth candidates rejected those differently owned ancestor directories before the tests reached migration or credential behavior; the fifth candidate no longer walks those ancestors on POSIX. The full suite is still not claimed green because the three prerequisite failures remain. Nothing was skipped, relaxed, or changed to accommodate the runner.
+
+### Independent-cursor baseline and mutation
+
+The exact unmutated test used by the unchanged catalogue row now passes with the fifth candidate:
+
+```text
+(pass) genuine public-store offline migration > imports full rows, credential stamps, field presence, order and independent cursors then verifies active no-op
+1 pass, 94 filtered out, 0 fail; 29 expect() calls.
+Ran 1 test across 1 file. [1179.00ms]
+offline-migration-independent-cursors (mutations.toml:158): CAUGHT
+```
+
+A separate controlled proof also applied that row's exact cursor mutation. After staging the live changes and confirming an empty working-tree diff, `packages/core/src/account-migration.ts` was changed to replace the legacy global `activeIndex` with zero, marked `NON-VACUITY BREAK`. The applied diff showed one insertion and one deletion in that file. Only the named independent-cursor test ran and failed at `migration-crash.test.ts:806:52`: expected `activeIndex: 7`, received `activeIndex: 0`. There were zero passes, 94 filtered tests, one failure and 26 assertions. Restoring the file from the index and touching it returned `git diff --stat` to empty. The mutation was not committed. The restored independent-cursor test passed again: one pass, zero failures, 29 assertions. In the complete `run --all` gate, the tests also detected each of the other 24 deliberate catalogue mutations.
+
+The older candidate results below are historical. This fifth-candidate follow-up corrects two earlier reporting mistakes after re-reading the raw outputs: the catalogue has 25 controls (third/fourth runs caught 24, while the unmutated cursor test already failed on runner ownership before its mutation could be tested), and `build.repo_hygiene` failed on offline cache availability, not Docker.
+
+## Historical fourth-candidate identity
 
 The reviewer supplied a replacement built from [common-auth commit `4532c485`](https://github.com/cortexkit/common-auth/commit/4532c485). Both archive hashes were remeasured before use.
 
@@ -24,7 +82,7 @@ The separate fixture commit stages the installed `@cortexkit/private-files` runt
 
 Non-vacuity control: after staging the live fixture changes in the index and confirming an empty working-tree diff, `stagePrivateFilesDependency` was temporarily replaced with a no-op marked `NON-VACUITY BREAK`. The working diff showed one file, three insertions and 16 deletions. Only `stages the real private-files backend for isolated public consumers on every platform` failed (`ERR_MODULE_NOT_FOUND: Cannot find package '@cortexkit/private-files'`); `admits the complete genuine publication and records every member payload` passed. Two tests ran, one pass and one failure. Restoring the file from the index and touching it returned the working-tree diff to empty; the restored 11-test suite passed.
 
-## Final fourth-candidate Linux verification
+## Historical fourth-candidate Linux verification
 
 All requested commands were run on the Linux runner, with core built first. Tools were Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, Biome 2.5.3 and ckdev-mutate 0.12.0. Fresh locked root/compiler installs with scripts disabled prevented stale runner installations from being mistaken for the current archive. The source and lock updates themselves were made offline in this worktree; network was needed for runner dependency preparation and pack/install smoke consumers.
 
@@ -39,7 +97,7 @@ All requested commands were run on the Linux runner, with core built first. Tool
 | `bun run format:check` | Passed: 452 files |
 | `bun run lint` | Passed: 452 files |
 | `ckdev-mutate check` | Passed: catalogue anchors and exact test names verified |
-| `ckdev-mutate run --all` | **Failed**: 22 controls caught; the cursor control could not reach mutation because its unmutated baseline failed |
+| `ckdev-mutate run --all` | **Failed**: 24 controls caught; the cursor control could not reach mutation because its unmutated baseline failed |
 | `node --check test/windows-migration/verify.mjs` | Passed: one script parsed |
 | `node --check test/windows-migration/sync-hook.mjs` | Passed: one script parsed |
 | Workflow YAML | Parsed with locked YAML 2.9.0; layout checks passed |
@@ -47,8 +105,8 @@ All requested commands were run on the Linux runner, with core built first. Tool
 The full unit failures are grouped conservatively; passing build/pack gates do not turn this into a green unit suite:
 
 - **262 failures explicitly report the runner's unsafe `node_modules` ancestry.** They now resolve private-files, then refuse `safe-parent` with `reason: "wrong-owner"`, `code: "ERR_PRIVATE_FILES_SECURITY"`. The job runs as uid 999/gid 986; the runner mounts `node_modules` and `packages/core/node_modules` as uid/gid 1000 with mode 0775. This is a real policy refusal, not a missing fixture dependency. Ownership/permissions were not changed to bypass it.
-- **Two Docker-dependent failures:** `embed.clean_input` and `build.repo_hygiene`; Docker is absent on the runner.
-- **One offline-cache failure:** `build.private_toolchain`; the owned unit-test command resets HOME and drops caller cache overrides, leaving that fixture's required offline cache empty.
+- **One Docker-dependent failure:** `embed.clean_input`; Docker is absent on the runner.
+- **Two offline-cache failures:** `build.repo_hygiene` and `build.private_toolchain`; the owned unit-test command resets HOME and drops caller cache overrides, leaving those fixtures' required offline cache empty.
 - **One RPC child timeout:** `S-RPC complete contracts on the current unit-test runtime`, `spawnSync .../bun ETIMEDOUT` at the existing 45-second limit. The fourth candidate no longer has the third candidate's static-import loader failure. The timeout's deeper cause is not established by this run.
 - **Seven indirect assertion failures, not conclusively attributed:** concurrent fresh migration had zero completed results; unfinished-generation binding returned `initialization-required` rather than `pending`; the real Pi registry returned no native credential; four Pi selected-credential boundary tests observed zero admissions rather than one. Their names and expected values were preserved. An owner-matched runner rerun is needed before assigning these indirect effects to candidate behavior.
 
@@ -163,6 +221,6 @@ Tools: Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, ckdev-mutate 0.12.0.
 
 The first full unit run had 3,092 passes and 276 failures across 3,368 tests. Isolated public-consumer fixtures did not stage private-files, producing `ERR_MODULE_NOT_FOUND` now that server-side safe-parent checks load it on POSIX. Fixture repairs and the subsequent full-suite/mutation results are recorded separately below; the upstream renderer finding is not a fixture problem.
 
-The Linux runner has no Docker executable, so the unchanged Docker-based `embed.clean_input` and `build.repo_hygiene` gates cannot pass there. Its default Bun compiler cache is also empty, and its preinstalled private compiler copy initially contained the previous candidate. A frozen, scripts-disabled install of the current compiler inputs with network was needed before Linux build gates. The checked-in compiler lock itself was refreshed offline locally. The root test wrapper deliberately replaces HOME and strips cache overrides; this explains the initial `build.private_toolchain` offline-cache failure and is not evidence of bad candidate bytes.
+The Linux runner has no Docker executable, so the unchanged Docker-based `embed.clean_input` gate cannot pass there. `build.repo_hygiene` and `build.private_toolchain` fail on their required offline compiler cache instead. Its default Bun compiler cache is also empty, and its preinstalled private compiler copy initially contained the previous candidate. A frozen, scripts-disabled install of the current compiler inputs with network was needed before Linux build gates. The checked-in compiler lock itself was refreshed offline locally. The root test wrapper deliberately replaces HOME and strips cache overrides; this explains the initial `build.private_toolchain` offline-cache failure and is not evidence of bad candidate bytes.
 
 Windows execution remains pending GitHub CI after the parent pushes; no Windows pass is claimed.

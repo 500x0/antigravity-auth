@@ -96,7 +96,11 @@ export interface EnrollmentAncestorOptions {
     passwdPath?: string;
     groupPath?: string;
 }
-/** Use private-files' single parent policy for enrollment setup on both platforms. */
+/**
+ * Protect setup writes from directory replacement. On POSIX, group write access
+ * is safe only when local records prove the effective user's group is private;
+ * sticky ancestors are accepted. Windows uses the shared safe-parent policy.
+ */
 export declare function refuseWritableAncestor(parent: string, options?: EnrollmentAncestorOptions): Promise<void>;
 export declare function readClaustrumEnrollmentStatus(paths: ClaustrumEnrollmentPaths, proposedName: string): Promise<ClaustrumEnrollmentStatus>;
 /** Resolve the host's account mode from its enrollment files without writing. */

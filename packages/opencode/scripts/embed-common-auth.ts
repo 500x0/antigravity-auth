@@ -17,8 +17,8 @@ export const producerVersion = '0.15.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: 'dd43bb66bf9f68ea7a489f27878576607fa3b07d5c39967b275f9b482d69625d',
-  sri: 'sha512-SheMZ22vSkP4KM62yvyhEwLc285rOitONDElFXYuwQjhi6dLA2xWSxwLzN0d3tq7L/GGqCLmIwZI9GVz+DSN2Q==',
+  sha256: '38c2873c8ed904ed77abc20dacf108136b8fe9d91099270ae84d895f94163e77',
+  sri: 'sha512-5kmX26fdYnep/kvRvGr6t1irL0r5DySOonG9AoE7DIZEHD5ZmlUwEvL6VUgPb409ZSQBH9GUPk4kO3nCTkko/A==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -209,13 +209,13 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'claustrum/enrollment.d.ts',
-    7368,
-    '4b1587559e7174b4867d1f6a37ef62d99119330c9bb59bb1d655bdaad56c1994',
+    7528,
+    '5b2f01bd0a6dd5f92a8450c43619717f08d1ca9aea0ed20f3f7071cc94c1c1bf',
   ],
   [
     'claustrum/enrollment.js',
-    29354,
-    '96bcc5eba7156576e9dc79b5a8330793f22e4d486876063d273f0791c474a655',
+    33305,
+    'e03e33e3f43daf5563d7e2138450c6a5347017a82627c5b8e1d1998b4ce4c42f',
   ],
   [
     'claustrum/errors.d.ts',
@@ -334,8 +334,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'fs/atomic-write.js',
-    3463,
-    '1b9a3dfe3a2c6cb28fc7c8d3b5e6018b57728c2468b96c74a4b7eb1b956321e7',
+    3450,
+    '80779a8078e673ef68deaa7fdee3a0e1322078521a1f4156c0a595814c374044',
   ],
   [
     'fs/index.d.ts',
@@ -364,8 +364,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'fs/private-files.js',
-    12096,
-    '4eb096480cf2475965193d2f03c04d29510c1a64687ed52ce1430677ce13378a',
+    12025,
+    '4b46f7b37c11da02f655a6ca841fa51189ceefffaa4476f4fa7a27f953c54ad4',
   ],
   [
     'fs/refresh-file-lock.d.ts',
@@ -374,8 +374,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'fs/refresh-file-lock.js',
-    28882,
-    '83990c8bc7f814013beaa4af8e8b4ad91e92f37f40cc2e86eb417f1842835e4a',
+    28985,
+    '6bf0f944bd70c60f1679bdc4c2764d19ed0047c77dbf737c13088bb8c478e5e2',
   ],
   [
     'fs/with-lock.d.ts',
@@ -499,13 +499,13 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'pi-slot/slot.d.ts',
-    2370,
-    '2256c24a16aaf85fb4b00c6b23147fcea9e0cdc7dffddebf46b009308bfdd1bf',
+    2394,
+    'b92f1590f1f0e4dbbc6331923b9d2cf95e3200936063d5ed192a186f3271eb17',
   ],
   [
     'pi-slot/slot.js',
-    14597,
-    '26a5e042df80c8333f2bbaa68cbe0f48464daf6ed17413558263edc36a62509b',
+    15120,
+    '13a7d5941b79c6d444cf9dc6f23263cf9237146c7dd5de7d162dbc21e015532c',
   ],
   [
     'quota/codec.d.ts',
@@ -654,8 +654,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'rpc/port-file.js',
-    8573,
-    '03c8d3c3591a9b2a645b410d998e06c24e4d7306c3cfd53c25c103f4117cac1c',
+    8738,
+    '941c6d4804ce576520b69b1409b2c808e7c5f344a424262b047d8a72563b1faa',
   ],
   [
     'rpc/rpc-client.d.ts',

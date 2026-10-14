@@ -95,7 +95,6 @@ export async function acquireRefreshFileLock(options) {
             const code = error.code;
             if (code !== 'EISDIR')
                 throw error;
-            await verifyPrivate(lockPath, 'directory');
             return JSON.parse(await readFile(legacyOwnerPath, 'utf8'));
         }
     }
@@ -176,7 +175,8 @@ export async function acquireRefreshFileLock(options) {
         return false;
     }
     async function tryAcquire() {
-        await ensurePrivateDirectory(dirname(lockPath));
+        if (windowsPrivateFiles)
+            await ensurePrivateDirectory(dirname(lockPath));
         try {
             await createLease();
             return true;
@@ -187,7 +187,10 @@ export async function acquireRefreshFileLock(options) {
                 return false;
             if (code === 'ENOENT') {
                 // Reboots can clear runtime temp directories before the next lock acquisition.
-                await ensurePrivateDirectory(dirname(lockPath));
+                if (windowsPrivateFiles)
+                    await ensurePrivateDirectory(dirname(lockPath));
+                else
+                    await mkdir(dirname(lockPath), { recursive: true });
                 try {
                     await createLease();
                     return true;
@@ -295,7 +298,7 @@ export async function acquireRefreshFileLock(options) {
         if (windowsPrivateFiles)
             await createPrivateDirectoryExclusive(evictPath);
         else
-            await mkdir(evictPath, { mode: 0o700 });
+            await mkdir(evictPath);
         try {
             const bytes = `${JSON.stringify({ ownerId: evictOwnerId, createdAt: now() })}\n`;
             if (windowsPrivateFiles)

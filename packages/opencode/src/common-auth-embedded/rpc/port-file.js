@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, rename, rmdir, stat, unlink, } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ensurePrivateDirectory, PrivateFileError, readPrivateText, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from '../fs/private-files.js';
 /**
@@ -78,7 +78,12 @@ export async function writePortFile(dir, entry, options = {}) {
             });
             return target;
         }
-        await ensurePrivateDirectory(dir);
+        await mkdir(dir, {
+            recursive: true,
+            mode: options.secureDir ? 0o700 : undefined,
+        });
+        if (options.secureDir)
+            await chmod(dir, 0o700);
         await options.beforeWrite?.();
         const full = { ...entry, startedAt: Date.now() };
         const tmp = `${target}.${(options.stageName ?? randomUUID)()}.tmp`;

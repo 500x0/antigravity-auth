@@ -14,7 +14,7 @@ function ioCode(detail) {
     }
     return detail?.code ?? 'ERR_PRIVATE_FILE';
 }
-// The package loads native code only on Windows and owns both platforms' parent policy.
+// Production loads this package only on Windows; POSIX keeps its own directory policy.
 let backend;
 /** Tests inject a backend here; production always imports the private-files package. */
 export function setPrivateFilesBackendForTest(api) {
@@ -57,9 +57,8 @@ export async function privateOperation(path, stage, operation) {
         throw new PrivateFileError(path, stage, cause);
     }
 }
-// Tests that simulate account files (a user-private group) need every
-// safe-parent check to see them, including checks made deep inside the lock
-// layer, which takes no policy options. Production never sets this.
+// Tests inject metadata into safe-parent checks, including checks deep inside
+// callers that take no policy options. Production never sets this.
 let safeParentOptionsForTest;
 /** Tests only: policy options used by safe-parent checks that pass none. */
 export function setSafeParentOptionsForTest(options) {

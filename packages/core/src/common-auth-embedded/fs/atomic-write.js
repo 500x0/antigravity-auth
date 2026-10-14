@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { open, rename, rm } from 'node:fs/promises';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { ensurePrivateDirectory, PrivateFileError, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from './private-files.js';
+import { PrivateFileError, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from './private-files.js';
 /** Internal classification of fsync failures, including a failure after rename. */
 export class AtomicSyncError extends Error {
     constructor(cause) {
@@ -29,7 +29,7 @@ export async function writeJsonAtomicTracked(path, value, options, onRenamed) {
             onOutcome: options.onOutcome,
         });
     }
-    await ensurePrivateDirectory(dirname(path));
+    await mkdir(dirname(path), { recursive: true });
     const tempPath = `${path}.${(options.stageName ?? randomUUID)()}.tmp`;
     let handle;
     let created = false;

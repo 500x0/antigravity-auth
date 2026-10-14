@@ -5,7 +5,7 @@ export declare class PiSlotError extends Error {
     constructor(code: PiSlotErrorCode);
 }
 export interface PiSlotOptions {
-    /** Retained for compatibility; existing parents are verified, never repaired. Missing parents are created owner-only. */
+    /** Windows checks safe ancestry and creates missing parents owner-only, regardless of this option. POSIX keeps its existing directory policy. */
     privateParents?: boolean;
     authPath: string;
     provider: string;
