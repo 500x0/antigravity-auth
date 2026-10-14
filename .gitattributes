@@ -1,4 +1,6 @@
 # Preserve archive and embedded payload bytes through Git checkout and filters.
+# The embedding manifest hashes the generator itself, so its checkout bytes must also stay fixed.
+/packages/opencode/scripts/embed-common-auth.ts -text -eol -filter -working-tree-encoding
 /tools/common-auth-build/inputs/cortexkit-common-auth-0.9.4.tgz -text -eol -filter -working-tree-encoding
 /tools/common-auth-build/inputs/cortexkit-common-auth-0.14.1.tgz -text -eol -filter -working-tree-encoding
 /tools/common-auth-build/inputs/cortexkit-common-auth-0.14.2.tgz -text -eol -filter -working-tree-encoding

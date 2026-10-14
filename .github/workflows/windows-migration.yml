@@ -43,7 +43,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun run --cwd packages/opencode build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bun run --cwd packages/opencode esbuild ../../test/windows-vault/product-entry.mjs --bundle --platform=node --format=esm --external:@cortexkit/antigravity-auth-core --outfile=dist/windows-vault-product.mjs
+          $externals = bun -e "import { BUNDLE_EXTERNALS } from './packages/opencode/scripts/build-tui.ts'; for (const name of BUNDLE_EXTERNALS) console.log('--external:' + name)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run --cwd packages/opencode esbuild ../../test/windows-vault/product-entry.mjs --bundle --platform=node --format=esm @externals --outfile=dist/windows-vault-product.mjs
           exit $LASTEXITCODE
       - name: Enroll, check the token DACL, and serve one vault request
         shell: pwsh
@@ -91,7 +93,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun run --cwd packages/core build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bun run --cwd packages/opencode esbuild src/cli.ts --bundle --platform=node --format=esm --external:@cortexkit/antigravity-auth-core --outfile=dist/windows-migration-cli.mjs
+          $externals = bun -e "import { BUNDLE_EXTERNALS } from './packages/opencode/scripts/build-tui.ts'; for (const name of BUNDLE_EXTERNALS) console.log('--external:' + name)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run --cwd packages/opencode esbuild src/cli.ts --bundle --platform=node --format=esm @externals --outfile=dist/windows-migration-cli.mjs
           exit $LASTEXITCODE
       - name: Acquire the released regression baseline
         shell: pwsh
