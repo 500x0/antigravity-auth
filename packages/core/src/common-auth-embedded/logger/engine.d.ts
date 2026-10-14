@@ -62,11 +62,10 @@ export interface LoggerInstance {
     /** Operator override of the level floor; undefined removes it. */
     setLogLevel(level: Level | undefined): void;
     /**
-     * Write whatever is buffered. Safe to call synchronously from a
-     * process-exit handler, which is how each host drains the buffer on
-     * shutdown.
+     * On Windows this returns a promise and must be awaited before shutdown;
+     * synchronous process-exit flushing remains available on POSIX only.
      */
-    flushLogs(): void;
+    flushLogs(): void | Promise<void>;
 }
 /**
  * A logger instance of its own, configured with `options`. A plugin whose
@@ -84,11 +83,10 @@ export declare function createLoggerInstance(options: LoggerOptions): LoggerInst
 export declare function initLogger(options: LoggerOptions): LoggerInstance;
 export declare function setLogLevel(l: Level | undefined): void;
 /**
- * Write whatever the default logger has buffered. Safe to call synchronously
- * from a process-exit handler, which is how each host drains the buffer on
- * shutdown.
+ * Write whatever the default logger has buffered. On Windows await the
+ * promise before shutdown; POSIX keeps synchronous process-exit flushing.
  */
-export declare function flushLogs(): void;
+export declare function flushLogs(): void | Promise<void>;
 export declare function createLogger(channel: string): ChannelLogger;
 export declare function flushForTest(): Promise<void>;
 /**

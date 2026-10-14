@@ -1,4 +1,7 @@
 import { appendFileSync, chmodSync, existsSync, renameSync, statSync, } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { createPrivateBytes, ensurePrivateDirectory, privateOperation, replaceWindowsFile, verifyPrivate, windowsPrivateFiles, } from '../fs/private-files.js';
 import { createRedactor } from './redact.js';
 const ORDER = {
     error: 0,
@@ -36,6 +39,75 @@ function rotateIfNeeded(f) {
         /* never throw */
     }
 }
+async function closeWindowsFile(sink) {
+    const { file, handle } = sink;
+    sink.file = undefined;
+    sink.handle = undefined;
+    if (file && handle)
+        await privateOperation(file, 'log-close', () => handle.close());
+}
+async function openWindowsFile(sink, file) {
+    await ensurePrivateDirectory(dirname(file));
+    try {
+        await verifyPrivate(file, 'file', true);
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            throw error;
+        try {
+            await createPrivateBytes(file, '');
+        }
+        catch (creationError) {
+            if (creationError.code !== 'EEXIST')
+                throw creationError;
+            await verifyPrivate(file, 'file', true);
+        }
+    }
+    // The parent's verified protected owner-only DACL denies other ordinary users the ability to create, replace or link entries between verification and fs.open.
+    // This protects against other ordinary users, not the owner or administrators, whose ability to change that namespace is outside our threat model.
+    sink.handle = await privateOperation(file, 'log-open', () => open(file, 'a'));
+    sink.file = file;
+    return sink.handle;
+}
+async function flushWindowsFile(sink, file, text) {
+    file = resolve(file);
+    try {
+        if (sink.file !== file)
+            await closeWindowsFile(sink);
+        let handle = sink.handle ?? (await openWindowsFile(sink, file));
+        const info = await privateOperation(file, 'log-stat', () => handle.stat());
+        if (info.size >= MAX_BYTES) {
+            await closeWindowsFile(sink);
+            for (let i = ROTATE_KEEP - 1; i >= 0; i--) {
+                const source = i === 0 ? file : `${file}.${i}`;
+                const target = `${file}.${i + 1}`;
+                try {
+                    await verifyPrivate(source, 'file', true);
+                }
+                catch (error) {
+                    if (error.code === 'ENOENT')
+                        continue;
+                    throw error;
+                }
+                try {
+                    await verifyPrivate(target, 'file', true);
+                }
+                catch (error) {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                }
+                await replaceWindowsFile(source, target);
+                await verifyPrivate(target, 'file');
+            }
+            handle = await openWindowsFile(sink, file);
+        }
+        await privateOperation(file, 'log-append', () => handle.appendFile(text, 'utf8'));
+    }
+    catch (error) {
+        await closeWindowsFile(sink).catch(() => { });
+        throw error;
+    }
+}
 function safeSerialize(data) {
     try {
         return ` ${JSON.stringify(data)}`;
@@ -63,7 +135,19 @@ function createEngine(options) {
     let captureSink;
     let buffer = [];
     let timer;
+    let orderedSink = Promise.resolve();
+    let sinkError;
+    const windowsFile = {};
+    function queueWindows(operation) {
+        const next = orderedSink.then(operation);
+        orderedSink = next.catch((error) => {
+            sinkError = error;
+        });
+        return next;
+    }
     function configure(next) {
+        if (windowsPrivateFiles && next.file !== logFileSource)
+            void queueWindows(() => closeWindowsFile(windowsFile)).catch(() => { });
         logFileSource = next.file;
         initLevelSource = next.level;
         redactor = createRedactor(next);
@@ -89,25 +173,49 @@ function createEngine(options) {
             return floor;
         return 'info';
     }
-    function flushLogs() {
+    function flushLogs(close = true) {
         if (timer) {
             clearTimeout(timer);
             timer = undefined;
         }
-        if (!buffer.length)
+        if (!buffer.length) {
+            if (windowsPrivateFiles)
+                return queueWindows(async () => {
+                    if (close)
+                        await closeWindowsFile(windowsFile);
+                    if (sinkError)
+                        throw sinkError;
+                });
             return;
+        }
         let file;
         try {
             file = logFilePath();
         }
         catch {
             buffer = [];
+            if (windowsPrivateFiles && close)
+                return queueWindows(() => closeWindowsFile(windowsFile));
             return;
         }
         const text = buffer.join('');
         buffer = [];
-        if (!file)
+        if (!file) {
+            if (windowsPrivateFiles && close)
+                return queueWindows(() => closeWindowsFile(windowsFile));
             return;
+        }
+        if (windowsPrivateFiles) {
+            return queueWindows(async () => {
+                try {
+                    await flushWindowsFile(windowsFile, file, text);
+                }
+                finally {
+                    if (close)
+                        await closeWindowsFile(windowsFile);
+                }
+            });
+        }
         try {
             rotateIfNeeded(file);
             if (existsSync(file))
@@ -122,7 +230,9 @@ function createEngine(options) {
         if (!timer)
             timer = setTimeout(() => {
                 timer = undefined;
-                flushLogs();
+                const flushed = flushLogs(false);
+                if (flushed instanceof Promise)
+                    void flushed.catch(() => { });
             }, 500);
     }
     function emit(channel, level, message, data) {
@@ -157,8 +267,11 @@ function createEngine(options) {
             if (logFileSource === undefined)
                 return;
             buffer.push(line);
-            if (buffer.length >= 50)
-                flushLogs();
+            if (buffer.length >= 50) {
+                const flushed = flushLogs(false);
+                if (flushed instanceof Promise)
+                    void flushed.catch(() => { });
+            }
             else
                 schedule();
         }
@@ -176,6 +289,9 @@ function createEngine(options) {
         };
     }
     function reset() {
+        if (windowsPrivateFiles)
+            void queueWindows(() => closeWindowsFile(windowsFile)).catch(() => { });
+        sinkError = undefined;
         buffer = [];
         if (timer) {
             clearTimeout(timer);
@@ -222,18 +338,17 @@ export function setLogLevel(l) {
     defaultEngine.setLogLevel(l);
 }
 /**
- * Write whatever the default logger has buffered. Safe to call synchronously
- * from a process-exit handler, which is how each host drains the buffer on
- * shutdown.
+ * Write whatever the default logger has buffered. On Windows await the
+ * promise before shutdown; POSIX keeps synchronous process-exit flushing.
  */
 export function flushLogs() {
-    defaultEngine.flushLogs();
+    return defaultEngine.flushLogs();
 }
 export function createLogger(channel) {
     return defaultEngine.createLogger(channel);
 }
 export async function flushForTest() {
-    defaultEngine.flushLogs();
+    return defaultEngine.flushLogs();
 }
 /**
  * Return the default logger to its uninitialised state. Only a test needs

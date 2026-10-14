@@ -813,7 +813,7 @@ describe('openAccountStore', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Genuine published store
+// Genuine candidate store
 //
 // These run the adapters against common-auth's genuine public `./store` and
 // `./fs` entries in disposable directories. They migrate real account files,
@@ -821,16 +821,16 @@ describe('openAccountStore', () => {
 // migration during rollback. The entries are the released
 // common-auth copy embedded in the core package, loaded through its typed
 // `loadCommonAuthStoreModules`. Before loading, the embedding receipt
-// (`source-output.json`) must name the released 0.14.2 archive, and every
+// (`source-output.json`) must name the unpublished common-auth 0.15.0 candidate archive, and every
 // store and fs file must match the size and SHA-256 it records, with no
 // unrecorded file; anything else fails these tests instead of skipping them.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.14.2',
+  version: '0.15.0',
   tarballSha256:
-    'bf0f0828d155183dec1c29e5277ededd6cbd46e6b839ca696434e477f081216b',
+    'c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2',
 } as const
 
 async function embeddedFilesBelow(
@@ -871,7 +871,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
@@ -907,7 +907,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     .then((modules) => managedStoreModules(owner, modules))
 }
 
-describe('account store over the genuine published store', () => {
+describe('account store over the genuine candidate store', () => {
   let configDir = ''
   let previousConfigDir: string | undefined
   const opened: AccountRepository[] = []

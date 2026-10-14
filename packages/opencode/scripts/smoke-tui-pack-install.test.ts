@@ -23,7 +23,7 @@ const candidate = () => [
     product,
     product,
     '2.2.1',
-    { [core]: '2.2.1', zod: '^4.0.0' },
+    { [core]: '2.2.1', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
     {
       '@opencode-ai/plugin': '*',
       '@opencode/plugin': '>=2.0.22',
@@ -34,7 +34,7 @@ const candidate = () => [
 ]
 
 describe('packed consumer graph comparison', () => {
-  it('admits only the new OpenCode 2 peer declaration without mutating the baseline', () => {
+  it('admits only private-files and the OpenCode 2 peer without mutating the baseline', () => {
     const graph = baseline()
     const before = JSON.stringify(graph)
     expect(
@@ -70,7 +70,7 @@ describe('packed consumer graph comparison', () => {
           product,
           product,
           '2.2.1',
-          { [core]: '2.2.1', zod: '*' },
+          { [core]: '2.2.1', '@cortexkit/private-files': '0.1.0', zod: '*' },
           candidate()[0]?.[4],
         ],
         candidate()[1],
@@ -80,7 +80,11 @@ describe('packed consumer graph comparison', () => {
           product,
           product,
           '2.2.1',
-          { [core]: '2.2.1', zod: '^4.0.0' },
+          {
+            [core]: '2.2.1',
+            '@cortexkit/private-files': '0.1.0',
+            zod: '^4.0.0',
+          },
           {
             '@opencode-ai/plugin': '*',
             '@opencode/plugin': '>=2.0.22',
@@ -94,7 +98,11 @@ describe('packed consumer graph comparison', () => {
           product,
           product,
           '2.2.1',
-          { [core]: '2.2.1', zod: '^4.0.0' },
+          {
+            [core]: '2.2.1',
+            '@cortexkit/private-files': '0.1.0',
+            zod: '^4.0.0',
+          },
           {
             '@opencode-ai/plugin': '*',
             '@opencode/plugin': '*',
@@ -120,7 +128,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', zod: '^4.0.0' },
+        { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         {
           '@opencode-ai/plugin': '*',
           '@opencode/plugin': '>=2.0.22',
@@ -143,7 +151,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '2.2.1',
-        { [core]: '3.0.0', zod: '^4.0.0' },
+        { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         candidate()[0]?.[4],
       ],
     ],
@@ -153,7 +161,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '2.2.1', zod: '^4.0.0' },
+        { [core]: '2.2.1', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         candidate()[0]?.[4],
       ],
     ],
@@ -163,7 +171,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', zod: '*' },
+        { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '*' },
         candidate()[0]?.[4],
       ],
     ],
@@ -173,7 +181,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', zod: '^4.0.0' },
+        { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         { ...(candidate()[0]?.[4] as object), '@opencode-ai/sdk': '*' },
       ],
     ],
@@ -190,7 +198,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.1', zod: '^4.0.0' },
+        { [core]: '3.0.1', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         candidate()[0]?.[4],
       ],
       candidate()[1],
@@ -211,7 +219,7 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', zod: '^4.0.0' },
+        { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
         candidate()[0]?.[4],
       ],
       candidate()[1],
@@ -227,7 +235,7 @@ describe('packed consumer graph comparison', () => {
       product,
       product,
       '3.0.0',
-      { [core]: '3.0.0', zod: '^4.0.0' },
+      { [core]: '3.0.0', '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
       candidate()[0]?.[4],
     ]
     expect(expectedCandidateGraph(baseline(), metadata)).not.toEqual([
@@ -245,7 +253,16 @@ describe('packed consumer graph comparison', () => {
     ['empty version', [product, product, '', { [core]: '2.2.1' }, {}]],
     ['dependencies', [product, product, '2.2.1', null, {}]],
     ['array dependencies', [product, product, '2.2.1', [], {}]],
-    ['missing core pin', [product, product, '2.2.1', { zod: '^4.0.0' }, {}]],
+    [
+      'missing core pin',
+      [
+        product,
+        product,
+        '2.2.1',
+        { '@cortexkit/private-files': '0.1.0', zod: '^4.0.0' },
+        {},
+      ],
+    ],
     ['core pin', [product, product, '2.2.1', { [core]: null }, {}]],
     ['empty core pin', [product, product, '2.2.1', { [core]: '' }, {}]],
     [

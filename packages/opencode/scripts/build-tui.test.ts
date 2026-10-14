@@ -18,6 +18,7 @@ import { build as bundle } from 'esbuild'
 import ts from 'typescript'
 import {
   auditGraph,
+  BUNDLE_EXTERNALS,
   buildLibrary,
   buildTui,
   buildTuiRoots,
@@ -113,6 +114,7 @@ test('graph.source', async () => {
   )
   for (const external of [
     'jsonc-parser',
+    '@cortexkit/private-files',
     'xdg-basedir',
     '@cortexkit/antigravity-auth-core/atomic-write',
     '@cortexkit/antigravity-auth-core/file-lock',
@@ -196,6 +198,7 @@ test('graph.tui_client_narrow', async () => {
   const base = join(PACKAGE_ROOT, 'src/common-auth-embedded/rpc')
   const runtime = await auditGraph(join(base, 'client.js'))
   expect(runtime.files.map((path) => relative(base, path))).toEqual([
+    '../fs/private-files.js',
     'client.js',
     'port-file.js',
     'rpc-client.js',
@@ -222,20 +225,81 @@ test('graph.tui_client_narrow', async () => {
     ).toEqual(['client.js', 'port-file.js', 'rpc-client.js'])
 })
 
+test('graph.renderer_private_files_external_dynamic_import', async () => {
+  const backend = '@cortexkit/private-files'
+  for (const tree of ['src/tui-raw', 'src/tui-compiled']) {
+    // The emitted selector.js chooses a raw or compiled TUI entry at runtime.
+    // Audit that entry directly so its lazy Windows backend is also inspected.
+    const entryGraph = await auditGraph(
+      join(product, tree, tree.endsWith('raw') ? 'tui.tsx' : 'tui.js'),
+    )
+    expect(entryGraph.externals).toContain(backend)
+    expect(
+      entryGraph.files.some((path) =>
+        path.includes('/node_modules/@cortexkit/private-files/'),
+      ),
+    ).toBe(false)
+    let occurrences = 0
+    for (const path of await inventory(join(product, tree))) {
+      const code = await readFile(join(product, tree, path), 'utf8')
+      const source = ts.createSourceFile(
+        path,
+        code,
+        ts.ScriptTarget.Latest,
+        true,
+      )
+      function visit(node: ts.Node) {
+        if (ts.isStringLiteralLike(node) && node.text === backend) {
+          occurrences++
+          expect(ts.isCallExpression(node.parent)).toBe(true)
+          if (ts.isCallExpression(node.parent)) {
+            expect(node.parent.expression.kind).toBe(
+              ts.SyntaxKind.ImportKeyword,
+            )
+            expect(node.parent.arguments.length).toBe(1)
+          }
+        }
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+    }
+    expect(occurrences).toBe(1)
+  }
+})
+
 test('graph.server_cli', async () => {
-  for (const entry of ['index.ts', 'src/cli.ts']) {
-    await auditGraph(join(PACKAGE_ROOT, entry), { tui: false })
+  const manifest = JSON.parse(
+    await readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8'),
+  )
+  expect(manifest.scripts.build).toContain(
+    '--external:@cortexkit/private-files',
+  )
+  for (const entry of ['index.ts', 'src/cli.ts', 'src/server.ts']) {
+    if (entry !== 'src/server.ts')
+      await auditGraph(join(PACKAGE_ROOT, entry), { tui: false })
     const result = await bundle({
       absWorkingDir: PACKAGE_ROOT,
       entryPoints: [entry],
       bundle: true,
       platform: 'node',
       format: 'esm',
-      external: ['zod'],
+      external: BUNDLE_EXTERNALS,
       write: false,
       metafile: true,
     })
     checkMetafile(result.metafile!)
+    const privateEdges = Object.values(result.metafile!.outputs).flatMap(
+      (output) =>
+        output.imports.filter(
+          (edge) => edge.path === '@cortexkit/private-files',
+        ),
+    )
+    expect(privateEdges.length).toBeGreaterThan(0)
+    expect(
+      privateEdges.every(
+        (edge) => edge.external && edge.kind === 'dynamic-import',
+      ),
+    ).toBe(true)
     expect(
       Object.keys(result.metafile!.inputs).some((path) =>
         /tui-(?:ga-)?(raw|compiled)/.test(path),
@@ -245,6 +309,12 @@ test('graph.server_cli', async () => {
   expect(() =>
     checkMetafile({
       inputs: { 'tools/common-auth-build/tool.js': {} },
+      outputs: {},
+    }),
+  ).toThrow('forbidden bundled input')
+  expect(() =>
+    checkMetafile({
+      inputs: { 'node_modules/@cortexkit/private-files/dist/index.js': {} },
       outputs: {},
     }),
   ).toThrow('forbidden bundled input')
@@ -418,7 +488,7 @@ test('build.map_admission_valid_generated', async () => {
   const runtime = await hashes(root, 'src/tui-compiled')
   const generated = await readFile(map)
   expect(JSON.parse(generated.toString()).compiler).toBe(
-    '@cortexkit/common-auth/tui-build@0.14.2',
+    '@cortexkit/common-auth/tui-build@0.15.0',
   )
   for (const compiler of [
     '@cortexkit/common-auth/tui-build@0.9.4',
@@ -508,7 +578,7 @@ test('graph.ga_roots', async () => {
   ])
   checkGaGraph(source, 'source')
   const map = JSON.parse(await readFile(join(product, GA_TUI_ROOT.map), 'utf8'))
-  expect(map.compiler).toBe('@cortexkit/common-auth/tui-build@0.14.2')
+  expect(map.compiler).toBe('@cortexkit/common-auth/tui-build@0.15.0')
   for (const [variant, tree, entry, kind] of [
     [map.raw, GA_TUI_ROOT.raw, GA_TUI_ROOT.rawEntry, 'raw'],
     [map.runtime, GA_TUI_ROOT.runtime, GA_TUI_ROOT.runtimeEntry, 'runtime'],

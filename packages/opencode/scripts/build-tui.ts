@@ -28,7 +28,8 @@ export const PACKAGE_ROOT = resolve(
 const REPO_ROOT = resolve(PACKAGE_ROOT, '../..')
 const TOOL_ROOT = join(REPO_ROOT, 'tools/common-auth-build')
 const LOCK_HASH =
-  '35f98a1be313501b04d791874776a6d320bc3397e02e9f063c91a61c57291952'
+  'a800738e8be32885081d70de5155d7b14d97995f81f305b9a6d5830f61fa23fb'
+export const BUNDLE_EXTERNALS = ['zod', '@cortexkit/private-files']
 export interface Graph {
   files: string[]
   externals: string[]
@@ -130,6 +131,7 @@ export function checkGaGraph(
   }
 }
 const externalLeaves = new Set([
+  '@cortexkit/private-files',
   '@cortexkit/antigravity-auth-core/atomic-write',
   '@cortexkit/antigravity-auth-core/file-lock',
   // The existing RPC client uses fetchWithActiveTimeout for request budgets.
@@ -183,15 +185,15 @@ export async function auditGraph(
       !types &&
       !(
         tui
-          ? /^(?:rpc\/(?:client|port-file|rpc-client)|logger\/(?:index|engine|capture-sink|redact)|quota\/(?:index|codec|format|map|merge|projection))\.js$/
-          : /^(?:rpc\/(?:index|client|port-file|rpc-client|rpc-server|server-registry|notifications)|logger\/(?:index|engine|capture-sink|redact)|quota\/(?:index|codec|format|map|merge|projection))\.js$/
+          ? /^(?:rpc\/(?:client|port-file|rpc-client)|logger\/(?:index|engine|capture-sink|redact)|fs\/private-files|quota\/(?:index|codec|format|map|merge|projection))\.js$/
+          : /^(?:rpc\/(?:index|client|port-file|rpc-client|rpc-server|server-registry|notifications)|logger\/(?:index|engine|capture-sink|redact)|fs\/private-files|quota\/(?:index|codec|format|map|merge|projection))\.js$/
       ).test(embedded)
     )
       throw new Error(`graph: forbidden TUI source ${path}`)
     if (
       tui &&
       !types &&
-      /(?:\/rpc\/(?:index|rpc-server|server-registry)\.[jt]s$|\/plugin\/(?:storage|accounts|account-manager|account-storage|quota|rotation|logger|debug)\.|\/common-auth-embedded\/(?:fs|store)\/|\/tools\/)/.test(
+      /(?:\/rpc\/(?:index|rpc-server|server-registry)\.[jt]s$|\/plugin\/(?:storage|accounts|account-manager|account-storage|quota|rotation|logger|debug)\.|\/common-auth-embedded\/(?:fs\/(?!private-files\.js$)|store\/)|\/tools\/)/.test(
         portable(path),
       )
     )
@@ -363,7 +365,7 @@ export async function verifyPrerequisites(): Promise<void> {
     const pkg = JSON.parse(await readFile(actual, 'utf8'))
     const expected =
       name === '@cortexkit/common-auth'
-        ? '@cortexkit/common-auth@inputs/cortexkit-common-auth-0.14.2.tgz'
+        ? '@cortexkit/common-auth@inputs/cortexkit-common-auth-0.15.0.tgz'
         : `${pkg.name}@${pkg.version}`
     if (entry[0] !== expected)
       throw new Error(
@@ -570,7 +572,7 @@ export function checkMetafile(meta: {
 }) {
   for (const path of Object.keys(meta.inputs)) {
     if (
-      /tools\/common-auth-build|node_modules\/@cortexkit\/common-auth|tui-build\//.test(
+      /tools\/common-auth-build|node_modules\/@cortexkit\/(?:common-auth|private-files)|tui-build\//.test(
         portable(path),
       )
     )
@@ -636,6 +638,7 @@ async function admitExistingMap(mapFile: string) {
         metadata.compiler !== '@cortexkit/common-auth/tui-build@0.13.0' &&
         metadata.compiler !== '@cortexkit/common-auth/tui-build@0.14.1' &&
         metadata.compiler !== '@cortexkit/common-auth/tui-build@0.14.2' &&
+        metadata.compiler !== '@cortexkit/common-auth/tui-build@0.15.0' &&
         metadata.compiler !== '@cortexkit/common-auth/tui-build@0.11.6')
     )
       throw new Error('build: existing TUI map is not owned generated metadata')
@@ -686,7 +689,7 @@ export async function buildLibrary(packageRoot = PACKAGE_ROOT) {
         bundle: true,
         platform: 'node',
         format: 'esm',
-        external: ['zod'],
+        external: BUNDLE_EXTERNALS,
         outfile: `dist/${name}.js`,
         sourcemap: true,
         metafile: true,

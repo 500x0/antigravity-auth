@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readdir, readFile, rename, rmdir, stat, unlink, } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, rename, rmdir, stat, unlink, } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { ensurePrivateDirectory, PrivateFileError, readPrivateText, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from '../fs/private-files.js';
 /**
  * A PID a liveness probe may address. `process.kill(0 | negative, 0)` signals
  * a process group rather than a process, and an unsafe integer cannot name a
@@ -68,6 +69,15 @@ export async function writePortFile(dir, entry, options = {}) {
     // persistent ENOENT (e.g. permission, read-only parent) will surface on
     // the second attempt — failing fast beats an unbounded loop.
     const writeOnce = async () => {
+        const target = join(dir, `port-${entry.pid}.json`);
+        if (windowsPrivateFiles) {
+            await ensurePrivateDirectory(dir, options.secureDir ?? false);
+            await options.beforeWrite?.();
+            await writePrivateAtomic(target, JSON.stringify({ ...entry, startedAt: Date.now() }), {
+                stagePath: `${target}.${(options.stageName ?? randomUUID)()}.tmp`,
+            });
+            return target;
+        }
         await mkdir(dir, {
             recursive: true,
             mode: options.secureDir ? 0o700 : undefined,
@@ -76,7 +86,6 @@ export async function writePortFile(dir, entry, options = {}) {
             await chmod(dir, 0o700);
         await options.beforeWrite?.();
         const full = { ...entry, startedAt: Date.now() };
-        const target = join(dir, `port-${entry.pid}.json`);
         const tmp = `${target}.${(options.stageName ?? randomUUID)()}.tmp`;
         let handle;
         let created = false;
@@ -139,9 +148,11 @@ export async function sweepRpcState(root, activeDir, isManagedDir, log) {
             const portFile = join(dir, name);
             let raw;
             try {
-                raw = await readFile(portFile, 'utf8');
+                raw = await readPrivateText(portFile);
             }
-            catch {
+            catch (error) {
+                if (error instanceof PrivateFileError && error.code !== 'ENOENT')
+                    throw error;
                 continue;
             }
             if (raw === undefined)
@@ -172,19 +183,27 @@ export async function portFileIdentity(dir, entry) {
         return null;
     const path = join(resolve(dir), `port-${entry.pid}.json`);
     try {
+        if (windowsPrivateFiles)
+            await verifyPrivate(path, 'file');
         const info = await stat(path);
         return `${path}:${info.dev}:${info.ino}:${info.mtimeMs}:${info.size}`;
     }
-    catch {
+    catch (error) {
+        if (error instanceof PrivateFileError && error.code !== 'ENOENT')
+            throw error;
         return null;
     }
 }
 export async function discoverPortFile(dir, expectedPid, options = {}) {
     let names;
     try {
+        if (windowsPrivateFiles)
+            await verifyPrivate(dir, 'directory');
         names = await readdir(dir);
     }
-    catch {
+    catch (error) {
+        if (error instanceof PrivateFileError && error.code !== 'ENOENT')
+            throw error;
         return null;
     }
     const live = [];
@@ -192,7 +211,7 @@ export async function discoverPortFile(dir, expectedPid, options = {}) {
         if (!name.startsWith('port-') || !name.endsWith('.json'))
             continue;
         try {
-            const parsed = JSON.parse(await readFile(join(dir, name), 'utf8'));
+            const parsed = JSON.parse(await readPrivateText(join(dir, name)));
             if (isUsablePortFileEntry(parsed, name)) {
                 if (pidAlive(parsed.pid))
                     live.push(parsed);
@@ -200,7 +219,10 @@ export async function discoverPortFile(dir, expectedPid, options = {}) {
                     await unlink(join(dir, name)).catch(() => { });
             }
         }
-        catch { }
+        catch (error) {
+            if (error instanceof PrivateFileError && error.code !== 'ENOENT')
+                throw error;
+        }
     }
     if (live.length === 0)
         return null;

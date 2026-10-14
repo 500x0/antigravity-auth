@@ -1,3 +1,4 @@
+import { type PrivateWriteOutcome } from './private-files.js';
 export interface AtomicWriteOptions {
     serialize?: (value: unknown) => string;
     beforeRename?: () => Promise<void>;
@@ -5,6 +6,10 @@ export interface AtomicWriteOptions {
     stageName?: () => string;
     /** Sync the staged file and, after rename, its parent directory. Opt-in. */
     durable?: boolean;
+    /** Windows opt-in: flush file bytes, without promising directory metadata durability. */
+    durability?: 'file-only-on-windows';
+    /** Reports Windows rename success, file/directory durability, retry counts and error codes, never file bytes. */
+    onOutcome?: (outcome: PrivateWriteOutcome) => void;
 }
 /** Internal classification of fsync failures, including a failure after rename. */
 export declare class AtomicSyncError extends Error {

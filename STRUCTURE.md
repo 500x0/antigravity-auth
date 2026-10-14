@@ -41,7 +41,7 @@ antigravity-auth/
     └── e2e-tests/                           # private deterministic e2e workspace
 ```
 
-`models` is a tracked upstream model snapshot; frozen wire fixtures live in `test-fixtures/`. OpenCode's four raw/compiled renderer trees are **gitignored** build output. By contrast, both `src/common-auth-embedded/` trees are tracked producer output, verified against common-auth 0.14.2 by the embedding scripts.
+`models` is a tracked upstream model snapshot; frozen wire fixtures live in `test-fixtures/`. OpenCode's four raw/compiled renderer trees are **gitignored** build output. By contrast, both `src/common-auth-embedded/` trees are tracked producer output, verified against common-auth 0.15.0 by the embedding scripts.
 
 ## Workspace responsibilities
 
@@ -100,7 +100,7 @@ The harness-agnostic core ships as `@cortexkit/antigravity-auth-core`. `src/inde
 - `packages/core/src/vault-provider-state.ts`, `vault-family.ts` — credential-free vault provider/account state and family mapping.
 - `packages/core/src/common-auth-runtime.ts` — lazy public store/fs/commands/auth-menu/routing/quota/claustrum/logger capability loaders and the embedded Pi-slot loader.
 - `packages/core/src/antigravity-command-menu.ts` — shared `/antigravity` menu using common-auth commands and attributed account operations.
-- `packages/core/src/common-auth-embedded/` — tracked common-auth 0.14.2 profile, including `NOTICE.txt` and `source-output.json`; regenerated only by its embedding owner.
+- `packages/core/src/common-auth-embedded/` — tracked common-auth 0.15.0 profile, including `NOTICE.txt` and `source-output.json`; regenerated only by its embedding owner.
 
 ### Transforms (`packages/core/src/transform/`)
 
@@ -427,7 +427,7 @@ These directories exist at build time but are **gitignored** (see `.gitignore`).
 
 The hybrid loader selects OpenCode 1's `tui` entry or OpenCode 2's `setup` entry, then common-auth `loadTui` chooses the compiled host-runtime renderer or the raw fallback. Expected runtime entries are `tui-compiled/tui.js` and `tui-ga-compiled/host-ga.js`, not mirrored `.tsx` paths. Build-TUI tests check import isolation and emission contracts; `packages/opencode/scripts/smoke-tui-pack-install.ts` checks installed packing separately. The package manifest's `files` allowlist is the shipping authority.
 
-`packages/opencode/scripts/embed-common-auth.ts` pins `tools/common-auth-build/inputs/cortexkit-common-auth-0.14.2.tgz` and fixed public-module entry sets selected for OpenCode and core. `packages/core/scripts/embed-common-auth.ts` delegates the core profile. Both tracked `src/common-auth-embedded/` trees include provenance/notice files; do not hand-edit them. They differ from ignored renderer output. Root `embed:check` verifies them before build/typecheck/test/format/lint. Library builds copy embedded JS/declarations to dist, and OpenCode emits GA server declarations through `tsconfig.ga.emit.json` plus the declaration-specifier finalizer.
+`packages/opencode/scripts/embed-common-auth.ts` pins `tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz` and fixed public-module entry sets selected for OpenCode and core. `packages/core/scripts/embed-common-auth.ts` delegates the core profile. Both tracked `src/common-auth-embedded/` trees include provenance/notice files; do not hand-edit them. They differ from ignored renderer output. Root `embed:check` verifies them before build/typecheck/test/format/lint. Library builds copy embedded JS/declarations to dist, and OpenCode emits GA server declarations through `tsconfig.ga.emit.json` plus the declaration-specifier finalizer.
 
 `packages/opencode/assets/antigravity.schema.json` is tracked generated schema from `script/build-schema.ts` and `src/plugin/config/schema.ts`, not an ignored renderer artifact.
 

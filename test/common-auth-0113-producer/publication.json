@@ -1,14 +1,14 @@
 {
-  "version": "0.14.2",
-  "artifactStatus": "released",
-  "archiveBytes": 251088,
-  "sha256": "bf0f0828d155183dec1c29e5277ededd6cbd46e6b839ca696434e477f081216b",
-  "sri": "sha512-cGG0Ye6MsLL7K5cTddI4UShOoVR6Zas2G1aSspJZURDyHwiMY1qzCVav7p1DF49uBp5qTK3t3cahZ3cvjxVyHQ==",
-  "manifestSha256": "3588f6584586433f03dd9123af05f5272a7950e4cec1323828f00b2a5c6dfeb5",
-  "inventorySha256": "e8029297b2ca9cf9e9f3b43709f58fc7ae22eb0026c3c492544f6d76b3ddaf86",
+  "version": "0.15.0",
+  "artifactStatus": "candidate",
+  "archiveBytes": 258947,
+  "sha256": "c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2",
+  "sri": "sha512-1zm7pO6iI7CdDc2FgAB2v6nFd8km3qWJxcCf76+Ib7rrRdl/fGeVI914MKzRi5K1+GasOQZ3MOLQ8b09N8KvOw==",
+  "manifestSha256": "1cd2f62ba0ac0465246ee6c2669cbf1294531bc555f80aac980b40184d704b33",
+  "inventorySha256": "48a2d5fcf470626fc3855bc255f925c5bf2eb5062f1a594023eccef07391a9cf",
   "licenseSha256": "bf737fd6a5d9da55873eb7ea481fd9e875bcfefc13ed42766a1964c6040c5581",
-  "canonicalFiles": 156,
-  "canonicalBytes": 822249,
+  "canonicalFiles": 158,
+  "canonicalBytes": 853069,
   "publicRoots": {
     "./rpc": {
       "types": "./dist/rpc/index.d.ts",
@@ -191,8 +191,8 @@
     ],
     [
       "claustrum/enrollment.js",
-      31343,
-      "be5dadd916be59dfa8234c9d7d4e98c5d9d94a17e46483690bd468a3e9dca051"
+      32869,
+      "32bb053d5a67af166075e1933aee262952075734eba8c4833d32166669a8af59"
     ],
     [
       "claustrum/errors.d.ts",
@@ -241,8 +241,8 @@
     ],
     [
       "claustrum/roster.js",
-      23786,
-      "508fed4aed11daef7cb407089c3c8e739aec6c0b29a9922cdcd7a010e8af0b63"
+      23840,
+      "8f9d247e7d614e997cebb9728eaeb96fd0f32955cebfccc3d016351ad39a3947"
     ],
     [
       "commands/builtins.d.ts",
@@ -306,23 +306,23 @@
     ],
     [
       "fs/atomic-write.d.ts",
-      1093,
-      "fd51dfeca6176e931d9b297dd4d4077f67e3cbb019fffd80928cde27952d09f6"
+      1465,
+      "d2117894a4fe94d3786dd7a126bce1d72748ba4c8f5838bcb880607b376886c4"
     ],
     [
       "fs/atomic-write.js",
-      2610,
-      "2afb3e4c275fcb5d53baa9cca43d72264583225f465e1380a68f73e06424b17a"
+      3450,
+      "80779a8078e673ef68deaa7fdee3a0e1322078521a1f4156c0a595814c374044"
     ],
     [
       "fs/index.d.ts",
-      508,
-      "69344577a9fd8efdac1cbb83d8e3e21ca7f09645623f2f35a22b3cf3ba914edd"
+      626,
+      "31ad80c3a005dfd3c78d1b8d1a2d4c23ce9d47dd9f6b5b8c3b9ec4f07c4b5cdb"
     ],
     [
       "fs/index.js",
-      454,
-      "27412caa40574b195c48045d60c32880d0906109e1101bc1b6447118a2d48b14"
+      509,
+      "26127c5a818c2ff0f66374f2dbbd93f57c6de7266acb2b2f61117e6e17e57f2b"
     ],
     [
       "fs/lock-constants.d.ts",
@@ -335,14 +335,24 @@
       "cd60090325fa8c4c17dddfc216a4ed326f2a6e48525e724a4dd260bf88041231"
     ],
     [
+      "fs/private-files.d.ts",
+      2847,
+      "9804ac8cda8879e837c73cf352471158135fd84220e40d83ffecbaede9e15542"
+    ],
+    [
+      "fs/private-files.js",
+      10922,
+      "7ba58b4c929bb400cd950f9fec7f231c15c6af1fa8c2816477f61f4605a237d4"
+    ],
+    [
       "fs/refresh-file-lock.d.ts",
       1701,
       "55473d70c407f4521eb285c2f44b1398391fc56326914c0e51bf7fbea2518781"
     ],
     [
       "fs/refresh-file-lock.js",
-      19961,
-      "e621abceca8fb963aa4851aa456309ed3014ff9c0fb5e3250ede6423b9f35222"
+      25716,
+      "0aa9b7f4a2fbc7ed432c45a3b6690fada35f4730fd945271601f117f7ebaf12f"
     ],
     [
       "fs/with-lock.d.ts",
@@ -366,13 +376,13 @@
     ],
     [
       "logger/engine.d.ts",
-      4607,
-      "646d7438df2aa50853dc8f8220236cee75e480342545d8d94718ea34259ae522"
+      4612,
+      "48e339153dcd7f5389ce9c10e4ad4a06066bcece866d62c70c0fa39f87f0bb1a"
     ],
     [
       "logger/engine.js",
-      7925,
-      "3ebcd0e8ad5aca437cee85e4b9087ba15d7efbcb07b5fefff937092f2de3f829"
+      12564,
+      "4223831f44a641f6171eafa45bc052ce1591a05f220f615e8072e1340782ef8a"
     ],
     [
       "logger/index.d.ts",
@@ -466,13 +476,13 @@
     ],
     [
       "pi-slot/slot.d.ts",
-      2214,
-      "02d78c35ec1f3b336db91c1267c7a85d8e93736c24dce5df1818d8fa85321ba3"
+      2404,
+      "cfece8a6c09409e19cdd4069ac74e71890fb169b9c28fb696f6ac508066eeecb"
     ],
     [
       "pi-slot/slot.js",
-      13872,
-      "f7a5a70d074a0890833ffded094fb09036b6199db2570a775dfb7cbc32303957"
+      15301,
+      "77ed5882c836c68dda7d7223b0ba03efdc107fbbf94d4229c3ce051c3bac399f"
     ],
     [
       "quota/codec.d.ts",
@@ -621,8 +631,8 @@
     ],
     [
       "rpc/port-file.js",
-      7580,
-      "8f22d1e16000b0fabae9e4d5478366e8caae4ac0daf40ff1b1e303fb8f006226"
+      8738,
+      "941c6d4804ce576520b69b1409b2c808e7c5f344a424262b047d8a72563b1faa"
     ],
     [
       "rpc/rpc-client.d.ts",
@@ -631,8 +641,8 @@
     ],
     [
       "rpc/rpc-client.js",
-      11226,
-      "63b056613db32bc8d6f2438e6437c82bab3c29ea5f616f251966b793ce40604c"
+      11857,
+      "91c0a264be7e080c50f90126ab0ed457398dbdb68349a5edfccc1cb61b654e30"
     ],
     [
       "rpc/rpc-server.d.ts",
@@ -641,8 +651,8 @@
     ],
     [
       "rpc/rpc-server.js",
-      13540,
-      "d431feb3556e684ae0539e8818391dcf64028f3e4b12fe7a1d2b391a430d843d"
+      13765,
+      "eb9fc24814e9de6ce1b6ecbc7d0ea906f46a99a81f507b0f4abfc6fdccb2df83"
     ],
     [
       "rpc/server-registry.d.ts",
@@ -711,8 +721,8 @@
     ],
     [
       "store/mutate.js",
-      19927,
-      "27ef7aba48dca42081d0d78218b59c8b8b8b84714ca8e4c14846468d22b4ce59"
+      19981,
+      "095842664fb1d805159902223b7765dd4a7349ad1a5bbb5e2c135c654739a434"
     ],
     [
       "store/pool.d.ts",

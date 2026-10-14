@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { setTimeout as snapshotDelay } from 'node:timers/promises';
 import { AtomicSyncError, syncJsonFile, writeJsonAtomic, writeJsonAtomicTracked, } from '../fs/atomic-write.js';
+import { readPrivateText, windowsPrivateFiles } from '../fs/private-files.js';
 import { LockContentionError, LockOwnershipError } from '../fs/with-lock.js';
 import { PoolOperationError, } from './errors.js';
 import { callFailureHook } from './hooks.js';
@@ -10,7 +10,7 @@ import { CREDENTIAL_STAMP_KEY, classifyConfig, classifyState, ensureEntries, ent
 import { completeTornRows, loadRows } from './torn.js';
 async function readText(path) {
     try {
-        return await readFile(path, 'utf8');
+        return await readPrivateText(path, windowsPrivateFiles);
     }
     catch (error) {
         if (error.code === 'ENOENT')

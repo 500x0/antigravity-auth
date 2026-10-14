@@ -35,7 +35,7 @@ const sorted = (values: Iterable<string>) => [...new Set(values)].sort()
 
 async function archive() {
   const bytes = await readFile(join(root, inputPath))
-  expect(bytes.length).toBe(251088)
+  expect(bytes.length).toBe(258947)
   expect(digest(bytes)).toBe(publication.sha256)
   const entries = readVerifiedArchive(bytes, publication)
   validatePublication(entries)
@@ -59,6 +59,7 @@ function imports(text: string): string[] {
       ...text.matchAll(
         /^(?:import|export)\s[^\n]*?\bfrom\s+['"]([^'"\n]+)['"];?\s*$/gm,
       ),
+      ...text.matchAll(/\bimport\(['"]([^'"]+)['"]\)/g),
     ].map((match) => match[1]!),
   )
 }
@@ -114,7 +115,12 @@ test('producer.public_roots_and_exact_closure', async () => {
     const text = entries.get(`package/dist/${file}`)!.toString()
     expect(text).not.toMatch(/^\s*import\s*['"]/m)
     expect(text).not.toMatch(/\brequire\s*\(/)
-    if (file !== 'tui/index.js') expect(text).not.toMatch(/\bimport\s*\(/)
+    if (file === 'fs/private-files.js' || file === 'fs/private-files.d.ts') {
+      expect(
+        [...text.matchAll(/\bimport\(([^)]+)\)/g)].map((match) => match[1]),
+      ).toEqual(["'@cortexkit/private-files'"])
+    } else if (file !== 'tui/index.js')
+      expect(text).not.toMatch(/\bimport\s*\(/)
     const observed = imports(text)
     expect(observed).toEqual(sorted(expectedImports[file] ?? []))
     for (const specifier of observed)
@@ -123,20 +129,20 @@ test('producer.public_roots_and_exact_closure', async () => {
   expect(
     Object.keys(expectedImports).every((file) => selected.includes(file)),
   ).toBe(true)
-  expect(sorted(nonlocal)).toEqual(closure.nonlocalStaticImports)
+  expect(sorted(nonlocal)).toEqual(closure.nonlocalImports)
   const starts = Object.values(publication.publicRoots).flatMap((targets) =>
     [targets.import, targets.types].map((path) => path.replace('./dist/', '')),
   )
   const graph = reach(entries, starts)
   expect(graph.files).toEqual(selected)
-  expect(graph.externals).toEqual(closure.nonlocalStaticImports)
-  expect(graph.files.length).toBe(156)
+  expect(graph.externals).toEqual(closure.nonlocalImports)
+  expect(graph.files.length).toBe(158)
   expect(
     graph.files.reduce(
       (sum, file) => sum + entries.get(`package/dist/${file}`)!.length,
       0,
     ),
-  ).toBe(822249)
+  ).toBe(853069)
   expect(graph.files.filter((file) => file.startsWith('routing/'))).toEqual(
     closure.routingFiles,
   )
@@ -154,6 +160,7 @@ test('producer.slim_runtime_reachability', async () => {
   const client = reach(entries, ['rpc/client.js', 'tui/index.js'])
   expect(client.files).toEqual(closure.slimRuntimeFiles)
   expect(client.externals).toEqual([
+    '@cortexkit/private-files',
     'node:crypto',
     'node:fs/promises',
     'node:net',
@@ -186,6 +193,8 @@ test('producer.legacy_bytes_and_stop_order', async () => {
     })
     .map(([file]) => String(file))
   expect(changed).toEqual([
+    'logger/engine.d.ts',
+    'logger/engine.js',
     'rpc/port-file.d.ts',
     'rpc/port-file.js',
     'rpc/rpc-client.d.ts',
@@ -209,11 +218,11 @@ test('producer.verbatim_map', async () => {
   const map = JSON.parse(
     await readFile(join(target, outputPath, 'source-output.json'), 'utf8'),
   )
-  expect(map.version).toBe('0.14.2')
-  expect(map.artifactStatus).toBe('released')
+  expect(map.version).toBe('0.15.0')
+  expect(map.artifactStatus).toBe('candidate')
   expect(map.publicRoots).toEqual(publication.publicRoots)
-  expect(map.canonicalFiles).toBe(156)
-  expect(map.canonicalBytes).toBe(822249)
+  expect(map.canonicalFiles).toBe(158)
+  expect(map.canonicalBytes).toBe(853069)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.sri).toBe(publication.sri)
   expect(map.transforms).toEqual([])
@@ -285,9 +294,9 @@ test('producer.shared_core_profile_exact_closure', async () => {
       'utf8',
     ),
   )
-  expect(required.length).toBe(129)
-  expect(map.canonicalFiles).toBe(129)
-  expect(map.canonicalBytes).toBe(696000)
+  expect(required.length).toBe(131)
+  expect(map.canonicalFiles).toBe(131)
+  expect(map.canonicalBytes).toBe(724806)
   expect(map.publicRoots).toEqual(profile.publicRoots)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.files.map((file: { output: string }) => file.output)).toEqual(

@@ -249,13 +249,18 @@ export function expectedCandidateGraph(
     )
       throw new Error('Unexpected historical product graph row')
     // Both consumers install the same fresh core tarball. Expect the source
-    // product's version and core pin, plus the explicit optional OpenCode 2 peer;
-    // every other dependency, peer and installed package remains unchanged.
+    // product's version, core pin, Windows private-files runtime dependency and
+    // optional OpenCode 2 peer. The fresh core supplies private-files to both
+    // consumers, so every installed package and other declaration stays fixed.
     return [
       row[0],
       row[1],
       candidateMetadata.version,
-      orderedMap({ ...dependencies, [coreName]: candidateMetadata.corePin }),
+      orderedMap({
+        ...dependencies,
+        [coreName]: candidateMetadata.corePin,
+        '@cortexkit/private-files': '0.1.0',
+      }),
       orderedMap({ ...peers, '@opencode/plugin': '>=2.0.22' }),
     ]
   })

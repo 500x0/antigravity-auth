@@ -4,6 +4,7 @@ import { lstat, mkdir, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { writeJsonAtomic } from '../fs/atomic-write.js';
+import { ensurePrivateDirectory, PrivateFileError, readPrivateBuffer, windowsPrivateFiles, } from '../fs/private-files.js';
 import { acquirePiLock } from './lock.js';
 /** Errors deliberately contain neither paths nor credentials nor underlying error messages. */
 export class PiSlotError extends Error {
@@ -96,6 +97,21 @@ function code(error) {
     return object(error) ? error.code : undefined;
 }
 async function safeRead(path, privateFile = false, afterReadCheck) {
+    if (windowsPrivateFiles) {
+        try {
+            await afterReadCheck?.(path);
+            const bytes = await readPrivateBuffer(path, true);
+            const text = bytes.toString('utf8');
+            if (!bytes.equals(Buffer.from(text)))
+                throw new PiSlotError(privateFile ? 'invalid-stash' : 'invalid-auth');
+            return text;
+        }
+        catch (error) {
+            if (code(error) === 'ENOENT')
+                return undefined;
+            throw error;
+        }
+    }
     let file;
     try {
         file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -188,6 +204,10 @@ function replaceEntry(auth, provider, next) {
     return `${text.slice(0, offset)}${last ? ',' : ''}${JSON.stringify(provider)}:${next}${text.slice(offset)}`;
 }
 async function syncDir(path) {
+    // Windows flushes file bytes before rename but cannot promise persisted
+    // directory metadata, so this Pi transition deliberately skips directory sync.
+    if (windowsPrivateFiles)
+        return;
     const dir = await open(path, 'r');
     try {
         await dir.sync();
@@ -200,6 +220,7 @@ async function atomicWrite(path, text, assertLock, beforeRename) {
     await writeJsonAtomic(path, null, {
         serialize: () => text,
         durable: true,
+        durability: windowsPrivateFiles ? 'file-only-on-windows' : undefined,
         beforeRename: async () => {
             await beforeRename?.(path);
             assertLock();
@@ -274,7 +295,12 @@ export function createPiSlot(options, onStep, hooks) {
                 throw new PiSlotError('lock-compromised');
         };
         try {
-            await mkdir(dirname(authPath), { recursive: true, mode: 0o700 });
+            if (windowsPrivateFiles) {
+                await ensurePrivateDirectory(dirname(authPath), options.privateParents ?? false);
+                await ensurePrivateDirectory(dirname(stashPath), options.privateParents ?? false);
+            }
+            else
+                await mkdir(dirname(authPath), { recursive: true, mode: 0o700 });
             const deadline = Date.now() + timeout;
             let retry = 0;
             while (!release) {
@@ -300,7 +326,7 @@ export function createPiSlot(options, onStep, hooks) {
             return result;
         }
         catch (error) {
-            if (error instanceof PiSlotError)
+            if (error instanceof PiSlotError || error instanceof PrivateFileError)
                 throw error;
             throw new PiSlotError('io');
         }
@@ -342,10 +368,14 @@ export function createPiSlot(options, onStep, hooks) {
             if (stash && digest(auth.entry) !== stash.sha256)
                 throw new PiSlotError('conflict');
             if (!stash) {
-                await mkdir(dirname(stashPath), { recursive: true, mode: 0o700 });
-                const dir = await lstat(dirname(stashPath));
-                if (!dir.isDirectory() || (dir.mode & 0o777) !== 0o700)
-                    throw new PiSlotError('unsafe-path');
+                if (windowsPrivateFiles)
+                    await ensurePrivateDirectory(dirname(stashPath), options.privateParents ?? false);
+                else {
+                    await mkdir(dirname(stashPath), { recursive: true, mode: 0o700 });
+                    const dir = await lstat(dirname(stashPath));
+                    if (!dir.isDirectory() || (dir.mode & 0o777) !== 0o700)
+                        throw new PiSlotError('unsafe-path');
+                }
                 const saved = {
                     version: 1,
                     provider,

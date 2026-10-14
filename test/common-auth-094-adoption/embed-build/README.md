@@ -1,7 +1,7 @@
 # Immutable common-auth input and private compiler
 
 The embedding script reads only the tracked
-`tools/common-auth-build/inputs/cortexkit-common-auth-0.14.2.tgz`. It checks both
+`tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz`. It checks both
 compressed-archive pins before decoding headers, checks publication identity,
 exports, license, inventory and selected-file hashes in memory, then replaces
 the canonical output. `--check` refuses missing, stale or extra output instead

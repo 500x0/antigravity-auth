@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { PrivateFileError, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from './private-files.js';
 /** Internal classification of fsync failures, including a failure after rename. */
 export class AtomicSyncError extends Error {
     constructor(cause) {
@@ -16,6 +17,18 @@ export async function writeJsonAtomic(path, value, options = {}) {
  * and removed ids here, because a later directory sync cannot undo the rename.
  */
 export async function writeJsonAtomicTracked(path, value, options, onRenamed) {
+    if (windowsPrivateFiles) {
+        return writePrivateAtomic(path, options.serialize
+            ? options.serialize(value)
+            : `${JSON.stringify(value, null, 2)}\n`, {
+            beforeRename: options.beforeRename,
+            stagePath: `${path}.${(options.stageName ?? randomUUID)()}.tmp`,
+            onRenamed,
+            durable: options.durable,
+            durability: options.durability,
+            onOutcome: options.onOutcome,
+        });
+    }
     await mkdir(dirname(path), { recursive: true });
     const tempPath = `${path}.${(options.stageName ?? randomUUID)()}.tmp`;
     let handle;
@@ -63,6 +76,14 @@ export async function writeJsonAtomicTracked(path, value, options, onRenamed) {
 }
 /** Make an already renamed file and its directory durable without rewriting bytes. */
 export async function syncJsonFile(path) {
+    if (windowsPrivateFiles) {
+        await verifyPrivate(path, 'file');
+        const error = new PrivateFileError(path, 'directory-sync-unsupported', {
+            code: 'ENOTSUP',
+        });
+        error.published = true;
+        throw error;
+    }
     const file = await open(path, 'r');
     try {
         await file.sync();

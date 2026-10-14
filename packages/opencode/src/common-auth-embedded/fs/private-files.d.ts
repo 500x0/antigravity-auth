@@ -1,0 +1,65 @@
+import { rename } from 'node:fs/promises';
+export declare const windowsPrivateFiles: boolean;
+type Backend = typeof import('@cortexkit/private-files');
+type Kind = 'file' | 'directory';
+/** Tests inject a backend here; production always imports the private-files package. */
+export declare function setPrivateFilesBackendForTest(api?: Backend): void;
+export declare class PrivateFileError extends Error {
+    readonly path: string;
+    readonly stage: string;
+    readonly code: string;
+    readonly win32Code?: number;
+    readonly reason?: string;
+    published: boolean;
+    durabilityConfirmed: boolean;
+    fileDurable: boolean;
+    attempts: number;
+    elapsedMs: number;
+    orphanPath?: string;
+    constructor(path: string, stage: string, cause: unknown);
+}
+export declare function privateOperation<T>(path: string, stage: string, operation: () => Promise<T>): Promise<T>;
+/**
+ * With `migrate`, replace an owned object's DACL with owner-only permissions.
+ * Callers must limit this to their dedicated private files/directories, never
+ * shared parents; the backend still refuses foreign ownership or unsafe ancestry.
+ */
+export declare function verifyPrivate(path: string, kind: Kind, migrate?: boolean): Promise<void>;
+/** Create missing components privately; inspect existing ancestors without modifying them. */
+export declare function ensurePrivateDirectory(path: string, migrate?: boolean): Promise<void>;
+export declare function readPrivateText(path: string, migrate?: boolean): Promise<string>;
+export declare function readPrivateBuffer(path: string, migrate?: boolean): Promise<Buffer>;
+export declare function createPrivateBytes(path: string, bytes: string): Promise<void>;
+export declare function createPrivateDirectoryExclusive(path: string): Promise<void>;
+export interface ReplaceOptions {
+    beforeRename?: () => Promise<void>;
+    /** Absolute monotonic deadline, for an expiring lease. */
+    deadline?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+    rename?: typeof rename;
+}
+/** Retry Windows rename sharing/access errors within a budget; they never prove lease contention. */
+export declare function replaceWindowsFile(from: string, to: string, options?: ReplaceOptions): Promise<{
+    attempts: number;
+    elapsedMs: number;
+}>;
+export interface PrivateWriteOutcome {
+    path: string;
+    stage: string;
+    published: boolean;
+    fileDurable: boolean;
+    durabilityConfirmed: boolean;
+    attempts: number;
+    elapsedMs: number;
+    code?: string;
+    win32Code?: number;
+}
+export declare function writePrivateAtomic(path: string, bytes: string, options?: ReplaceOptions & {
+    stagePath?: string;
+    onRenamed?: () => void;
+    durable?: boolean;
+    durability?: 'file-only-on-windows';
+    onOutcome?: (outcome: PrivateWriteOutcome) => void;
+}): Promise<void>;
+export {};

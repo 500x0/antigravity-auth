@@ -1073,20 +1073,20 @@ describe('authorized local quota fetcher', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Account-store quota checks over the genuine published store
+// Account-store quota checks over the genuine candidate store
 //
-// Use the published store and filesystem code copied into the core package.
+// Use the candidate store and filesystem code copied into the core package.
 // Its common-auth-embedded/source-output.json records each file's size and
-// SHA-256 from the pinned 0.14.2 npm archive. Verify every file against that
+// SHA-256 from the pinned unpublished common-auth 0.15.0 candidate archive. Verify every file against that
 // record before loading it with loadCommonAuthStoreModules; any difference
 // fails the test. Account files live in a separate disposable directory.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.14.2',
+  version: '0.15.0',
   tarballSha256:
-    'bf0f0828d155183dec1c29e5277ededd6cbd46e6b839ca696434e477f081216b',
+    'c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2',
 } as const
 
 async function embeddedFilesBelow(
@@ -1106,7 +1106,7 @@ let genuine: Promise<CommonAuthStoreModules> | undefined
 
 /**
  * Loads the embedded store and fs modules after each file matches the
- * size and SHA-256 recorded for the released 0.14.2 archive.
+ * size and SHA-256 recorded for the unpublished common-auth 0.15.0 candidate archive.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -1130,12 +1130,12 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
       throw new Error(
-        `source-output.json does not record the released common-auth ${RELEASED_COMMON_AUTH.version} archive`,
+        `source-output.json does not record the unpublished candidate common-auth ${RELEASED_COMMON_AUTH.version} archive`,
       )
     }
     const recorded = receipt.files.filter((file) =>

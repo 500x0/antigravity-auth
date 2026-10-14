@@ -119,6 +119,7 @@ async function inspectDestination(packageRoot, path, kind) {
           '@cortexkit/common-auth/tui-build@0.11.4',
           '@cortexkit/common-auth/tui-build@0.11.6',
           '@cortexkit/common-auth/tui-build@0.14.1',
+          '@cortexkit/common-auth/tui-build@0.14.2',
           `@cortexkit/common-auth/tui-build@${producerVersion}`,
         ].includes(map.compiler)
       )
@@ -212,6 +213,8 @@ export async function buildCommonAuthTui(options) {
       inline: [],
       loadSolidTransform,
     })
+    // private-files is loaded only on Windows. Keep its package lazy and outside
+    // both renderer trees, rather than giving the public compiler an inline root.
     await assertEmittedPublishList(packageRoot, rawDir, raw.emitted)
     await assertEmittedPublishList(packageRoot, runtimeDir, runtime.emitted)
     const portable = (path) => relative(packageRoot, path).split('\\').join('/')

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { acquireRefreshFileLock, withLock, writeJsonAtomic, } from '../fs/index.js';
+import { readPrivateText, windowsPrivateFiles } from '../fs/private-files.js';
 import { isQuotaMap, mergeQuotaObservation, } from '../quota/index.js';
 import { ClaustrumConsumerError } from './errors.js';
 import { acceptAccount, declineAccount, isDeclined, } from './interlock.js';
@@ -289,7 +289,7 @@ function decodeRoster(value) {
 export async function readVaultRoster(path) {
     let text;
     try {
-        text = await readFile(path, 'utf8');
+        text = await readPrivateText(path, windowsPrivateFiles);
     }
     catch (error) {
         if (error.code === 'ENOENT')

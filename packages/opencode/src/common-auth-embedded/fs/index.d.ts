@@ -1,6 +1,8 @@
 export type { AtomicWriteOptions } from './atomic-write.js';
 export { writeJsonAtomic } from './atomic-write.js';
 export { WRITER_LOCK_CONSTANTS } from './lock-constants.js';
+export type { PrivateWriteOutcome } from './private-files.js';
+export { PrivateFileError } from './private-files.js';
 export type { LockLoss, RefreshFileLock } from './refresh-file-lock.js';
 export { acquireRefreshFileLock, isLostMarkerRaceError, } from './refresh-file-lock.js';
 export type { LockOptions, LockOwnershipDetails } from './with-lock.js';

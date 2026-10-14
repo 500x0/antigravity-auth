@@ -5,6 +5,8 @@ export declare class PiSlotError extends Error {
     constructor(code: PiSlotErrorCode);
 }
 export interface PiSlotOptions {
+    /** Permit permission repair of current-user-owned auth/stash parents on Windows. Both must be dedicated private roots, never shared/custom directories. */
+    privateParents?: boolean;
     authPath: string;
     provider: string;
     /**
