@@ -8,6 +8,7 @@ import {
   ensureProjectContext,
   fetchWithAgyCliTransport,
   forwardAbort,
+  isGeminiArgonModel,
   isRetiredAgyModel,
   orderAgyRequestPayloadInPlace,
   RETIRED_AGY_MODEL_MESSAGE,
@@ -309,7 +310,9 @@ export function finalizePiAntigravityRequest(
   wireModel: string,
   scope: AgyRequestScope,
 ): string {
-  if (Array.isArray(request.tools) && request.tools.length > 0) {
+  if (isGeminiArgonModel(wireModel)) {
+    delete request.toolConfig
+  } else if (Array.isArray(request.tools) && request.tools.length > 0) {
     request.toolConfig = { functionCallingConfig: { mode: 'VALIDATED' } }
   }
 
@@ -333,7 +336,8 @@ export function resolvePiAntigravityModel(
   const lower = model.id.toLowerCase()
   const supportsAgyTiers =
     model.reasoning &&
-    (lower.includes('gemini-3') ||
+    (isGeminiArgonModel(lower) ||
+      lower.includes('gemini-3') ||
       (lower.includes('claude') &&
         (lower.includes('thinking') || /claude-(opus|sonnet)-5-5/.test(lower))))
 

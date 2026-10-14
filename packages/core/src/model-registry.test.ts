@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import capturedCatalog from '../../../test-fixtures/agy-cli-1.3.3/current-model-metadata.json'
-import serverCatalog from '../../../test-fixtures/agy-cli-1.3.3/server-model-catalog.json'
+import serverCatalog from '../../../test-fixtures/agy-cli-1.3.5/server-model-catalog.json'
 import { getAgyModelEnum } from './agy-request-metadata.ts'
 import {
   AGY_NATIVE_MODEL_DEFINITIONS,
@@ -37,11 +37,9 @@ describe('model registry', () => {
       'antigravity-claude-opus-5-5',
       'antigravity-claude-sonnet-5-5',
       'antigravity-gemini-3.1-flash-image',
-      'antigravity-gemini-3.1-pro',
       'antigravity-gemini-3.5-flash',
-      'antigravity-gemini-3.6-flash',
-      'antigravity-gemini-3.7-flash',
       'antigravity-gemini-3.8-flash',
+      'antigravity-gemini-4-argon',
       'antigravity-gpt-oss-120b-medium',
     ])
 
@@ -68,7 +66,7 @@ describe('model registry', () => {
     )
   })
 
-  it('preserves live Gemini 3.6 Flash route mappings', () => {
+  it('preserves historical Gemini 3.6 Flash parsing without authorizing admission', () => {
     expect(getGemini36FlashAntigravityModel()).toBe('gemini-3.6-flash-medium')
     expect(getGemini36FlashAntigravityModel('high')).toBe(
       'gemini-3.6-flash-high',
@@ -79,7 +77,7 @@ describe('model registry', () => {
     expect(getGemini36FlashAntigravityModel('low')).toBe('gemini-3.6-flash-low')
   })
 
-  it('preserves live Gemini 3.7 Flash route mappings', () => {
+  it('preserves historical Gemini 3.7 Flash parsing without authorizing admission', () => {
     expect(getGemini37FlashAntigravityModel()).toBe('gemini-3.7-flash-medium')
     expect(getGemini37FlashAntigravityModel('high')).toBe(
       'gemini-3.7-flash-high',
@@ -164,10 +162,14 @@ describe('model registry', () => {
     }
   })
 
-  it('keeps every captured native ID intact through tier parsing', () => {
-    for (const id of Object.keys(capturedCatalog.models)) {
+  it('keeps native IDs intact except the explicit grouped Gemini 3.5 effort selector', () => {
+    for (const id of Object.keys(AGY_NATIVE_MODEL_DEFINITIONS)) {
       expect(resolveModelWithTier(id).actualModel).toBe(id)
-      expect(resolveModelWithTier(`antigravity-${id}`).actualModel).toBe(id)
+      const publicWire =
+        id === 'gemini-3.5-flash-low' ? 'gemini-3.5-flash-extra-low' : id
+      expect(resolveModelWithTier(`antigravity-${id}`).actualModel).toBe(
+        publicWire,
+      )
     }
   })
 
@@ -176,15 +178,10 @@ describe('model registry', () => {
     for (const family of [
       'claude-opus-5-5',
       'claude-sonnet-5-5',
-      'gemini-3.6-flash',
-      'gemini-3.7-flash',
       'gemini-3.8-flash',
-      'gemini-3.1-pro',
+      'gemini-4-argon',
     ]) {
-      const efforts =
-        family === 'gemini-3.1-pro'
-          ? ['low', 'high']
-          : ['low', 'medium', 'high']
+      const efforts = ['low', 'medium', 'high']
       const definition = definitions[`antigravity-${family}`]!
       expect(Object.keys(definition.variants ?? {})).toEqual(efforts)
       for (const effort of efforts) {
@@ -208,6 +205,49 @@ describe('model registry', () => {
 })
 
 describe('server catalog authority', () => {
+  it('refuses every withdrawn Gemini selector and native route absent from the current map', () => {
+    for (const family of [
+      'gemini-3.1-pro',
+      'gemini-3.6-flash',
+      'gemini-3.7-flash',
+    ]) {
+      const efforts =
+        family === 'gemini-3.1-pro'
+          ? ['low', 'high']
+          : ['low', 'medium', 'high', 'tiered']
+      for (const suffix of ['', ...efforts.map((effort) => `-${effort}`)]) {
+        for (const prefix of ['', 'antigravity-']) {
+          const id = prefix + family + suffix
+          expect(isRetiredAgyModel(id)).toBe(true)
+          expect(getPublicModelDefinitions()).not.toHaveProperty(id)
+          expect(serverCatalog.models).not.toHaveProperty(family + suffix)
+        }
+      }
+    }
+    for (const id of ['gemini-pro-agent', 'antigravity-gemini-pro-agent']) {
+      expect(isRetiredAgyModel(id)).toBe(true)
+      expect(serverCatalog.models).not.toHaveProperty(
+        id.replace(/^antigravity-/, ''),
+      )
+    }
+    expect(Object.keys(serverCatalog.models)).toHaveLength(29)
+  })
+
+  it('defaults grouped Argon to medium and keeps every effort on its native route', () => {
+    expect(resolveModelWithTier('antigravity-gemini-4-argon').actualModel).toBe(
+      'gemini-4-argon-medium',
+    )
+    for (const effort of ['low', 'medium', 'high']) {
+      expect(
+        resolveModelWithTier(`antigravity-gemini-4-argon-${effort}`)
+          .actualModel,
+      ).toBe(`gemini-4-argon-${effort}`)
+      expect(
+        resolveModelWithTier(`gemini-4-argon-${effort}`, { cli_first: true })
+          .quotaPreference,
+      ).toBe('antigravity')
+    }
+  })
   it('keeps every public selector and effort on a server-listed route', () => {
     for (const definition of Object.values(getPublicModelDefinitions())) {
       const efforts = Object.keys(definition.variants ?? {})

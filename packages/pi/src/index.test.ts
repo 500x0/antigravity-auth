@@ -52,8 +52,10 @@ describe('Pi Antigravity model catalog', () => {
     expect(providerId).toBe('google')
     const modelIds = config.models.map((model) => model.id)
 
-    expect(modelIds).toContain('antigravity-gemini-3.6-flash')
-    expect(modelIds).toContain('antigravity-gemini-3.7-flash')
+    expect(modelIds).toContain('antigravity-gemini-4-argon')
+    expect(modelIds).not.toContain('antigravity-gemini-3.1-pro')
+    expect(modelIds).not.toContain('antigravity-gemini-3.6-flash')
+    expect(modelIds).not.toContain('antigravity-gemini-3.7-flash')
     expect(modelIds).toContain('antigravity-gemini-3.8-flash')
     expect(modelIds).toContain('antigravity-gpt-oss-120b-medium')
     expect(modelIds).not.toContain('antigravity-gemini-3.1-flash-image')
@@ -126,11 +128,9 @@ it('replaces the native Google catalog and reads only the google OAuth credentia
     expect(models.map((model) => model.id).sort()).toEqual([
       'antigravity-claude-opus-5-5',
       'antigravity-claude-sonnet-5-5',
-      'antigravity-gemini-3.1-pro',
       'antigravity-gemini-3.5-flash',
-      'antigravity-gemini-3.6-flash',
-      'antigravity-gemini-3.7-flash',
       'antigravity-gemini-3.8-flash',
+      'antigravity-gemini-4-argon',
       'antigravity-gpt-oss-120b-medium',
     ])
     for (const family of ['opus', 'sonnet']) {

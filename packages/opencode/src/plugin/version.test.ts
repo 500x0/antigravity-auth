@@ -140,7 +140,7 @@ describe('initAntigravityVersion — network failure path', () => {
 
     const headers = getRandomizedHeaders('antigravity')
     expect(headers['User-Agent']).toMatch(
-      /^antigravity\/cli\/1\.3\.3 \(aidev_client; os_type=.+; arch=.+; cl=996823801; auth_method=consumer\)$/,
+      /^antigravity\/cli\/1\.3\.5 \(aidev_client; os_type=.+; arch=.+; cl=998863838; auth_method=consumer\)$/,
     )
   })
 })

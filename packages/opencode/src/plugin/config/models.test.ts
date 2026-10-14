@@ -18,34 +18,21 @@ describe('OPENCODE_MODEL_DEFINITIONS', () => {
       'antigravity-claude-opus-5-5',
       'antigravity-claude-sonnet-5-5',
       'antigravity-gemini-3.1-flash-image',
-      'antigravity-gemini-3.1-pro',
       'antigravity-gemini-3.5-flash',
-      'antigravity-gemini-3.6-flash',
-      'antigravity-gemini-3.7-flash',
       'antigravity-gemini-3.8-flash',
+      'antigravity-gemini-4-argon',
       'antigravity-gpt-oss-120b-medium',
     ])
   })
 
   it('defines Gemini variants for Antigravity models', () => {
-    expect(getModel('antigravity-gemini-3.1-pro').variants).toEqual({
+    expect(getModel('antigravity-gemini-4-argon').variants).toEqual({
       low: { thinkingLevel: 'low' },
+      medium: { thinkingLevel: 'medium' },
       high: { thinkingLevel: 'high' },
     })
 
     expect(getModel('antigravity-gemini-3.5-flash').variants).toEqual({
-      low: { thinkingLevel: 'low' },
-      medium: { thinkingLevel: 'medium' },
-      high: { thinkingLevel: 'high' },
-    })
-
-    expect(getModel('antigravity-gemini-3.6-flash').variants).toEqual({
-      low: { thinkingLevel: 'low' },
-      medium: { thinkingLevel: 'medium' },
-      high: { thinkingLevel: 'high' },
-    })
-
-    expect(getModel('antigravity-gemini-3.7-flash').variants).toEqual({
       low: { thinkingLevel: 'low' },
       medium: { thinkingLevel: 'medium' },
       high: { thinkingLevel: 'high' },

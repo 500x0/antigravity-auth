@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import {
   applyAgyNativeGenerationConfig,
   getAgyNativeModel,
+  isGeminiArgonModel,
   isRetiredAgyModel,
 } from '@cortexkit/antigravity-auth-core'
 import {
@@ -209,20 +210,11 @@ function getAgyMaxOutputTokens(model: string): number | undefined {
     lower === 'gemini-3.5-flash-low' ||
     lower === 'gemini-3.5-flash-extra-low' ||
     lower === 'gemini-3-flash-agent' ||
-    lower === 'gemini-3.6-flash-low' ||
-    lower === 'gemini-3.6-flash-medium' ||
-    lower === 'gemini-3.6-flash-high' ||
-    lower === 'gemini-3.7-flash-low' ||
-    lower === 'gemini-3.7-flash-medium' ||
-    lower === 'gemini-3.7-flash-high' ||
     lower === 'gemini-3.8-flash-low' ||
     lower === 'gemini-3.8-flash-medium' ||
     lower === 'gemini-3.8-flash-high'
   ) {
     return 65536
-  }
-  if (lower === 'gemini-3.1-pro-low' || lower === 'gemini-pro-agent') {
-    return 65535
   }
   if (lower === 'claude-sonnet-4-6' || lower === 'claude-opus-4-6-thinking') {
     return 64000
@@ -713,8 +705,13 @@ function stripUnsupportedAntigravityFields(
 
 function configureAntigravityToolCalling(
   payload: Record<string, unknown>,
+  wireModel: string,
 ): void {
-  if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+  if (
+    isGeminiArgonModel(wireModel) ||
+    !Array.isArray(payload.tools) ||
+    payload.tools.length === 0
+  ) {
     delete payload.toolConfig
     return
   }
@@ -1675,7 +1672,7 @@ function prepareAntigravityRequestIn(
           if (headerStyle === 'antigravity') {
             sanitizeRequestPayloadForAntigravity(req)
             stripUnsupportedAntigravityFields(req)
-            configureAntigravityToolCalling(req)
+            configureAntigravityToolCalling(req, effectiveModel)
             normalizeNativeFunctionResponseRoles(req)
           }
         }
@@ -1808,6 +1805,7 @@ function prepareAntigravityRequestIn(
         if (
           variantConfig?.thinkingLevel &&
           (isGemini3 ||
+            isGeminiArgonModel(effectiveModel) ||
             getAgyNativeModel(effectiveModel)?.supportsAdaptiveThinking)
         ) {
           // Host effort variants select the corresponding native wire route.
@@ -2539,7 +2537,7 @@ function prepareAntigravityRequestIn(
           if (Object.keys(config).length > 0)
             requestPayload.generationConfig = config
           stripUnsupportedAntigravityFields(requestPayload)
-          configureAntigravityToolCalling(requestPayload)
+          configureAntigravityToolCalling(requestPayload, effectiveModel)
           // Function-response roles depend on the signatures settled by the
           // sanitizer above; a response turn that becomes a model turn at the
           // end of the request then needs the trailing user turn.

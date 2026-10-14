@@ -1049,7 +1049,7 @@ describe('request.ts', () => {
         expect(Object.keys(body)).toEqual(fixture.envelope_keys)
         expect(body.request.providerOptions).toBeUndefined()
         expect(new Headers(result.init.headers).get('User-Agent')).toMatch(
-          /^antigravity\/cli\/1\.3\.3 .*cl=996823801;/,
+          /^antigravity\/cli\/1\.3\.5 .*cl=998863838;/,
         )
         expect(fingerprint).toEqual(previous)
       }
@@ -1957,6 +1957,58 @@ describe('request.ts', () => {
         properties: { prompt: { type: 'STRING', description: 'minLength: 1' } },
         required: ['prompt'],
       })
+    })
+
+    it('omits toolConfig for every Argon route and grouped selector but keeps VALIDATED for other Gemini', () => {
+      for (const [model, effort] of [
+        ['gemini-4-argon-low', 'LOW'],
+        ['gemini-4-argon-medium', 'MEDIUM'],
+        ['gemini-4-argon-high', 'HIGH'],
+        ['antigravity-gemini-4-argon', 'MEDIUM'],
+        ['gemini-3.8-flash-low', undefined],
+      ] as const) {
+        for (const wrapped of [false, true]) {
+          const request = {
+            contents: [{ role: 'user', parts: [{ text: 'Use read' }] }],
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    name: 'read',
+                    parameters: { type: 'OBJECT', properties: {} },
+                  },
+                ],
+              },
+            ],
+            toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+          }
+          const result = prepareAntigravityRequest(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+            {
+              method: 'POST',
+              body: JSON.stringify(
+                wrapped ? { project: mockProjectId, model, request } : request,
+              ),
+            },
+            mockAccessToken,
+            mockProjectId,
+            undefined,
+            'antigravity',
+          )
+          const body = JSON.parse(result.init.body as string)
+          if (effort) {
+            expect(body.request).not.toHaveProperty('toolConfig')
+            expect(body.request.generationConfig).toEqual({
+              maxOutputTokens: 65536,
+              thinkingConfig: { includeThoughts: true, thinkingLevel: effort },
+            })
+          } else {
+            expect(body.request.toolConfig).toEqual({
+              functionCallingConfig: { mode: 'VALIDATED' },
+            })
+          }
+        }
+      }
     })
 
     it('sanitizes already-wrapped agy requests and preserves existing tool config fields', () => {

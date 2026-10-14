@@ -64,6 +64,13 @@ opencode auth login
 ```
 
 ### "Model not found"
+Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
+Antigravity. Their grouped selectors and native tier routes are no longer
+available. Requests refuse with a static nonretryable message before any physical
+send, without aliases or redirects. Historical transcripts remain readable.
+Changing the CLI identity or re-authenticating does not restore these routes.
+Gemini 4 Argon requires Google AI Ultra.
+
 Add this to your `google` provider config:
 ```json
 "npm": "@ai-sdk/google"

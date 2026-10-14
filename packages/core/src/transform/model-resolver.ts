@@ -12,7 +12,9 @@ import {
   getGemini36FlashAntigravityModel,
   getGemini37FlashAntigravityModel,
   getGemini38FlashAntigravityModel,
+  getGeminiArgonAntigravityModel,
   getResolverAliasMap,
+  isGeminiArgonModel,
 } from '../model-registry.ts'
 import type {
   GoogleSearchConfig,
@@ -79,6 +81,7 @@ const IMAGE_GENERATION_MODELS = /image|imagen/i
 function supportsThinkingTiers(model: string): boolean {
   const lower = model.toLowerCase()
   return (
+    isGeminiArgonModel(lower) ||
     lower.includes('gemini-3') ||
     lower.includes('gemini-2.5') ||
     (lower.includes('claude') &&
@@ -197,6 +200,7 @@ export function resolveModelWithTier(
 
   const isImageModel = IMAGE_GENERATION_MODELS.test(modelWithoutQuota)
   const isClaudeModel = modelWithoutQuota.toLowerCase().includes('claude')
+  const isArgon = isGeminiArgonModel(modelWithoutQuota)
 
   // All models default to Antigravity quota unless cli_first is enabled
   // Fallback to gemini-cli happens at the account rotation level when Antigravity is exhausted
@@ -204,11 +208,23 @@ export function resolveModelWithTier(
     options.cli_first === true &&
     !isAntigravity &&
     !isImageModel &&
+    !isArgon &&
     !isClaudeModel
   const quotaPreference = preferGeminiCli
     ? ('gemini-cli' as const)
     : ('antigravity' as const)
-  const explicitQuota = isAntigravity || isImageModel
+  const explicitQuota = isAntigravity || isImageModel || isArgon
+
+  if (isArgon) {
+    return {
+      actualModel: getGeminiArgonAntigravityModel(tier),
+      thinkingLevel: tier ?? 'medium',
+      tier: tier ?? 'medium',
+      isThinkingModel: true,
+      quotaPreference: 'antigravity',
+      explicitQuota,
+    }
+  }
 
   // Match server IDs before interpreting a suffix as a host variant option;
   // the suffix can belong to the wire ID itself, as with GPT-OSS medium.
@@ -552,7 +568,10 @@ export function resolveModelWithVariant(
     return base
   }
 
-  if (getAgyNativeModel(base.actualModel)?.supportsAdaptiveThinking) {
+  if (
+    isGeminiArgonModel(base.actualModel) ||
+    getAgyNativeModel(base.actualModel)?.supportsAdaptiveThinking
+  ) {
     if (!variantConfig.thinkingLevel) return base
     const family = base.actualModel.replace(TIER_REGEX, '')
     return {

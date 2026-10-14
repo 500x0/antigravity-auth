@@ -500,6 +500,18 @@ describe('hook bodies', () => {
     const active = await startBridge()
     const cases: Array<[GaHttpRequestEvent['kind'], string, boolean]> = [
       ['primary', 'antigravity-gemini-3.5-flash', true],
+      ['primary', 'antigravity-gemini-3.1-pro', true],
+      ['primary', 'gemini-3.1-pro-low', true],
+      ['primary', 'gemini-3.1-pro-high', true],
+      ['primary', 'gemini-pro-agent', true],
+      ['primary', 'antigravity-gemini-3.6-flash', true],
+      ['primary', 'gemini-3.6-flash-low', true],
+      ['primary', 'gemini-3.6-flash-medium', true],
+      ['primary', 'gemini-3.6-flash-high', true],
+      ['primary', 'antigravity-gemini-3.7-flash', true],
+      ['primary', 'gemini-3.7-flash-low', true],
+      ['primary', 'gemini-3.7-flash-medium', true],
+      ['primary', 'gemini-3.7-flash-high', true],
       ['title', 'gemini-off-catalog-title-model', true],
       ['primary', 'gemini-2.5-pro', false],
       ['compaction', 'gemini-2.5-pro', false],
@@ -785,6 +797,30 @@ describe('hook bodies', () => {
     server.decideGaRetry(other, registered)
     expect(own.decision).toEqual({ retry: false })
     expect(other.decision).toEqual({ retry: true, delay: 2_000 })
+  })
+
+  it('disables host retries for withdrawn Gemini selectors and native routes', () => {
+    for (const id of [
+      'antigravity-gemini-3.1-pro',
+      'gemini-3.1-pro-low',
+      'gemini-3.1-pro-high',
+      'gemini-pro-agent',
+      'antigravity-gemini-3.6-flash',
+      'gemini-3.6-flash-low',
+      'gemini-3.6-flash-medium',
+      'gemini-3.6-flash-high',
+      'antigravity-gemini-3.7-flash',
+      'gemini-3.7-flash-low',
+      'gemini-3.7-flash-medium',
+      'gemini-3.7-flash-high',
+    ]) {
+      const event: GaRetryEvent = {
+        model: { id, providerID: 'google' },
+        decision: { retry: true, delay: 2000 },
+      }
+      server.decideGaRetry(event, registered)
+      expect(event.decision).toEqual({ retry: false })
+    }
   })
 })
 
@@ -1170,6 +1206,13 @@ describe('model registration', () => {
   const catalog = server.gaCatalogModels()
 
   it('registers every public catalog id on the Google provider with only enabled variants', () => {
+    expect(catalog.has('antigravity-gemini-4-argon')).toBe(true)
+    for (const id of [
+      'antigravity-gemini-3.1-pro',
+      'antigravity-gemini-3.6-flash',
+      'antigravity-gemini-3.7-flash',
+    ])
+      expect(catalog.has(id)).toBe(false)
     const { getPublicModelDefinitions } = realCore
     const definitions = getPublicModelDefinitions()
     expect([...catalog.keys()].sort()).toEqual(Object.keys(definitions).sort())

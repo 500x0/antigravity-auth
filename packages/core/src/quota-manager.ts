@@ -18,7 +18,7 @@ import type { AccountMetadataV3 } from './account-types.ts'
 import { fetchWithActiveTimeout } from './fetch-timeout.ts'
 import { buildAntigravityHarnessUserAgent } from './fingerprint.ts'
 import { createLogger } from './logger.ts'
-import { getQuotaGroupForModel } from './model-registry.ts'
+import { getQuotaGroupForModel, isGeminiArgonModel } from './model-registry.ts'
 import type {
   AccountQuotaResult,
   GeminiCliQuotaSummary,
@@ -439,6 +439,7 @@ export function classifyQuotaGroup(
   modelName: string,
   displayName?: string,
 ): QuotaGroup | null {
+  if (isGeminiArgonModel(modelName)) return null
   const registryGroup = getQuotaGroupForModel(modelName)
   if (registryGroup) {
     return registryGroup

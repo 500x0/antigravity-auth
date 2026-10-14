@@ -1,0 +1,60 @@
+{
+  "models": {
+    "gemini-4-argon-high": {
+      "displayName": "Gemini 4 Argon (High)",
+      "model": "MODEL_PLACEHOLDER_M417",
+      "maxTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "supportsThinking": true,
+      "thinkingBudget": -1,
+      "minThinkingBudget": 32,
+      "thinkingLevel": 3,
+      "supportsImages": true,
+      "supportsVideo": true,
+      "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+      "modelProvider": "MODEL_PROVIDER_GOOGLE",
+      "quotaInfo": {
+        "remainingFraction": 1,
+        "resetTime": "2026-10-14T17:46:06Z"
+      }
+    },
+    "gemini-4-argon-low": {
+      "displayName": "Gemini 4 Argon (Low)",
+      "model": "MODEL_PLACEHOLDER_M419",
+      "maxTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "supportsThinking": true,
+      "thinkingBudget": -1,
+      "minThinkingBudget": 32,
+      "thinkingLevel": 1,
+      "supportsImages": true,
+      "supportsVideo": true,
+      "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+      "modelProvider": "MODEL_PROVIDER_GOOGLE",
+      "quotaInfo": {
+        "remainingFraction": 1,
+        "resetTime": "2026-10-14T17:46:06Z"
+      }
+    },
+    "gemini-4-argon-medium": {
+      "displayName": "Gemini 4 Argon (Medium)",
+      "model": "MODEL_PLACEHOLDER_M418",
+      "maxTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "supportsThinking": true,
+      "thinkingBudget": -1,
+      "minThinkingBudget": 32,
+      "thinkingLevel": 2,
+      "supportsImages": true,
+      "supportsVideo": true,
+      "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+      "modelProvider": "MODEL_PROVIDER_GOOGLE",
+      "quotaInfo": {
+        "remainingFraction": 1,
+        "resetTime": "2026-10-14T17:46:06Z"
+      }
+    }
+  },
+  "defaultAgentModelId": "gemini-4-argon-medium",
+  "scope": "Argon server metadata including per-model quota readings, not quota pool attribution."
+}

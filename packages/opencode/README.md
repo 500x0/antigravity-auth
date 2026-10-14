@@ -134,11 +134,9 @@ The model registry lives at `packages/core/src/model-registry.ts`; the OpenCode 
 
 | Model | Variants | Quota group |
 | --- | --- | --- |
-| `antigravity-gemini-3.8-flash` | `low`, `high` | `gemini-flash` |
-| `antigravity-gemini-3.7-flash` | `low`, `high` | `gemini-flash` |
-| `antigravity-gemini-3.6-flash` | `low`, `high` | `gemini-flash` |
-| `antigravity-gemini-3.5-flash` | `low`, `high` | `gemini-flash` |
-| `antigravity-gemini-3.1-pro` | `low`, `high` | `gemini-pro` |
+| `antigravity-gemini-4-argon` | `low`, `medium` (default), `high` | Per-model quota; weekly pool attribution unverified |
+| `antigravity-gemini-3.8-flash` | `low`, `medium`, `high` | `gemini-flash` |
+| `antigravity-gemini-3.5-flash` | `low`, `medium`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.1-flash-image` | — | `gemini-flash` |
 | `antigravity-claude-sonnet-5-5` | low / medium / high | `claude` |
 | `antigravity-claude-opus-5-5` | low / medium / high | `claude` |
@@ -146,14 +144,16 @@ The model registry lives at `packages/core/src/model-registry.ts`; the OpenCode 
 
 > Claude 5.5 has a 1,000,000-token context and 128,000-token output limit, with adaptive thinking. Claude 4.6 requests refuse rather than redirecting to a different model.
 
-> Gemini 3.8 Flash Cyber is absent from the captured AGY 1.3.3 server catalog, so it is not exposed by this plugin. Gemini 3.5 Flash-Lite is also absent from the AGY catalog, and Gemini 3.5 Flash Cyber remains restricted to a limited-access CodeMender pilot.
+> Gemini 4 Argon requires **Google AI Ultra**, with 1,048,576 context and 65,536 output tokens. Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by Antigravity; grouped and native tier selections refuse without redirects. Historical transcripts remain readable.
+
+> Gemini 3.8 Flash Cyber is absent from the captured AGY 1.3.5 server catalog, so it is not exposed by this plugin. Gemini 3.5 Flash Lite is a server helper route, not a public picker entry. Gemini 3.5 Flash Cyber remains restricted to a limited-access CodeMender pilot.
 
 ### Routing
 
 - **Antigravity-first (default).** Gemini requests go to the Antigravity header style first; on `429 RESOURCE_EXHAUSTED` they fall back to the Gemini CLI header set.
 - **CLI-first** (`cli_first: true`). Flip the order — Gemini CLI first, Antigravity fallback. Change the live setting in `/antigravity` → Routing.
 - **Style-fallback** (`quota_style_fallback: true`). Re-send the SAME request through the other header set on a rate limit. Default OFF because retrying can consume quota from both header-style pools. Change it in `/antigravity` → Routing.
-- **Claude and image models** always use Antigravity regardless of toggles.
+- **Argon, Claude and image models** always use Antigravity regardless of toggles.
 - Model names transform automatically between Antigravity and Gemini CLI namespaces (`antigravity-gemini-3-flash` ↔ `gemini-3-flash-preview`).
 
 ### Quota, killswitch, and the soft-threshold fail-open

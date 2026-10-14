@@ -214,8 +214,8 @@ expect_red = ['^createAuthLoader\skeeps\san\sunmigrated\slocal\starget\sunavaila
 id = "opencode-retired-claude-admission"
 guards = "OpenCode refuses retired Claude 4.6 selections before account selection, refresh, warmup or physical send."
 file = "packages/core/src/model-registry.ts"
-old = "    ) && getAgyNativeModel(route) === undefined"
-new = "    ) && false // NON-VACUITY BREAK"
+old = "    getAgyNativeModel(route) === undefined"
+new = "    false // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
@@ -226,8 +226,8 @@ expect_red = ['^retired\sClaude\sadmission\srefuses\suser\sselections\sbefore\ss
 id = "pi-local-retired-claude-admission"
 guards = "Pi refuses retired Claude 4.6 local requests before project discovery or physical transport."
 file = "packages/core/src/model-registry.ts"
-old = "    ) && getAgyNativeModel(route) === undefined"
-new = "    ) && false // NON-VACUITY BREAK"
+old = "    getAgyNativeModel(route) === undefined"
+new = "    false // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
@@ -238,8 +238,8 @@ expect_red = ['^retired\sClaude\srequests\srefuses\slocal\srequests\sbefore\spro
 id = "pi-vault-retired-claude-admission"
 guards = "Pi refuses retired Claude 4.6 vault requests before obtaining a served credential."
 file = "packages/core/src/model-registry.ts"
-old = "    ) && getAgyNativeModel(route) === undefined"
-new = "    ) && false // NON-VACUITY BREAK"
+old = "    getAgyNativeModel(route) === undefined"
+new = "    false // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
@@ -331,3 +331,78 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^historical\stool\sschema\swire\sfixes\sClaude\spreserves\sWebFetch\sformat\schoices\sand\sthe\sproperty\snamed\sformat$', '^historical\stool\sschema\swire\sfixes\sClaude\sretains\sscalar\sVALIDATED\sconstraint\shints\sand\sunion\sflattening$']
+
+[[control]]
+id = "argon-thinking-no-budget"
+guards = "Argon sends a thinking level without a thinkingBudget at every effort."
+file = "packages/core/src/transform/agy-generation.ts"
+old = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinkingBudget;
+    // MEDIUM/HIGH are inferred from the server catalog's numeric efforts.
+    generationConfig.thinkingConfig = {
+      includeThoughts: true,'''
+new = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinkingBudget;
+    // MEDIUM/HIGH are inferred from the server catalog's numeric efforts.
+    generationConfig.thinkingConfig = {
+      thinkingBudget: -1, // NON-VACUITY BREAK
+      includeThoughts: true,'''
+test_file = "packages/core/src/transform/agy-generation.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/transform/agy-generation.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^native\sAGY\sgeneration\sdefaults\suses\sArgon\slevels\swithout\sa\sbudget\sfor\severy\svariant\sand\spreserves\soutput\scaps$']
+
+[[control]]
+id = "argon-thinking-per-variant-level"
+guards = "Argon LOW, MEDIUM and HIGH are emitted distinctly, not collapsed to a single effort."
+file = "packages/core/src/transform/agy-generation.ts"
+old = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinkingBudget;
+    // MEDIUM/HIGH are inferred from the server catalog's numeric efforts.
+    generationConfig.thinkingConfig = {
+      includeThoughts: true,
+      thinkingLevel: ADAPTIVE_LEVELS[native.thinkingLevel],'''
+new = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinkingBudget;
+    // MEDIUM/HIGH are inferred from the server catalog's numeric efforts.
+    generationConfig.thinkingConfig = {
+      includeThoughts: true,
+      thinkingLevel: 'HIGH', // NON-VACUITY BREAK'''
+test_file = "packages/core/src/transform/agy-generation.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/transform/agy-generation.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^native\sAGY\sgeneration\sdefaults\suses\sArgon\slevels\swithout\sa\sbudget\sfor\severy\svariant\sand\spreserves\soutput\scaps$']
+
+[[control]]
+id = "opencode-argon-tool-config-omission"
+guards = "Both OpenCode request shapes omit toolConfig for the entire Argon family, retaining VALIDATED elsewhere."
+file = "packages/opencode/src/plugin/request.ts"
+old = "    isGeminiArgonModel(wireModel) ||"
+new = "    false || // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/request.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^request\.ts\sprepareAntigravityRequest\somits\stoolConfig\sfor\severy\sArgon\sroute\sand\sgrouped\sselector\sbut\skeeps\sVALIDATED\sfor\sother\sGemini$']
+
+[[control]]
+id = "pi-argon-tool-config-omission"
+guards = "Pi final requests omit toolConfig for every Argon route and grouped selector, retaining VALIDATED elsewhere."
+file = "packages/pi/src/stream.ts"
+old = "  if (isGeminiArgonModel(wireModel)) {"
+new = "  if (false) { // NON-VACUITY BREAK"
+test_file = "packages/pi/src/stream.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^finalizePiAntigravityRequest\somits\stoolConfig\sfor\severy\sArgon\sroute\sand\sgrouped\sselector\sbut\skeeps\sVALIDATED\sfor\sother\sGemini$']
+
+[[control]]
+id = "withdrawn-gemini-pro-admission"
+guards = "The newly withdrawn Gemini 3.1 Pro route refuses at shared admission before physical send."
+file = "packages/core/src/model-registry.ts"
+old = '      /^gemini-3\.1-pro(?:-(?:low|high))?$/.test(route) ||'
+new = '      false || // NON-VACUITY BREAK'
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^retired\sClaude\sadmission\srefuses\suser\sselections\sbefore\sselection,\srefresh,\swarmup\sor\sphysical\ssend$']

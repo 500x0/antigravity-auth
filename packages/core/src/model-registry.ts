@@ -105,6 +105,33 @@ export interface AgyNativeModelDefinition {
 export const AGY_NATIVE_MODEL_DEFINITIONS: Readonly<
   Record<string, AgyNativeModelDefinition>
 > = {
+  'gemini-4-argon-low': {
+    displayName: 'Gemini 4 Argon (Low)',
+    maxTokens: 1048576,
+    maxOutputTokens: 65536,
+    model: 'MODEL_PLACEHOLDER_M419',
+    thinkingLevel: 1,
+    thinkingBudget: -1,
+    supportsThinking: true,
+  },
+  'gemini-4-argon-medium': {
+    displayName: 'Gemini 4 Argon (Medium)',
+    maxTokens: 1048576,
+    maxOutputTokens: 65536,
+    model: 'MODEL_PLACEHOLDER_M418',
+    thinkingLevel: 2,
+    thinkingBudget: -1,
+    supportsThinking: true,
+  },
+  'gemini-4-argon-high': {
+    displayName: 'Gemini 4 Argon (High)',
+    maxTokens: 1048576,
+    maxOutputTokens: 65536,
+    model: 'MODEL_PLACEHOLDER_M417',
+    thinkingLevel: 3,
+    thinkingBudget: -1,
+    supportsThinking: true,
+  },
   'gemini-3.8-flash-high': {
     displayName: 'Gemini 3.8 Flash (High)',
     maxTokens: 1048576,
@@ -127,70 +154,6 @@ export const AGY_NATIVE_MODEL_DEFINITIONS: Readonly<
     maxOutputTokens: 65536,
     model: 'MODEL_PLACEHOLDER_M320',
     thinkingBudget: 1000,
-    supportsThinking: true,
-  },
-  'gemini-3.7-flash-high': {
-    displayName: 'Gemini 3.7 Flash (High)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M298',
-    thinkingBudget: -1,
-    supportsThinking: true,
-  },
-  'gemini-3.7-flash-medium': {
-    displayName: 'Gemini 3.7 Flash (Medium)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M299',
-    thinkingBudget: 4000,
-    supportsThinking: true,
-  },
-  'gemini-3.7-flash-low': {
-    displayName: 'Gemini 3.7 Flash (Low)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M300',
-    thinkingBudget: 1000,
-    supportsThinking: true,
-  },
-  'gemini-3.6-flash-high': {
-    displayName: 'Gemini 3.6 Flash (High)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M71',
-    thinkingBudget: -1,
-    supportsThinking: true,
-  },
-  'gemini-3.6-flash-medium': {
-    displayName: 'Gemini 3.6 Flash (Medium)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M72',
-    thinkingBudget: 4000,
-    supportsThinking: true,
-  },
-  'gemini-3.6-flash-low': {
-    displayName: 'Gemini 3.6 Flash (Low)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65536,
-    model: 'MODEL_PLACEHOLDER_M73',
-    thinkingBudget: 1000,
-    supportsThinking: true,
-  },
-  'gemini-3.1-pro-high': {
-    displayName: 'Gemini 3.1 Pro (High)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65535,
-    model: 'MODEL_PLACEHOLDER_M37',
-    thinkingBudget: 10001,
-    supportsThinking: true,
-  },
-  'gemini-3.1-pro-low': {
-    displayName: 'Gemini 3.1 Pro (Low)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65535,
-    model: 'MODEL_PLACEHOLDER_M36',
-    thinkingBudget: 1001,
     supportsThinking: true,
   },
   'claude-opus-5-5-low': {
@@ -290,14 +253,6 @@ export const AGY_NATIVE_MODEL_DEFINITIONS: Readonly<
     displayName: 'Gemini 3.1 Flash Image',
     model: 'MODEL_PLACEHOLDER_M21',
   },
-  'gemini-pro-agent': {
-    displayName: 'Gemini 3.1 Pro (High)',
-    maxTokens: 1048576,
-    maxOutputTokens: 65535,
-    model: 'MODEL_PLACEHOLDER_M16',
-    thinkingBudget: 10001,
-    supportsThinking: true,
-  },
 }
 
 export function getAgyNativeModel(
@@ -309,20 +264,35 @@ export function getAgyNativeModel(
 export const RETIRED_AGY_MODEL_MESSAGE =
   'This Antigravity model is no longer offered. Choose another model.'
 
-/** Claude 4.6 names remain readable in history, but routes absent from the server map cannot serve. */
+/** Withdrawn names remain readable in history, but cannot serve new requests. */
 export function isRetiredAgyModel(model: string): boolean {
   const route = model
     .toLowerCase()
     .replace(/^antigravity-/, '')
     .replace(/^gemini-(?=claude-)/, '')
   return (
-    /^claude-(opus|sonnet)-4-6(?:-thinking)?(?:-(?:minimal|low|medium|high))?$/.test(
+    (/^claude-(opus|sonnet)-4-6(?:-thinking)?(?:-(?:minimal|low|medium|high))?$/.test(
       route,
-    ) && getAgyNativeModel(route) === undefined
+    ) ||
+      /^gemini-3\.1-pro(?:-(?:low|high))?$/.test(route) ||
+      /^gemini-3\.[67]-flash(?:-(?:low|medium|high|tiered))?$/.test(route) ||
+      route === 'gemini-pro-agent') &&
+    getAgyNativeModel(route) === undefined
   )
 }
 
 const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
+  'antigravity-gemini-4-argon': defineModel('antigravity-gemini-4-argon', {
+    name: 'Gemini 4 Argon (Antigravity)',
+    reasoning: true,
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: 'low' },
+      medium: { thinkingLevel: 'medium' },
+      high: { thinkingLevel: 'high' },
+    },
+  }),
   'antigravity-gemini-3.5-flash': defineModel('antigravity-gemini-3.5-flash', {
     name: 'Gemini 3.5 Flash (Antigravity)',
     reasoning: true,
@@ -343,40 +313,8 @@ const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       modalities: { input: ['text', 'image'], output: ['text', 'image'] },
     },
   ),
-  'antigravity-gemini-3.1-pro': defineModel('antigravity-gemini-3.1-pro', {
-    name: 'Gemini 3.1 Pro (Antigravity)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65535 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
-      low: { thinkingLevel: 'low' },
-      high: { thinkingLevel: 'high' },
-    },
-  }),
   'antigravity-gemini-3.8-flash': defineModel('antigravity-gemini-3.8-flash', {
     name: 'Gemini 3.8 Flash (Antigravity)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
-      low: { thinkingLevel: 'low' },
-      medium: { thinkingLevel: 'medium' },
-      high: { thinkingLevel: 'high' },
-    },
-  }),
-  'antigravity-gemini-3.7-flash': defineModel('antigravity-gemini-3.7-flash', {
-    name: 'Gemini 3.7 Flash (Antigravity)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-    variants: {
-      low: { thinkingLevel: 'low' },
-      medium: { thinkingLevel: 'medium' },
-      high: { thinkingLevel: 'high' },
-    },
-  }),
-  'antigravity-gemini-3.6-flash': defineModel('antigravity-gemini-3.6-flash', {
-    name: 'Gemini 3.6 Flash (Antigravity)',
     reasoning: true,
     limit: { context: 1048576, output: 65536 },
     modalities: DEFAULT_MODALITIES,
@@ -483,6 +421,9 @@ const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
 }
 
 const RESOLVER_ALIASES: Record<string, string> = {
+  'gemini-4-argon-low': 'gemini-4-argon',
+  'gemini-4-argon-medium': 'gemini-4-argon',
+  'gemini-4-argon-high': 'gemini-4-argon',
   'gemini-3.1-pro-low': 'gemini-3.1-pro',
   'gemini-3.1-pro-high': 'gemini-3.1-pro',
   'gemini-3-flash-low': 'gemini-3-flash',
@@ -585,12 +526,10 @@ const QUOTA_GROUP_BY_MODEL_ID: Record<string, ModelQuotaGroup> = {
 }
 
 const ANTIGRAVITY_OPENCODE_MODEL_IDS = [
+  'antigravity-gemini-4-argon',
   'antigravity-gemini-3.8-flash',
-  'antigravity-gemini-3.7-flash',
-  'antigravity-gemini-3.6-flash',
   'antigravity-gemini-3.5-flash',
   'antigravity-gemini-3.1-flash-image',
-  'antigravity-gemini-3.1-pro',
   'antigravity-claude-sonnet-5-5',
   'antigravity-claude-opus-5-5',
   'antigravity-gpt-oss-120b-medium',
@@ -657,6 +596,9 @@ export function getQuotaGroupForModel(
   modelId: string,
 ): ModelQuotaGroup | undefined {
   const normalized = modelId.toLowerCase()
+  // Argon per-model quota is retained separately: the redacted 1.3.5 quota
+  // summary does not identify an Argon weekly pool (see the fixture README).
+  if (isGeminiArgonModel(normalized)) return undefined
   return (
     QUOTA_GROUP_BY_MODEL_ID[normalized] ??
     // Check Claude / GPT-OSS substrings BEFORE the `gemini` substring so
@@ -669,5 +611,26 @@ export function getQuotaGroupForModel(
       : normalized.startsWith('gemini') || normalized.startsWith('tab_')
         ? 'gemini'
         : undefined)
+  )
+}
+
+/** Recognize Argon selectors so family-specific wire and quota policy is consistent. */
+export function isGeminiArgonModel(model: string): boolean {
+  return /^(?:antigravity-)?gemini-4-argon(?:-(?:low|medium|high))?$/.test(
+    model.toLowerCase(),
+  )
+}
+
+export function getGeminiArgonAntigravityModel(tier?: ThinkingTier): string {
+  return getTieredAntigravityModel(
+    {
+      defaultModel: 'gemini-4-argon-medium',
+      byTier: {
+        low: 'gemini-4-argon-low',
+        medium: 'gemini-4-argon-medium',
+        high: 'gemini-4-argon-high',
+      },
+    },
+    tier,
   )
 }
