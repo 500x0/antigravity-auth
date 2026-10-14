@@ -777,16 +777,16 @@ describe('authorized local quota fetcher', () => {
 //
 // Use the candidate store and filesystem code copied into the core package.
 // Its common-auth-embedded/source-output.json records each file's size and
-// SHA-256 from the pinned published common-auth 0.15.0 archive. Verify every file against that
+// SHA-256 from the pinned pinned common-auth 0.16.0 candidate archive. Verify every file against that
 // record before loading it with loadCommonAuthStoreModules; any difference
 // fails the test. Account files live in a separate disposable directory.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.15.0',
+  version: '0.16.0',
   tarballSha256:
-    'a23db89b43bedba8d371cd9d45e5f35306040cda3f425efb49fbce5610aa9c6b',
+    'e7513fdc5fed846cbef09e432eb0ce76443dbc2793a8189954f1d3a1271bd34e',
 } as const
 
 async function embeddedFilesBelow(
@@ -806,7 +806,7 @@ let genuine: Promise<CommonAuthStoreModules> | undefined
 
 /**
  * Loads the embedded store and fs modules after each file matches the
- * size and SHA-256 recorded for the published common-auth 0.15.0 archive.
+ * size and SHA-256 recorded for the pinned common-auth 0.16.0 candidate archive.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -830,7 +830,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {

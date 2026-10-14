@@ -1,0 +1,49 @@
+import { execFile } from 'node:child_process';
+export const defaultCommandRunner = {
+    run(file, args, options = {}) {
+        return new Promise((resolve) => {
+            const started = performance.now();
+            const timeoutMs = options.timeoutMs ?? 15_000;
+            execFile(file, [...args], {
+                env: options.env ?? process.env,
+                timeout: timeoutMs,
+                windowsHide: true,
+                windowsVerbatimArguments: options.windowsVerbatimArguments,
+                maxBuffer: 1024 * 1024,
+            }, (error, stdout, stderr) => {
+                const durationMs = performance.now() - started;
+                resolve({
+                    exitCode: error
+                        ? typeof error.code === 'number'
+                            ? error.code
+                            : 1
+                        : 0,
+                    stdout: String(stdout ?? ''),
+                    stderr: String(stderr ?? ''),
+                    signal: error?.signal ?? null,
+                    // Buffer-limit and spawn errors have string codes, not timeout kills.
+                    timedOut: error?.killed === true &&
+                        typeof error.code !== 'string' &&
+                        error.signal === 'SIGTERM' &&
+                        durationMs >= timeoutMs &&
+                        timeoutMs > 0,
+                    durationMs,
+                });
+            });
+        });
+    },
+};
+/** Batch launchers need cmd.exe; no free-form user text is accepted as shell arguments. */
+export function runResolvedCommand(runner, platform, file, args, env, timeoutMs = 15_000) {
+    if (platform === 'win32' && /\.(cmd|bat)$/i.test(file)) {
+        if (/["%!\r\n]/.test(file) ||
+            args.some((arg) => !/^[a-zA-Z0-9@:/._+-]+$/.test(arg)))
+            throw new Error('Unsafe batch launcher or argument; use an executable instead.');
+        return runner.run('cmd.exe', ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], {
+            env,
+            timeoutMs,
+            windowsVerbatimArguments: true,
+        });
+    }
+    return runner.run(file, args, { env, timeoutMs });
+}

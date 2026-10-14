@@ -1,6 +1,9 @@
 import { type ClaustrumClient, type ClaustrumReporterSource, type EnrollmentTokenFile } from '@cortexkit/claustrum-client';
 import { type ClaustrumLogger } from './errors.js';
-export type ClaustrumScopedClient = Pick<ClaustrumClient, 'listScoped' | 'getScoped' | 'reportAuthFailureScoped' | 'close'>;
+import type { InsulaUsageTransport } from './insula.js';
+export type ClaustrumScopedClient = Pick<ClaustrumClient, 'listScoped' | 'getScoped' | 'reportAuthFailureScoped' | 'close'> & {
+    insula?: InsulaUsageTransport;
+};
 /** The two credential types a plugin's family can hold; routing differs by type. */
 export type VaultCredentialType = 'oauth' | 'api_key';
 /**

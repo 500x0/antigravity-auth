@@ -111,6 +111,7 @@ beforeAll(() => {
   installPacked(piRoot, piPackage, 'pi.tgz')
   for (const name of [
     CLAUSTRUM_CLIENT,
+    '@cortexkit/subc-client',
     '@cortexkit/private-files',
     'xdg-basedir',
     'zod',

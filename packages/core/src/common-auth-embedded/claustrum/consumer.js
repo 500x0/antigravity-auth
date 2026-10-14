@@ -1,8 +1,10 @@
 import { createLogger } from '../logger/index.js';
 import { combineAbortSignals } from '../util/any-signal.js';
 import { ClaustrumScopedCustody, decideScopedRetryAfter401, } from './custody.js';
+import { readClaustrumEnrollmentToken } from './enrollment.js';
 import { ClaustrumConsumerError } from './errors.js';
-import { acceptVaultRoute, declineVaultRoute, readVaultRoster, recordVaultQuota, refreshVaultRoster, vaultRoutingRows, } from './roster.js';
+import { acquireInsulaQuotaSource } from './insula.js';
+import { acceptVaultRoute, declineVaultRoute, readVaultRoster, recordVaultAccountQuota, recordVaultQuota, refreshVaultRoster, vaultRoutingRows, } from './roster.js';
 /**
  * One plugin host's view of its vault accounts. It turns vault credentials
  * into rows for `/routing`, authorizes each physical send with the vault, and
@@ -21,6 +23,7 @@ export class ClaustrumConsumer {
     #roster;
     #timer;
     #started = false;
+    #insula;
     constructor(options) {
         this.#options = options;
         this.#logger = options.logger ?? createLogger('claustrum');
@@ -84,6 +87,9 @@ export class ClaustrumConsumer {
                     now: this.#options.now,
                     logger: this.#logger,
                 });
+                if (this.#options.insula && client.insula) {
+                    this.#insula = acquireInsulaQuotaSource(client.insula, this.#options.tokenPath);
+                }
                 return this.#custody;
             })
                 .finally(() => {
@@ -109,6 +115,8 @@ export class ClaustrumConsumer {
                 this.#roster = undefined;
                 this.#custody?.close();
                 this.#custody = undefined;
+                this.#insula?.release();
+                this.#insula = undefined;
                 return undefined;
             }
             const custody = await this.#getCustody();
@@ -145,6 +153,7 @@ export class ClaustrumConsumer {
         const tick = async () => {
             try {
                 await this.refresh();
+                await this.refreshInsulaQuota();
             }
             catch (error) {
                 if (!this.#shutdown.signal.aborted)
@@ -162,6 +171,72 @@ export class ClaustrumConsumer {
             this.#timer.unref?.();
         };
         void tick();
+    }
+    /**
+     * Fetch on a background tick, at most once per minute across projects with
+     * the same daemon and enrollment token path. Admission must use the cache
+     * instead, so an optional quota daemon never delays a provider request.
+     */
+    async refreshInsulaQuota() {
+        if (!this.#options.insula ||
+            this.#shutdown.signal.aborted ||
+            !(await this.#active()))
+            return;
+        try {
+            await readClaustrumEnrollmentToken(this.#options.tokenPath);
+            await this.#getCustody();
+            await this.#insula?.source.refresh((this.#options.now ?? Date.now)());
+        }
+        catch {
+            // An optional source must never prevent the plugin's own quota poll.
+        }
+    }
+    /**
+     * Cache-only, for unknown-quota admission with a served receipt. Undefined
+     * means poll the provider normally. Only get_scoped's asserted account_id
+     * joins insula; parsed identities and display metadata cannot substitute.
+     * Background polling should use cachedInsulaQuotaForRoute instead.
+     */
+    async cachedInsulaQuota(receipt) {
+        if (!this.#options.insula ||
+            this.#shutdown.signal.aborted ||
+            !(await this.#active()))
+            return undefined;
+        try {
+            await readClaustrumEnrollmentToken(this.#options.tokenPath);
+            return this.#normalizeInsulaQuota(receipt.assertedAccountIdentity);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    /**
+     * Background cache lookup without fetching a credential. Re-read the roster
+     * so a peer's account replacement invalidates the old route immediately.
+     * A route without a known provider account cannot join an insula entry.
+     */
+    async cachedInsulaQuotaForRoute(routeId) {
+        if (!this.#options.insula ||
+            this.#shutdown.signal.aborted ||
+            !(await this.#active()))
+            return undefined;
+        try {
+            await readClaustrumEnrollmentToken(this.#options.tokenPath);
+            const roster = await readVaultRoster(this.#options.rosterPath);
+            const row = roster?.rows.find((entry) => entry.routeId === routeId);
+            return this.#normalizeInsulaQuota(row?.accountIdentity);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    #normalizeInsulaQuota(accountIdentity) {
+        if (!this.#options.insula || !accountIdentity)
+            return undefined;
+        const current = this.#insula?.source.current(this.#options.insula.provider, accountIdentity, (this.#options.now ?? Date.now)());
+        return current
+            ? this.#options.insula.normalize(current.entry, current.context)
+            : undefined;
     }
     /**
      * Authorize one physical send on a vault route. The roster file is re-read
@@ -285,6 +360,24 @@ export class ClaustrumConsumer {
             this.#roster = await readVaultRoster(this.#options.rosterPath);
         return kept;
     }
+    /**
+     * Store a background observation that belongs to an account rather than to
+     * a served credential (an insula reading from `cachedInsulaQuotaForRoute`).
+     * It lands only while the route is still bound to that known account, so no
+     * credential fetch is needed and a replaced account's reading is dropped.
+     * The in-memory roster is reloaded from the file, without a vault call.
+     */
+    async recordAccountQuota(routeId, accountIdentity, observation) {
+        this.#assertOpen();
+        const kept = await recordVaultAccountQuota(this.#options.rosterPath, {
+            routeId,
+            accountIdentity,
+            observation,
+        });
+        if (kept)
+            this.#roster = await readVaultRoster(this.#options.rosterPath);
+        return kept;
+    }
     close() {
         if (this.#shutdown.signal.aborted)
             return;
@@ -293,6 +386,8 @@ export class ClaustrumConsumer {
             (this.#options.clearTimeoutImpl ?? clearTimeout)(this.#timer);
         this.#timer = undefined;
         this.#custody?.close();
+        this.#insula?.release();
+        this.#insula = undefined;
         this.#roster = undefined;
     }
 }
