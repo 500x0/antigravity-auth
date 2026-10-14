@@ -21,6 +21,37 @@ import { parse } from 'jsonc-parser'
 import ts from 'typescript'
 import { embedCommonAuth, sha256 } from './embed-common-auth'
 
+const phaseClockKey = Symbol.for('cortexkit.build-phase-clock')
+type PhaseClockHooks = {
+  phase: <T>(name: string, action: () => Promise<T>) => Promise<T>
+  sync: <T>(name: string, action: () => T) => T
+  note: (name: string, detail: string) => void
+}
+function phaseClockHooks() {
+  return (
+    globalThis as typeof globalThis & {
+      [key: symbol]: PhaseClockHooks | undefined
+    }
+  )[phaseClockKey]
+}
+
+// Hermetic build fixtures copy this script without repository-root test helpers.
+// Tests may install clock hooks; copied builds need no repository-root clock helper.
+export function buildPhase<T>(
+  name: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const hooks = phaseClockHooks()
+  return hooks ? hooks.phase(name, action) : action()
+}
+export function buildSyncPhase<T>(name: string, action: () => T): T {
+  const hooks = phaseClockHooks()
+  return hooks ? hooks.sync(name, action) : action()
+}
+export function buildPhaseNote(name: string, detail: string) {
+  phaseClockHooks()?.note(name, detail)
+}
+
 export const PACKAGE_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -207,7 +238,9 @@ export async function auditGraph(
     files.add(path)
     const source = ts.createSourceFile(
       path,
-      await readFile(path, 'utf8'),
+      await buildPhase(`auditGraph.readFile ${path}`, () =>
+        readFile(path, 'utf8'),
+      ),
       ts.ScriptTarget.Latest,
       true,
     )
@@ -320,7 +353,7 @@ export async function auditGraph(
           throw new Error(
             `graph: missing relative import ${specifier} in ${path}`,
           )
-        await visit(target)
+        await buildPhase(`auditGraph.visit ${target}`, () => visit(target))
       } else {
         if (isAbsolute(specifier) || specifier.startsWith('file:'))
           throw new Error(`graph: absolute import ${specifier}`)
@@ -329,20 +362,34 @@ export async function auditGraph(
       }
     }
   }
-  await visit(entry)
+  await buildPhase(`auditGraph.visit entry ${entry}`, () => visit(entry))
   return { files: [...files].sort(), externals: [...externals].sort() }
 }
 
 export async function verifyPrerequisites(): Promise<void> {
   if (Bun.version !== '1.4.2')
     throw new Error('build.prerequisite_order: requires Bun 1.4.2')
-  await embedCommonAuth(REPO_ROOT, true)
-  if (sha256(await readFile(join(TOOL_ROOT, 'bun.lock'))) !== LOCK_HASH)
+  await buildPhase('prerequisites.embedCommonAuth check', () =>
+    embedCommonAuth(REPO_ROOT, true),
+  )
+  if (
+    sha256(
+      await buildPhase('prerequisites.readFile lock bytes', () =>
+        readFile(join(TOOL_ROOT, 'bun.lock')),
+      ),
+    ) !== LOCK_HASH
+  )
     throw new Error('build.prerequisite_order: private Bun lock mismatch')
   const manifest = JSON.parse(
-    await readFile(join(TOOL_ROOT, 'package.json'), 'utf8'),
+    await buildPhase('prerequisites.readFile manifest', () =>
+      readFile(join(TOOL_ROOT, 'package.json'), 'utf8'),
+    ),
   )
-  const lock = parse(await readFile(join(TOOL_ROOT, 'bun.lock'), 'utf8'))
+  const lock = parse(
+    await buildPhase('prerequisites.readFile lock text', () =>
+      readFile(join(TOOL_ROOT, 'bun.lock'), 'utf8'),
+    ),
+  )
   if (
     JSON.stringify(manifest.dependencies) !==
     JSON.stringify(lock.workspaces[''].dependencies)
@@ -368,7 +415,11 @@ export async function verifyPrerequisites(): Promise<void> {
     const actual = realpathSync(path)
     if (!actual.startsWith(`${realpathSync(TOOL_ROOT)}/node_modules/`))
       throw new Error(`build.prerequisite_order: private root escaped ${name}`)
-    const pkg = JSON.parse(await readFile(actual, 'utf8'))
+    const pkg = JSON.parse(
+      await buildPhase(`prerequisites.readFile ${actual}`, () =>
+        readFile(actual, 'utf8'),
+      ),
+    )
     const expected =
       name === '@cortexkit/common-auth'
         ? '@cortexkit/common-auth@inputs/cortexkit-common-auth-0.16.0.tgz'
@@ -421,12 +472,16 @@ export async function checkEmbeddedTypes(): Promise<void> {
 
 export async function inventory(directory: string): Promise<string[]> {
   const result: string[] = []
-  for (const item of await readdir(directory, { withFileTypes: true })) {
+  for (const item of await buildPhase(`inventory.readdir ${directory}`, () =>
+    readdir(directory, { withFileTypes: true }),
+  )) {
     if (item.isDirectory())
       result.push(
-        ...(await inventory(join(directory, item.name))).map(
-          (path) => `${item.name}/${path}`,
-        ),
+        ...(
+          await buildPhase(`inventory.descend ${item.name}`, () =>
+            inventory(join(directory, item.name)),
+          )
+        ).map((path) => `${item.name}/${path}`),
       )
     else if (item.isFile()) result.push(item.name)
     else throw new Error(`artifact: nonregular ${join(directory, item.name)}`)
@@ -438,33 +493,57 @@ export async function verifySelectors(
   packageRoot: string,
   root: TuiRoot = V1_TUI_ROOT,
 ): Promise<void> {
-  const canonical = await readFile(
-    join(REPO_ROOT, 'packages/opencode/src/common-auth-embedded/tui/index.js'),
+  const canonical = await buildPhase('selectors.readFile canonical', () =>
+    readFile(
+      join(
+        REPO_ROOT,
+        'packages/opencode/src/common-auth-embedded/tui/index.js',
+      ),
+    ),
   )
   for (const [tree, entry] of [
     [root.raw, root.rawEntry],
     [root.runtime, root.runtimeEntry],
   ] as const) {
     if (
-      !(await readFile(join(packageRoot, tree, 'selector.js'))).equals(
-        canonical,
-      )
+      !(
+        await buildPhase(`selectors.readFile ${tree}/selector.js`, () =>
+          readFile(join(packageRoot, tree, 'selector.js')),
+        )
+      ).equals(canonical)
     )
       throw new Error(
         `build.selector_inert: ${tree.slice('src/'.length)}/selector.js differs from canonical`,
       )
-    const graph = await auditGraph(join(packageRoot, tree, entry))
+    const graph = await buildPhase(
+      `selectors.auditGraph ${tree}/${entry}`,
+      () => auditGraph(join(packageRoot, tree, entry)),
+    )
     if (graph.files.some((path) => path.endsWith('/selector.js')))
       throw new Error('build.selector_inert: imported selector copy')
   }
 }
 
 function run(command: string, args: string[], cwd = PACKAGE_ROOT) {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: 'utf8',
-    timeout: 120000,
-  })
+  const result = buildSyncPhase(
+    `child spawn: ${command} ${args.join(' ')} (cwd ${cwd})`,
+    () =>
+      spawnSync(command, args, {
+        cwd,
+        encoding: 'utf8',
+        timeout: 120000,
+      }),
+  )
+  buildPhaseNote(
+    'child exit',
+    JSON.stringify({
+      command,
+      pid: result.pid,
+      status: result.status,
+      signal: result.signal,
+      error: String(result.error ?? ''),
+    }),
+  )
   if (result.status !== 0)
     throw new Error(
       `${command} ${args.join(' ')} refused: ${result.error ?? result.stderr ?? result.stdout}`,
@@ -479,7 +558,9 @@ export async function buildTui({
   packageRoot?: string
   root?: TuiRoot
 } = {}): Promise<TuiMap> {
-  packageRoot = await admitProductPaths(packageRoot)
+  packageRoot = await buildPhase('buildTui.admitProductPaths', () =>
+    admitProductPaths(packageRoot),
+  )
   const entry = root.entry
   const entryRelative = relative(packageRoot, resolve(packageRoot, entry))
   if (entryRelative.startsWith('..') || isAbsolute(entryRelative))
@@ -489,14 +570,22 @@ export async function buildTui({
   const mapFile = join(packageRoot, root.map)
   const ga = root.name === 'ga'
   try {
-    await verifyPrerequisites()
-    const source = await auditGraph(join(packageRoot, entry))
-    const types = await auditGraph(join(packageRoot, entry), { types: true })
+    await buildPhase('buildTui.verifyPrerequisites', () =>
+      verifyPrerequisites(),
+    )
+    const source = await buildPhase(`buildTui.auditGraph source ${entry}`, () =>
+      auditGraph(join(packageRoot, entry)),
+    )
+    const types = await buildPhase(`buildTui.auditGraph types ${entry}`, () =>
+      auditGraph(join(packageRoot, entry), { types: true }),
+    )
     if (ga) {
       checkGaGraph(source, 'source')
       checkGaGraph(types, 'source')
     }
-    await mkdir(join(packageRoot, 'dist'), { recursive: true })
+    await buildPhase('buildTui.mkdir dist', () =>
+      mkdir(join(packageRoot, 'dist'), { recursive: true }),
+    )
     run(
       process.execPath,
       [
@@ -514,8 +603,14 @@ export async function buildTui({
       ],
       packageRoot,
     )
-    await verifySelectors(packageRoot, root)
-    const map: TuiMap = JSON.parse(await readFile(mapFile, 'utf8'))
+    await buildPhase('buildTui.verifySelectors', () =>
+      verifySelectors(packageRoot, root),
+    )
+    const map: TuiMap = JSON.parse(
+      await buildPhase(`buildTui.readFile ${root.map}`, () =>
+        readFile(mapFile, 'utf8'),
+      ),
+    )
     for (const [variant, tree] of [
       [map.raw, raw],
       [map.runtime, runtime],
@@ -523,14 +618,24 @@ export async function buildTui({
       const outputs = variant.files
         .map((file) => portable(relative(tree, join(packageRoot, file.output))))
         .sort()
-      if (JSON.stringify(outputs) !== JSON.stringify(await inventory(tree)))
+      if (
+        JSON.stringify(outputs) !==
+        JSON.stringify(
+          await buildPhase(`buildTui.inventory ${tree}`, () => inventory(tree)),
+        )
+      )
         throw new Error('graph: emitted inventory mismatch')
       for (const file of variant.files) {
-        const bytes = await readFile(join(packageRoot, file.output))
+        const bytes = await buildPhase(`buildTui.readFile ${file.output}`, () =>
+          readFile(join(packageRoot, file.output)),
+        )
         if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256)
           throw new Error(`graph: emitted hash mismatch ${file.output}`)
         if (!file.output.endsWith('/selector.js')) {
-          const emitted = await auditGraph(join(packageRoot, file.output))
+          const emitted = await buildPhase(
+            `buildTui.auditGraph emitted ${file.output}`,
+            () => auditGraph(join(packageRoot, file.output)),
+          )
           if (ga) checkGaGraph(emitted, variant === map.raw ? 'raw' : 'runtime')
         }
       }
@@ -538,9 +643,13 @@ export async function buildTui({
     }
     return map
   } catch (error) {
-    await Promise.all(
-      [raw, runtime, mapFile].map((path) =>
-        rm(path, { force: true, recursive: true }),
+    await buildPhase('buildTui.failure cleanup', () =>
+      Promise.all(
+        [raw, runtime, mapFile].map((path) =>
+          buildPhase(`buildTui.rm ${path}`, () =>
+            rm(path, { force: true, recursive: true }),
+          ),
+        ),
       ),
     )
     throw error
@@ -557,15 +666,24 @@ export async function buildTuiRoots({
   const maps = {} as Record<TuiRoot['name'], TuiMap>
   // Admission runs before the try: a refused (unowned or aliased) output path
   // must survive, so cleanup only follows a build that was admitted.
-  const admitted = await admitProductPaths(packageRoot)
+  const admitted = await buildPhase('buildTuiRoots.admitProductPaths', () =>
+    admitProductPaths(packageRoot),
+  )
   try {
     for (const root of TUI_ROOTS)
-      maps[root.name] = await buildTui({ packageRoot: admitted, root })
+      maps[root.name] = await buildPhase(`buildTuiRoots.${root.name}`, () =>
+        buildTui({ packageRoot: admitted, root }),
+      )
     return maps
   } catch (error) {
-    await Promise.all(
-      TUI_ROOTS.flatMap((root) => [root.raw, root.runtime, root.map]).map(
-        (path) => rm(join(admitted, path), { recursive: true, force: true }),
+    await buildPhase('buildTuiRoots.failure cleanup', () =>
+      Promise.all(
+        TUI_ROOTS.flatMap((root) => [root.raw, root.runtime, root.map]).map(
+          (path) =>
+            buildPhase(`buildTuiRoots.rm ${path}`, () =>
+              rm(join(admitted, path), { recursive: true, force: true }),
+            ),
+        ),
       ),
     )
     throw error
@@ -591,32 +709,36 @@ export function checkMetafile(meta: {
 
 /** Reject linked output paths and maps outside the generated format before cleanup. These checks do not lock paths against concurrent changes. */
 async function admitProductPaths(packageRoot: string) {
-  const root = await realpath(packageRoot)
+  const root = await buildPhase(`admission.realpath ${packageRoot}`, () =>
+    realpath(packageRoot),
+  )
   for (const name of [
     'src',
     'dist',
     ...TUI_ROOTS.flatMap((root) => [root.raw, root.runtime]),
   ]) {
-    const info = await lstat(join(root, name)).catch(
-      (error: NodeJS.ErrnoException) => {
+    const info = await buildPhase(`admission.lstat ${name}`, () =>
+      lstat(join(root, name)).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') throw error
         return undefined
-      },
+      }),
     )
     if (info && (!info.isDirectory() || info.isSymbolicLink()))
       throw new Error(`build: output directory alias refused ${name}`)
   }
   for (const tuiRoot of TUI_ROOTS)
-    await admitExistingMap(join(root, tuiRoot.map))
+    await buildPhase(`admission.map ${tuiRoot.map}`, () =>
+      admitExistingMap(join(root, tuiRoot.map)),
+    )
   return root
 }
 
 async function admitExistingMap(mapFile: string) {
-  const existingMap = await lstat(mapFile).catch(
-    (error: NodeJS.ErrnoException) => {
+  const existingMap = await buildPhase(`admission.lstat map ${mapFile}`, () =>
+    lstat(mapFile).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
       return undefined
-    },
+    }),
   )
   if (existingMap) {
     if (
@@ -627,7 +749,11 @@ async function admitExistingMap(mapFile: string) {
       throw new Error('build: TUI map must be a regular unaliased file')
     let metadata: unknown
     try {
-      metadata = JSON.parse(await readFile(mapFile, 'utf8'))
+      metadata = JSON.parse(
+        await buildPhase(`admission.readFile map ${mapFile}`, () =>
+          readFile(mapFile, 'utf8'),
+        ),
+      )
     } catch {
       throw new Error('build: existing TUI map is not owned generated metadata')
     }

@@ -17,6 +17,10 @@ import { pathToFileURL } from 'node:url'
 import { build as bundle } from 'esbuild'
 import ts from 'typescript'
 import {
+  buildPhase,
+  withBuildPhaseClock,
+} from '../../../scripts/build-phase-clock.ts'
+import {
   auditGraph,
   BUNDLE_EXTERNALS,
   buildLibrary,
@@ -40,21 +44,29 @@ let product: string
 let serial = 0
 async function fixture(full = false) {
   const root = join(owned, `package-${serial++}`)
-  await mkdir(join(root, 'src'), { recursive: true })
+  await buildPhase('fixture.mkdir src', () =>
+    mkdir(join(root, 'src'), { recursive: true }),
+  )
   const pkg = JSON.parse(
-    await readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8'),
+    await buildPhase('fixture.readFile manifest', () =>
+      readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8'),
+    ),
   )
   if (full) {
-    for (const name of await readdir(join(PACKAGE_ROOT, 'src'))) {
+    for (const name of await buildPhase('fixture.readdir src', () =>
+      readdir(join(PACKAGE_ROOT, 'src')),
+    )) {
       if (
         ['tui-raw', 'tui-compiled', 'tui-ga-raw', 'tui-ga-compiled'].includes(
           name,
         )
       )
         continue
-      await cp(join(PACKAGE_ROOT, 'src', name), join(root, 'src', name), {
-        recursive: true,
-      })
+      await buildPhase(`fixture.cp src/${name}`, () =>
+        cp(join(PACKAGE_ROOT, 'src', name), join(root, 'src', name), {
+          recursive: true,
+        }),
+      )
     }
     for (const name of [
       'index.ts',
@@ -63,7 +75,9 @@ async function fixture(full = false) {
       'README.md',
       'LICENSE',
     ])
-      await cp(join(PACKAGE_ROOT, name), join(root, name))
+      await buildPhase(`fixture.cp ${name}`, () =>
+        cp(join(PACKAGE_ROOT, name), join(root, name)),
+      )
     const config = ts.readConfigFile(
       join(root, 'tsconfig.json'),
       ts.sys.readFile,
@@ -71,38 +85,64 @@ async function fixture(full = false) {
     // The copied package config needs the real @types/bun and @types/node declarations.
     // This nested fixture has no ambient-types install, so use their installed worktree copies.
     config.compilerOptions.typeRoots = [join(repo, 'node_modules/@types')]
-    await writeFile(join(root, 'tsconfig.json'), JSON.stringify(config))
-  } else
-    await writeFile(
-      join(root, 'src/tui.tsx'),
-      'export default { id: "owned", tui: () => <text>owned</text> }\n',
+    await buildPhase('fixture.writeFile tsconfig', () =>
+      writeFile(join(root, 'tsconfig.json'), JSON.stringify(config)),
     )
-  await writeFile(
-    join(root, 'package.json'),
-    JSON.stringify({
-      name: 'owned-tui-build',
-      version: '1.0.0',
-      type: 'module',
-      files: pkg.files,
-    }),
+  } else
+    await buildPhase('fixture.writeFile entry', () =>
+      writeFile(
+        join(root, 'src/tui.tsx'),
+        'export default { id: "owned", tui: () => <text>owned</text> }\n',
+      ),
+    )
+  await buildPhase('fixture.writeFile manifest', () =>
+    writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: 'owned-tui-build',
+        version: '1.0.0',
+        type: 'module',
+        files: pkg.files,
+      }),
+    ),
   )
   return root
 }
 async function hashes(root: string, tree: string) {
   return Promise.all(
-    (await inventory(join(root, tree))).map(async (path) => [
+    (
+      await buildPhase(`hashes.inventory ${tree}`, () =>
+        inventory(join(root, tree)),
+      )
+    ).map(async (path) => [
       path,
-      sha256(await readFile(join(root, tree, path))),
+      sha256(
+        await buildPhase(`hashes.readFile ${tree}/${path}`, () =>
+          readFile(join(root, tree, path)),
+        ),
+      ),
     ]),
   )
 }
-beforeAll(async () => {
-  await mkdir(join(PACKAGE_ROOT, 'src/tui-raw'), { recursive: true })
-  owned = await mkdtemp(join(PACKAGE_ROOT, 'src/tui-raw/.checks-'))
-  await verifyPrerequisites()
-  product = await fixture(true)
-  await buildTuiRoots({ packageRoot: product })
-}, 120000)
+beforeAll(
+  async () =>
+    withBuildPhaseClock('build.beforeAll', 120000, async () => {
+      await buildPhase('beforeAll.mkdir fixture parent', () =>
+        mkdir(join(PACKAGE_ROOT, 'src/tui-raw'), { recursive: true }),
+      )
+      owned = await buildPhase('beforeAll.mkdtemp', () =>
+        mkdtemp(join(PACKAGE_ROOT, 'src/tui-raw/.checks-')),
+      )
+      await buildPhase('beforeAll.verifyPrerequisites', () =>
+        verifyPrerequisites(),
+      )
+      product = await buildPhase('beforeAll.fixture full', () => fixture(true))
+      await buildPhase('beforeAll.buildTuiRoots', () =>
+        buildTuiRoots({ packageRoot: product }),
+      )
+    }),
+  120000,
+)
 afterAll(async () => {
   if (owned) await rm(owned, { recursive: true, force: true })
 })
@@ -330,20 +370,42 @@ test('graph.server_cli', async () => {
   ).toThrow('forbidden compiler/common edge')
 })
 
-test('build.product_two_roots', async () => {
-  const second = await fixture(true)
-  const link = join(owned, 'linked-product')
-  await symlink(second, link, 'dir')
-  await buildTui({ packageRoot: link })
-  for (const tree of ['src/tui-raw', 'src/tui-compiled']) {
-    expect(await hashes(second, tree)).toEqual(await hashes(product, tree))
-    for (const path of await inventory(join(second, tree))) {
-      const code = await readFile(join(second, tree, path), 'utf8')
-      expect(code).not.toContain(PACKAGE_ROOT)
-      expect(code).not.toContain(owned)
-    }
-  }
-}, 120000)
+test(
+  'build.product_two_roots',
+  async () =>
+    withBuildPhaseClock('build.product_two_roots', 120000, async () => {
+      const second = await buildPhase('product.fixture full', () =>
+        fixture(true),
+      )
+      const link = join(owned, 'linked-product')
+      await buildPhase('product.symlink', () => symlink(second, link, 'dir'))
+      await buildPhase('product.buildTui', () =>
+        buildTui({ packageRoot: link }),
+      )
+      for (const tree of ['src/tui-raw', 'src/tui-compiled']) {
+        expect(
+          await buildPhase(`product.hashes ${tree} second`, () =>
+            hashes(second, tree),
+          ),
+        ).toEqual(
+          await buildPhase(`product.hashes ${tree} first`, () =>
+            hashes(product, tree),
+          ),
+        )
+        for (const path of await buildPhase(`product.inventory ${tree}`, () =>
+          inventory(join(second, tree)),
+        )) {
+          const code = await buildPhase(
+            `product.readFile ${tree}/${path}`,
+            () => readFile(join(second, tree, path), 'utf8'),
+          )
+          expect(code).not.toContain(PACKAGE_ROOT)
+          expect(code).not.toContain(owned)
+        }
+      }
+    }),
+  120000,
+)
 
 test('build.public_faults', async () => {
   const root = await fixture()

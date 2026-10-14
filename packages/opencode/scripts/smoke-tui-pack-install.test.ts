@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'bun:test'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildPhase,
+  buildPhaseNote,
+  withBuildPhaseClock,
+} from '../../../scripts/build-phase-clock.ts'
+import {
   assertVaultClientGraph,
   baselineRevision,
-  baseline as buildBaseline,
   expectedCandidateGraph,
   installResolution,
 } from './smoke-tui-pack-install.ts'
@@ -48,34 +53,99 @@ describe('packed vault-client copies', () => {
 })
 
 describe('historical baseline build', () => {
-  it('archives the baseline core revision and bundles against that core', async () => {
-    expect(baselineRevision).toBe('45625093922278e7d8f1f1415df42bbc0ca1883e')
-
-    const workspace = await mkdtemp(join(tmpdir(), 'smoke-tui-baseline-'))
-    try {
-      const packageRoot = await buildBaseline(workspace)
-      const coreRoot = join(workspace, 'baseline/packages/core')
-      const coreLink = join(
-        packageRoot,
-        'node_modules/@cortexkit/antigravity-auth-core',
-      )
-      expect(await realpath(coreLink)).toBe(await realpath(coreRoot))
-      expect(
-        JSON.parse(await readFile(join(coreRoot, 'package.json'), 'utf8'))
-          .version,
-      ).toBe('2.2.1')
-
-      for (const entry of ['index', 'cli']) {
-        const bundle = await readFile(
-          join(packageRoot, 'dist', `${entry}.js`),
-          'utf8',
+  it(
+    'archives the baseline core revision and bundles against that core',
+    async () =>
+      withBuildPhaseClock('historical baseline build', 30_000, async () => {
+        expect(baselineRevision).toBe(
+          '45625093922278e7d8f1f1415df42bbc0ca1883e',
         )
-        expect(bundle).not.toContain('isGeminiArgonModel')
-      }
-    } finally {
-      await rm(workspace, { force: true, recursive: true })
-    }
-  }, 30_000)
+
+        const workspace = await buildPhase('baseline test.mkdtemp', () =>
+          mkdtemp(join(tmpdir(), 'smoke-tui-baseline-')),
+        )
+        try {
+          // The baseline helper uses synchronous children. Run it in a separate Bun
+          // process to keep those waits out of the isolated unit-test worker, while
+          // preserving the archive/core/bundle assertions below.
+          let childPid: number | undefined
+          const builderPid = await buildPhase(
+            'baseline test.child baseline build',
+            () =>
+              new Promise<number>((resolve, reject) => {
+                const child = execFile(
+                  process.execPath,
+                  [
+                    '-e',
+                    `import { baseline } from ${JSON.stringify(import.meta.resolve('./smoke-tui-pack-install.ts'))}; import { withBuildPhaseClock } from ${JSON.stringify(import.meta.resolve('../../../scripts/build-phase-clock.ts'))}; await withBuildPhaseClock('historical baseline child', 30000, () => baseline(${JSON.stringify(workspace)})); console.log(JSON.stringify({ baselineBuilder: process.pid })); process.exit(0);`,
+                  ],
+                  { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+                  (error, stdout) => {
+                    if (error) reject(error)
+                    else {
+                      try {
+                        resolve(JSON.parse(stdout).baselineBuilder)
+                      } catch (error) {
+                        reject(error)
+                      }
+                    }
+                  },
+                )
+                childPid = child.pid
+                buildPhaseNote(
+                  'child spawn baseline builder',
+                  JSON.stringify({ pid: child.pid, command: process.execPath }),
+                )
+                child.once('exit', (status, signal) =>
+                  buildPhaseNote(
+                    'child exit baseline builder',
+                    JSON.stringify({ pid: child.pid, status, signal }),
+                  ),
+                )
+              }),
+          )
+          expect(builderPid).not.toBe(process.pid)
+          if (childPid === undefined)
+            throw new Error('baseline builder PID unavailable')
+          expect(builderPid).toBe(childPid)
+          const packageRoot = join(workspace, 'baseline/packages/opencode')
+          const coreRoot = join(workspace, 'baseline/packages/core')
+          const coreLink = join(
+            packageRoot,
+            'node_modules/@cortexkit/antigravity-auth-core',
+          )
+          expect(
+            await buildPhase('baseline test.realpath core link', () =>
+              realpath(coreLink),
+            ),
+          ).toBe(
+            await buildPhase('baseline test.realpath archived core', () =>
+              realpath(coreRoot),
+            ),
+          )
+          expect(
+            JSON.parse(
+              await buildPhase('baseline test.readFile core manifest', () =>
+                readFile(join(coreRoot, 'package.json'), 'utf8'),
+              ),
+            ).version,
+          ).toBe('2.2.1')
+
+          for (const entry of ['index', 'cli']) {
+            const bundle = await buildPhase(
+              `baseline test.readFile bundle ${entry}`,
+              () => readFile(join(packageRoot, 'dist', `${entry}.js`), 'utf8'),
+            )
+            expect(bundle).not.toContain('isGeminiArgonModel')
+          }
+        } finally {
+          await buildPhase('baseline test.rm workspace', () =>
+            rm(workspace, { force: true, recursive: true }),
+          )
+        }
+      }),
+    30_000,
+  )
 })
 const baseline = () => [
   [

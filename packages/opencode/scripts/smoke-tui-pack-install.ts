@@ -15,6 +15,9 @@ import { build as bundle } from 'esbuild'
 import sourceManifest from '../package.json'
 import {
   auditGraph,
+  buildPhase,
+  buildPhaseNote,
+  buildSyncPhase,
   checkGaGraph,
   inventory,
   PACKAGE_ROOT,
@@ -33,13 +36,27 @@ function run(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const result = spawnSync(command, args, {
-    cwd,
-    env,
-    encoding: 'utf8',
-    timeout: 180000,
-    maxBuffer: 16 * 1024 * 1024,
-  })
+  const result = buildSyncPhase(
+    `child spawn: ${command} ${args.join(' ')} (cwd ${cwd})`,
+    () =>
+      spawnSync(command, args, {
+        cwd,
+        env,
+        encoding: 'utf8',
+        timeout: 180000,
+        maxBuffer: 16 * 1024 * 1024,
+      }),
+  )
+  buildPhaseNote(
+    'child exit',
+    JSON.stringify({
+      command,
+      pid: result.pid,
+      status: result.status,
+      signal: result.signal,
+      error: String(result.error ?? ''),
+    }),
+  )
   if (result.status !== 0)
     throw new Error(
       `${command} ${args.join(' ')} failed (${result.status}): ${result.error ?? ''}\n${result.stdout}\n${result.stderr}`,
@@ -317,7 +334,7 @@ async function installedGraph(root: string, prefix = ''): Promise<unknown[]> {
 
 export async function baseline(workspace: string) {
   const root = join(workspace, 'baseline')
-  await mkdir(root)
+  await buildPhase('baseline.mkdir', () => mkdir(root))
   const archive = join(root, 'source.tar')
   run(
     'git',
@@ -334,12 +351,16 @@ export async function baseline(workspace: string) {
   run('tar', ['-xf', archive, '-C', root], repo)
   const packageRoot = join(root, 'packages/opencode')
   const coreRoot = join(root, 'packages/core')
-  await symlink(
-    join(repo, 'packages/core/node_modules'),
-    join(coreRoot, 'node_modules'),
-    'dir',
+  await buildPhase('baseline.link core dependencies', () =>
+    symlink(
+      join(repo, 'packages/core/node_modules'),
+      join(coreRoot, 'node_modules'),
+      'dir',
+    ),
   )
-  await symlink(join(repo, 'node_modules'), join(root, 'node_modules'), 'dir')
+  await buildPhase('baseline.link root dependencies', () =>
+    symlink(join(repo, 'node_modules'), join(root, 'node_modules'), 'dir'),
+  )
   run(
     join(repo, 'node_modules/.bin/tsc'),
     ['-p', 'tsconfig.build.json'],
@@ -352,23 +373,35 @@ export async function baseline(workspace: string) {
   // current workspace's node_modules links.
   const packageModules = join(packageRoot, 'node_modules')
   const currentPackageModules = join(PACKAGE_ROOT, 'node_modules')
-  await mkdir(packageModules)
-  for (const name of await readdir(currentPackageModules)) {
+  await buildPhase('baseline.mkdir dependency overlay', () =>
+    mkdir(packageModules),
+  )
+  for (const name of await buildPhase(
+    'baseline.readdir current dependencies',
+    () => readdir(currentPackageModules),
+  )) {
     const source = join(currentPackageModules, name)
     const target = join(packageModules, name)
     if (name !== '@cortexkit') {
-      await symlink(source, target, 'dir')
+      await buildPhase(`baseline.link dependency ${name}`, () =>
+        symlink(source, target, 'dir'),
+      )
       continue
     }
 
-    await mkdir(target)
-    for (const scopedName of await readdir(source))
-      await symlink(
-        scopedName === 'antigravity-auth-core'
-          ? coreRoot
-          : join(source, scopedName),
-        join(target, scopedName),
-        'dir',
+    await buildPhase(`baseline.mkdir scope ${name}`, () => mkdir(target))
+    for (const scopedName of await buildPhase(
+      `baseline.readdir scope ${name}`,
+      () => readdir(source),
+    ))
+      await buildPhase(`baseline.link dependency ${name}/${scopedName}`, () =>
+        symlink(
+          scopedName === 'antigravity-auth-core'
+            ? coreRoot
+            : join(source, scopedName),
+          join(target, scopedName),
+          'dir',
+        ),
       )
   }
 
@@ -381,16 +414,18 @@ export async function baseline(workspace: string) {
     ['index.ts', 'index'],
     ['src/cli.ts', 'cli'],
   ] as const)
-    await bundle({
-      absWorkingDir: packageRoot,
-      entryPoints: [entry],
-      outfile: `dist/${name}.js`,
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      external: ['zod'],
-      banner: name === 'cli' ? { js: '#!/usr/bin/env node' } : undefined,
-    })
+    await buildPhase(`baseline.esbuild ${entry}`, () =>
+      bundle({
+        absWorkingDir: packageRoot,
+        entryPoints: [entry],
+        outfile: `dist/${name}.js`,
+        bundle: true,
+        platform: 'node',
+        format: 'esm',
+        external: ['zod'],
+        banner: name === 'cli' ? { js: '#!/usr/bin/env node' } : undefined,
+      }),
+    )
   run('bun', ['scripts/build-tui.ts'], packageRoot)
   return packageRoot
 }
