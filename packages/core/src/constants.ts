@@ -61,13 +61,6 @@ export const ANTIGRAVITY_LOAD_ENDPOINTS = [
 export const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_ENDPOINT_DAILY
 
 /**
- * Gemini CLI endpoint (production).
- * Used for models without :antigravity suffix.
- * Same as opencode-gemini-auth's GEMINI_CODE_ASSIST_ENDPOINT.
- */
-export const GEMINI_CLI_ENDPOINT = ANTIGRAVITY_ENDPOINT_PROD
-
-/**
  * Hardcoded project id used when Antigravity does not return one (e.g., business/workspace accounts).
  */
 export const ANTIGRAVITY_DEFAULT_PROJECT_ID = 'rising-fact-p41fc'
@@ -121,56 +114,17 @@ export const ANTIGRAVITY_HEADERS = {
   'Client-Metadata': `{"ideType":"ANTIGRAVITY","platform":"${process.platform === 'win32' ? 'WINDOWS' : 'MACOS'}","pluginType":"GEMINI"}`,
 } as const
 
-export const GEMINI_CLI_VERSION = '1.0.0'
-
-/**
- * Default model used in Gemini CLI User-Agent when no model is specified.
- */
-export const GEMINI_CLI_DEFAULT_MODEL = 'gemini-2.5-pro'
-
-/**
- * Build Gemini CLI User-Agent string matching the official google-gemini/gemini-cli format.
- * Format: `GeminiCLI/{version}/{model} ({platform}; {arch})`
- *
- * @see https://github.com/google-gemini/gemini-cli
- */
-export function buildGeminiCliUserAgent(model?: string): string {
-  const effectiveModel = model || GEMINI_CLI_DEFAULT_MODEL
-  const platform = process.platform || 'darwin'
-  const arch = process.arch || 'arm64'
-  return `GeminiCLI/${GEMINI_CLI_VERSION}/${effectiveModel} (${platform}; ${arch})`
-}
-
-/** @deprecated Use buildGeminiCliUserAgent() for runtime access. */
-export const GEMINI_CLI_HEADERS = {
-  'User-Agent': 'google-api-nodejs-client/9.15.1',
-  'X-Goog-Api-Client': 'gl-node/22.17.0',
-  'Client-Metadata':
-    'ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI',
-} as const
 export type HeaderSet = {
   'User-Agent': string
   'X-Goog-Api-Client'?: string
   'Client-Metadata'?: string
 }
 
-export function getRandomizedHeaders(
-  style: HeaderStyle,
-  model?: string,
-): HeaderSet {
-  if (style === 'gemini-cli') {
-    return {
-      'User-Agent': buildGeminiCliUserAgent(model),
-      'X-Goog-Api-Client': GEMINI_CLI_HEADERS['X-Goog-Api-Client'],
-      'Client-Metadata': GEMINI_CLI_HEADERS['Client-Metadata'],
-    }
-  }
+export function getRandomizedHeaders(): HeaderSet {
   return {
     'User-Agent': buildAntigravityHarnessUserAgent(),
   }
 }
-
-export type HeaderStyle = 'antigravity' | 'gemini-cli'
 
 /**
  * Provider identifier shared between the plugin loader and credential store.

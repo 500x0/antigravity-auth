@@ -8,8 +8,6 @@
 
 import type { Fingerprint, FingerprintVersion } from './fingerprint.ts'
 
-export type { HeaderStyle } from './constants.ts'
-
 /**
  * Coarse routing key for the on-disk account pool. Distinct from the
  * transform-level `ModelFamily` (which carries 'claude' | 'gemini-flash' |
@@ -21,8 +19,7 @@ export type AccountModelFamily = 'claude' | 'gemini'
 
 export interface RateLimitStateV3 {
   claude?: number
-  'gemini-antigravity'?: number
-  'gemini-cli'?: number
+  gemini?: number
   [key: string]: number | undefined
 }
 

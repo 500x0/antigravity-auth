@@ -1,8 +1,5 @@
 import type { AccountModelFamily as ModelFamily } from '@cortexkit/antigravity-auth-core'
-import type { HeaderStyle } from '../constants'
-import type { AntigravityConfig } from './config'
 import type { LocationDebug } from './debug'
-import { resolveModelWithTier } from './transform/model-resolver'
 
 export const MAX_TOTAL_CAPACITY_RETRIES = 4
 export const CAPACITY_BACKOFF_TIERS_MS = [5000, 10000, 20000, 30000, 60000]
@@ -54,11 +51,6 @@ export function extractModelFromUrl(urlString: string): string | null {
   return match?.[1] ?? null
 }
 
-function extractModelFromUrlWithSuffix(urlString: string): string | null {
-  const match = urlString.match(/\/models\/([^:/?]+)/)
-  return match?.[1] ?? null
-}
-
 /**
  * Model family for a request URL. The caller's location debug log, when
  * given, records the decision; this module keeps no debug state of its own.
@@ -76,77 +68,4 @@ export function getModelFamilyFromUrl(
     debug.logModelFamily(urlString, model, family)
   }
   return family
-}
-
-export function resolveQuotaFallbackHeaderStyle(input: {
-  family: ModelFamily
-  headerStyle: HeaderStyle
-  alternateStyle: HeaderStyle | null
-}): HeaderStyle | null {
-  if (input.family !== 'gemini') {
-    return null
-  }
-  if (!input.alternateStyle || input.alternateStyle === input.headerStyle) {
-    return null
-  }
-  return input.alternateStyle
-}
-
-export type HeaderRoutingDecision = {
-  cliFirst: boolean
-  preferredHeaderStyle: HeaderStyle
-  explicitQuota: boolean
-  allowQuotaFallback: boolean
-}
-
-export function resolveHeaderRoutingDecision(
-  urlString: string,
-  family: ModelFamily,
-  config: Partial<AntigravityConfig>,
-): HeaderRoutingDecision {
-  const cliFirst = getCliFirst(config)
-  const preferredHeaderStyle = getHeaderStyleFromUrl(
-    urlString,
-    family,
-    cliFirst,
-  )
-  const explicitQuota = isExplicitQuotaFromUrl(urlString)
-  return {
-    cliFirst,
-    preferredHeaderStyle,
-    explicitQuota,
-    allowQuotaFallback:
-      family === 'gemini' && !!(config.quota_style_fallback ?? false),
-  }
-}
-
-function getCliFirst(config: Partial<AntigravityConfig>): boolean {
-  return config.cli_first ?? false
-}
-
-export function getHeaderStyleFromUrl(
-  urlString: string,
-  family: ModelFamily,
-  cliFirst: boolean = false,
-): HeaderStyle {
-  if (family === 'claude') {
-    return 'antigravity'
-  }
-  const modelWithSuffix = extractModelFromUrlWithSuffix(urlString)
-  if (!modelWithSuffix) {
-    return cliFirst ? 'gemini-cli' : 'antigravity'
-  }
-  const { quotaPreference } = resolveModelWithTier(modelWithSuffix, {
-    cli_first: cliFirst,
-  })
-  return quotaPreference ?? 'antigravity'
-}
-
-export function isExplicitQuotaFromUrl(urlString: string): boolean {
-  const modelWithSuffix = extractModelFromUrlWithSuffix(urlString)
-  if (!modelWithSuffix) {
-    return false
-  }
-  const { explicitQuota } = resolveModelWithTier(modelWithSuffix)
-  return explicitQuota ?? false
 }

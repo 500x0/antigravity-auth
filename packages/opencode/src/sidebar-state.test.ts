@@ -1247,3 +1247,30 @@ describe('quota reading timestamp redaction', () => {
     ).toBeUndefined()
   })
 })
+
+it('normalizes a persisted Gemini CLI route to the stable v2 Antigravity shape', async () => {
+  const fixture = makeFixture()
+  try {
+    const route = {
+      ...makeRouting({ modelFamily: 'gemini' }),
+      headerStyle: 'gemini-cli',
+    }
+    writeFileSync(
+      fixture.stateFile,
+      JSON.stringify({
+        version: 2,
+        updatedAt: 1,
+        accounts: [],
+        activeRouting: { session: route },
+      }),
+    )
+    const state = await readSidebarState(fixture.stateFile)
+    expect(state?.activeRouting?.session).toMatchObject({
+      accountId: 'acct-0',
+      modelFamily: 'gemini',
+      headerStyle: 'antigravity',
+    })
+  } finally {
+    fixture.cleanup()
+  }
+})

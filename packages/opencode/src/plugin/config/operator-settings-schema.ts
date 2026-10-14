@@ -9,10 +9,6 @@
 import { z } from 'zod'
 
 export const OperatorSettingsSchema = z.object({
-  routing: z.object({
-    cli_first: z.boolean(),
-    quota_style_fallback: z.boolean(),
-  }),
   killswitch: z.object({
     enabled: z.boolean(),
     minimum_remaining_percent: z.number().min(0).max(100),
@@ -25,7 +21,6 @@ export type OperatorSettings = z.infer<typeof OperatorSettingsSchema>
 
 export function emptyOperatorSettings(): OperatorSettings {
   return {
-    routing: { cli_first: false, quota_style_fallback: false },
     killswitch: { enabled: false, minimum_remaining_percent: 5 },
     log_level: 'info',
   }

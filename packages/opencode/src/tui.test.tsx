@@ -1733,7 +1733,7 @@ function gaAccount(overrides: Record<string, unknown> = {}) {
 
 function gaSettings(overrides: Record<string, unknown> = {}) {
   return {
-    routing: { cliFirst: false, quotaStyleFallback: false },
+    selectionStrategy: 'hybrid',
     killswitch: { enabled: false, minimumRemainingPercent: 10 },
     logLevel: 'info',
     dump: { enabled: false },
@@ -1780,11 +1780,11 @@ function gaApplied(result: Record<string, unknown>) {
   }
 }
 
-const ROUTING_APPLIED = {
-  command: 'antigravity-routing',
+const KILLSWITCH_APPLIED = {
+  command: 'antigravity-killswitch',
   status: 'applied',
-  text: 'Routing updated.',
-  routing: { cliFirst: true, quotaStyleFallback: false },
+  text: 'Killswitch updated.',
+  killswitch: { enabled: true, minimumRemainingPercent: 5 },
 }
 
 describe('GA location client', () => {
@@ -1924,7 +1924,7 @@ describe('GA location client', () => {
     const calls: Array<Record<string, any>> = []
     const answers: unknown[] = [
       gaSnapshot(),
-      gaApplied(ROUTING_APPLIED),
+      gaApplied(KILLSWITCH_APPLIED),
       { output: { version: 1, kind: 'stale-generation', generation: 'gen-2' } },
     ]
     const client = createGaLocationClient({
@@ -1935,21 +1935,21 @@ describe('GA location client', () => {
       location: LOCATION,
     })
     const body = {
-      command: 'antigravity-routing',
-      arguments: 'cli_first=true',
+      command: 'antigravity-killswitch',
+      arguments: 'enabled=true',
     } as const
     await expect(client.apply(SCOPE_A, body)).rejects.toBeInstanceOf(
       GaStaleError,
     )
     expect(calls).toHaveLength(0)
     await client.pull(SCOPE_A)
-    expect((await client.apply(SCOPE_A, body)).text).toBe('Routing updated.')
+    expect((await client.apply(SCOPE_A, body)).text).toBe('Killswitch updated.')
     expect(calls[1]?.input).toEqual({
       version: 1,
       generation: 'gen-1',
       scope: SCOPE_A,
-      command: 'antigravity-routing',
-      arguments: 'cli_first=true',
+      command: 'antigravity-killswitch',
+      arguments: 'enabled=true',
     })
     await expect(client.apply(SCOPE_A, body)).rejects.toBeInstanceOf(
       GaStaleError,
@@ -2006,11 +2006,11 @@ describe('GA menu over native state', () => {
     expect(
       gaApplyBody({
         command: 'antigravity',
-        sectionId: 'routing',
-        actionId: 'cli-first-on',
+        sectionId: 'limits',
+        actionId: 'killswitch-on',
         values: {},
       }),
-    ).toEqual({ command: 'antigravity-routing', arguments: 'cli_first=true' })
+    ).toEqual({ command: 'antigravity-killswitch', arguments: 'enabled=true' })
     expect(
       gaApplyBody({
         command: 'antigravity',
@@ -2157,8 +2157,8 @@ describe('GA TUI setup', () => {
       {
         cursor: 1,
         type: 'open-dialog',
-        command: 'antigravity-routing',
-        text: 'Antigravity routing',
+        command: 'antigravity-killswitch',
+        text: 'Antigravity limits',
       },
     ],
     route: {
@@ -2186,17 +2186,15 @@ describe('GA TUI setup', () => {
       },
     })
     await settle0()
-    expect(fake.selects[0]?.title).toBe('Routing')
+    expect(fake.selects[0]?.title).toBe('Limits')
     expect(fake.selects[0]?.options.map((option) => option.title)).toEqual([
-      'Turn Gemini CLI first on',
-      'Turn quota-style fallback on',
+      'Turn killswitch on',
+      'Set minimum remaining quota',
       'Back',
     ])
+    expect(fake.selects[0]?.options[0]?.category).toContain('Killswitch: off')
     expect(fake.selects[0]?.options[0]?.category).toContain(
-      'Gemini CLI first: off',
-    )
-    expect(fake.selects[0]?.options[0]?.category).toContain(
-      'Quota-style fallback: off',
+      'Minimum remaining quota: 10%',
     )
 
     const view = await testRender(() => renderClaim(fake.claim(), 'ses_a'), {
@@ -2223,12 +2221,12 @@ describe('GA TUI setup', () => {
     const fresh = gaSnapshot({
       cursor: 1,
       settings: gaSettings({
-        routing: { cliFirst: true, quotaStyleFallback: false },
+        killswitch: { enabled: true, minimumRemainingPercent: 5 },
       }),
     })
     const fake = fakeContext(
-      [NOTIFIED, gaApplied(ROUTING_APPLIED), fresh],
-      ['Turn Gemini CLI first on'],
+      [NOTIFIED, gaApplied(KILLSWITCH_APPLIED), fresh],
+      ['Turn killswitch on'],
     )
     const cleanup = setupGaTui(fake.context as never, {
       schedule: () => () => undefined,
@@ -2243,19 +2241,19 @@ describe('GA TUI setup', () => {
       version: 1,
       generation: 'gen-1',
       scope: { kind: 'session', sessionID: 'ses_a' },
-      command: 'antigravity-routing',
-      arguments: 'cli_first=true',
+      command: 'antigravity-killswitch',
+      arguments: 'enabled=true',
     })
     expect(fake.toasts).toEqual([
-      { message: 'Routing updated.', variant: 'info' },
+      { message: 'Killswitch updated.', variant: 'info' },
     ])
     const last = fake.selects.at(-1)
-    expect(last?.title).toBe('Routing')
-    expect(last?.options[0]?.category).toContain('Gemini CLI first: on')
-    expect(last?.options[0]?.title).toBe('Turn Gemini CLI first off')
+    expect(last?.title).toBe('Limits')
+    expect(last?.options[0]?.category).toContain('Killswitch: on')
+    expect(last?.options[0]?.title).toBe('Turn killswitch off')
     expect(last?.options.map((option) => option.title)).toEqual([
-      'Turn Gemini CLI first off',
-      'Turn quota-style fallback on',
+      'Turn killswitch off',
+      'Set minimum remaining quota',
       'Back',
     ])
     await cleanup()

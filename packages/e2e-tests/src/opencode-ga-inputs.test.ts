@@ -72,7 +72,7 @@ function snapshot(): AntigravityStateSnapshot {
       routingAuthoritative: false,
     },
     settings: {
-      routing: { cliFirst: false, quotaStyleFallback: true },
+      selectionStrategy: 'hybrid' as const,
       killswitch: { enabled: false, minimumRemainingPercent: 5 },
       logLevel: 'info',
       dump: { enabled: false },
@@ -163,20 +163,20 @@ describe('GA tracked input same-read/source controls', () => {
       readSeq: 2,
       settings: {
         ...first.settings,
-        routing: { cliFirst: true, quotaStyleFallback: false },
+        selectionStrategy: 'sticky' as const,
         logLevel: 'debug' as const,
         dump: { enabled: true },
       },
     }
     expect(normalizeSameReadState(first, observation(), 500).routing).toBe(
-      'antigravity_first',
+      'hybrid',
     )
     const view = normalizeSameReadState(
       second,
       { ...observation(), readSeq: 2 },
       500,
     )
-    expect(view.routing).toBe('cli_first')
+    expect(view.routing).toBe('sticky')
     expect(view.logging).toBe('debug')
     expect(view.dump).toEqual({ enabled: true })
   })
@@ -458,7 +458,7 @@ describe('GA menu targeting against the core menu', () => {
         metadata: { email: `${name}@example.invalid`, addedAt: 1, lastUsed: 1 },
       })
     let settings = {
-      routing: { cliFirst: false, quotaStyleFallback: false },
+      selectionStrategy: 'hybrid' as const,
       killswitch: { enabled: false, minimumRemainingPercent: 5 },
     }
     const menu = createAntigravityCommandMenu({
@@ -467,9 +467,6 @@ describe('GA menu targeting against the core menu', () => {
       accounts: repository,
       settings: {
         read: () => settings,
-        updateRouting: async (routing) => {
-          settings = { ...settings, routing }
-        },
         updateKillswitch: async (killswitch) => {
           settings = { ...settings, killswitch }
         },

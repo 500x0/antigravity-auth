@@ -21,62 +21,26 @@ describe('Model-specific Gemini quota', () => {
     const modelFlash = 'gemini-3-flash-agent'
 
     // Mark gemini-3.1-pro as rate limited on antigravity
-    manager.markRateLimited(account, 60000, 'gemini', 'antigravity', modelPro)
+    manager.markRateLimited(account, 60000, 'gemini', modelPro)
 
     // gemini-3.1-pro should be rate limited for antigravity
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        account,
-        'gemini',
-        'antigravity',
-        modelPro,
-      ),
-    ).toBe(true)
+    expect(manager.isRateLimited(account, 'gemini', modelPro)).toBe(true)
 
     // gemini-3-flash-agent should NOT be rate limited for antigravity
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        account,
-        'gemini',
-        'antigravity',
-        modelFlash,
-      ),
-    ).toBe(false)
+    expect(manager.isRateLimited(account, 'gemini', modelFlash)).toBe(false)
 
     // General gemini (no model) should NOT be rate limited
-    expect(
-      manager.isRateLimitedForHeaderStyle(account, 'gemini', 'antigravity'),
-    ).toBe(false)
+    expect(manager.isRateLimited(account, 'gemini')).toBe(false)
   })
 
-  it('falls back to gemini-cli only for the specific model', () => {
-    const account = manager.getCurrentAccountForFamily('gemini')!
-    const modelPro = 'gemini-3.1-pro'
-    const modelFlash = 'gemini-3-flash-agent'
-
-    // Mark gemini-3.1-pro as rate limited on antigravity
-    manager.markRateLimited(account, 60000, 'gemini', 'antigravity', modelPro)
-
-    // Available header style for Pro should be gemini-cli
-    expect(manager.getAvailableHeaderStyle(account, 'gemini', modelPro)).toBe(
-      'gemini-cli',
-    )
-
-    // Available header style for Flash should still be antigravity
-    expect(manager.getAvailableHeaderStyle(account, 'gemini', modelFlash)).toBe(
-      'antigravity',
-    )
-  })
-
-  it('returns null when all header styles are exhausted for the specific model on a single account', () => {
+  it('returns null when quota is exhausted for the specific model on a single account', () => {
     const manager2 = new AccountManager(auth)
 
     const account = manager2.getCurrentAccountForFamily('gemini')!
     const modelPro = 'gemini-3.1-pro'
     const modelFlash = 'gemini-3-flash-agent'
 
-    manager2.markRateLimited(account, 60000, 'gemini', 'antigravity', modelPro)
-    manager2.markRateLimited(account, 60000, 'gemini', 'gemini-cli', modelPro)
+    manager2.markRateLimited(account, 60000, 'gemini', modelPro)
 
     // No other account available, so returns null for the rate-limited model
     expect(manager2.getCurrentOrNextForFamily('gemini', modelPro)).toBeNull()
@@ -94,24 +58,12 @@ describe('Model-specific Gemini quota', () => {
     const modelPro = 'gemini-3.1-pro'
 
     // Mark base gemini-antigravity as rate limited
-    manager.markRateLimited(account, 60000, 'gemini', 'antigravity')
+    manager.markRateLimited(account, 60000, 'gemini')
 
     // All Gemini models should now be blocked for antigravity on this account
+    expect(manager.isRateLimited(account, 'gemini', modelPro)).toBe(true)
     expect(
-      manager.isRateLimitedForHeaderStyle(
-        account,
-        'gemini',
-        'antigravity',
-        modelPro,
-      ),
-    ).toBe(true)
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        account,
-        'gemini',
-        'antigravity',
-        'gemini-3-flash-agent',
-      ),
+      manager.isRateLimited(account, 'gemini', 'gemini-3-flash-agent'),
     ).toBe(true)
   })
 })

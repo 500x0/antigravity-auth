@@ -153,16 +153,6 @@
       "minimum": 0,
       "maximum": 3600
     },
-    "quota_fallback": {
-      "default": false,
-      "type": "boolean",
-      "description": "Deprecated: accepted for backward compatibility but ignored at runtime. Gemini fallback between Antigravity and Gemini CLI is always enabled."
-    },
-    "cli_first": {
-      "default": false,
-      "type": "boolean",
-      "description": "Prefer gemini-cli routing before Antigravity for Gemini models. When false (default), Antigravity is tried first and gemini-cli is fallback."
-    },
     "account_selection_strategy": {
       "default": "hybrid",
       "type": "string",
@@ -185,10 +175,6 @@
       "type": "number",
       "minimum": 0,
       "maximum": 500
-    },
-    "quota_style_fallback": {
-      "default": false,
-      "type": "boolean"
     },
     "scheduling_mode": {
       "default": "cache_first",
@@ -378,27 +364,6 @@
     "operator": {
       "type": "object",
       "properties": {
-        "routing": {
-          "type": "object",
-          "properties": {
-            "cli_first": {
-              "default": false,
-              "type": "boolean",
-              "description": "Override cli_first routing flag live (read by the fetch interceptor per request)."
-            },
-            "quota_style_fallback": {
-              "default": false,
-              "type": "boolean",
-              "description": "Override quota_style_fallback routing flag live."
-            }
-          },
-          "required": [
-            "cli_first",
-            "quota_style_fallback"
-          ],
-          "additionalProperties": false,
-          "description": "Routing overrides applied live by the fetch interceptor."
-        },
         "killswitch": {
           "type": "object",
           "properties": {

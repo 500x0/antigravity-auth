@@ -34,31 +34,33 @@ describe('auto_resume config', () => {
   })
 })
 
-describe('cli_first config', () => {
-  it('includes cli_first default in DEFAULT_CONFIG', () => {
-    expect(DEFAULT_CONFIG).toHaveProperty('cli_first', false)
-  })
-
-  it('documents cli_first in the JSON schema', () => {
-    const schemaPath = new URL(
-      '../../../assets/antigravity.schema.json',
-      import.meta.url,
-    )
-    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as {
-      properties?: Record<
-        string,
-        { type?: string; default?: unknown; description?: string }
-      >
-    }
-
-    const cliFirst = schema.properties?.cli_first
-    expect(cliFirst).toBeDefined()
-    expect(cliFirst).toMatchObject({
-      type: 'boolean',
-      default: false,
+describe('retired header routing config', () => {
+  it('strips obsolete keys without validating their values or losing current settings', () => {
+    const parsed = AntigravityConfigSchema.partial().parse({
+      cli_first: 'obsolete',
+      quota_fallback: {},
+      quota_style_fallback: null,
+      keep_thinking: true,
+      operator: { routing: 'obsolete', log_level: 'debug' },
     })
-    expect(typeof cliFirst?.description).toBe('string')
-    expect(cliFirst?.description?.length ?? 0).toBeGreaterThan(0)
+    expect(parsed).toMatchObject({
+      keep_thinking: true,
+      operator: { log_level: 'debug' },
+    })
+    for (const key of ['cli_first', 'quota_fallback', 'quota_style_fallback'])
+      expect(parsed).not.toHaveProperty(key)
+    expect(parsed.operator).not.toHaveProperty('routing')
+    const schema = JSON.parse(
+      readFileSync(
+        new URL('../../../assets/antigravity.schema.json', import.meta.url),
+        'utf8',
+      ),
+    )
+    for (const key of ['cli_first', 'quota_fallback', 'quota_style_fallback']) {
+      expect(DEFAULT_CONFIG).not.toHaveProperty(key)
+      expect(schema.properties).not.toHaveProperty(key)
+    }
+    expect(schema.properties.operator.properties).not.toHaveProperty('routing')
   })
 })
 

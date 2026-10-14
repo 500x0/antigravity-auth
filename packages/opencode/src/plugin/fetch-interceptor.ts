@@ -211,7 +211,7 @@ function openCode1EngineCollaborators(
     | 'agySessionRegistry'
     | 'operatorSettings'
     | 'onRouting'
-  > & { transport: AgyTransport; fetchImpl: FetchImpl },
+  > & { transport: AgyTransport },
 ): Omit<
   RequestServicesDeps<ManagedAccount>,
   'accounts' | 'credentials' | 'trackers'
@@ -222,7 +222,6 @@ function openCode1EngineCollaborators(
     sessions: common.agySessionRegistry,
     operatorSettings: common.operatorSettings,
     transport: common.transport,
-    fetchImpl: common.fetchImpl,
     wire: {
       prepare: prepareAntigravityRequest,
       transformResponse: transformAntigravityResponse,
@@ -294,7 +293,6 @@ export function createFetchInterceptor(
     ...openCode1EngineCollaborators({
       ...context,
       transport: agyTransport,
-      fetchImpl: upstreamFetch,
     }),
     accounts: accountManager,
     credentials: {
@@ -460,7 +458,6 @@ export function createVaultFetchInterceptor(
     ...openCode1EngineCollaborators({
       ...context,
       transport: agyTransport,
-      fetchImpl: upstreamFetch,
     }),
     accounts: selector,
     credentials: pool.credentials,

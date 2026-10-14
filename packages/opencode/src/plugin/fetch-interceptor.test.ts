@@ -933,7 +933,6 @@ describe('createFetchInterceptor', () => {
             account,
             waitMs,
             'gemini',
-            'antigravity',
             'gemini-3-flash',
           )
         }
@@ -998,7 +997,6 @@ describe('createFetchInterceptor', () => {
           account,
           Infinity,
           'gemini',
-          'antigravity',
           'gemini-3-flash',
         )
       }
@@ -1044,7 +1042,6 @@ describe('createFetchInterceptor', () => {
               account,
               50,
               'gemini',
-              'antigravity',
               'gemini-3-flash',
             )
           }

@@ -21,7 +21,6 @@ import { createLogger } from './logger.ts'
 import { getQuotaGroupForModel, isGeminiArgonModel } from './model-registry.ts'
 import type {
   AccountQuotaResult,
-  GeminiCliQuotaSummary,
   PerModelQuotaEntry,
   QuotaGroup,
   QuotaGroupSummary,
@@ -99,7 +98,6 @@ export interface QuotaManager {
   /** Pure helpers exposed for tests and adapter wiring. */
   classifyQuotaGroup: typeof classifyQuotaGroup
   aggregateQuota: typeof aggregateQuota
-  aggregateGeminiCliQuota: typeof aggregateGeminiCliQuota
 }
 
 interface AccountState {
@@ -178,7 +176,6 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
     status: 'disabled',
     disabled: true,
     quota: undefined,
-    geminiCliQuota: undefined,
     updatedAccount: undefined,
   })
 
@@ -420,7 +417,6 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
     dispose,
     classifyQuotaGroup,
     aggregateQuota,
-    aggregateGeminiCliQuota,
   }
 }
 
@@ -561,18 +557,6 @@ export function aggregateQuota(
   perModel.sort((a, b) => a.modelId.localeCompare(b.modelId))
 
   return { groups, perModel, modelCount: totalCount }
-}
-
-export interface RetrieveUserQuotaBucket {
-  remainingAmount?: string
-  remainingFraction?: number
-  resetTime?: string
-  tokenType?: string
-  modelId?: string
-}
-
-export interface RetrieveUserQuotaResponse {
-  buckets?: RetrieveUserQuotaBucket[]
 }
 
 export interface FetchAvailableModelsResponse {
@@ -888,44 +872,6 @@ export async function fetchQuotaSummary(
   )
 }
 
-/**
- * Aggregate Gemini CLI quota buckets into a summary.
- */
-export function aggregateGeminiCliQuota(
-  response: RetrieveUserQuotaResponse,
-): GeminiCliQuotaSummary {
-  const models: GeminiCliQuotaSummary['models'] = []
-
-  if (!response.buckets || response.buckets.length === 0) {
-    return { models }
-  }
-
-  for (const bucket of response.buckets) {
-    if (!bucket.modelId) {
-      continue
-    }
-
-    const modelId = bucket.modelId
-    const isRelevantModel =
-      modelId.startsWith('gemini-3-') ||
-      modelId.startsWith('gemini-3.') ||
-      modelId.startsWith('gemini-2.5-')
-    if (!isRelevantModel) {
-      continue
-    }
-
-    models.push({
-      modelId: bucket.modelId,
-      remainingFraction: normalizeRemainingFraction(bucket.remainingFraction),
-      resetTime: bucket.resetTime,
-    })
-  }
-
-  models.sort((a, b) => a.modelId.localeCompare(b.modelId))
-
-  return { models }
-}
-
 // ============================================================================
 // Network helpers — used by the OpenCode adapter.
 // Re-exported so harnesses can call the same endpoint probes with their own
@@ -1032,79 +978,7 @@ export async function fetchAvailableModels(
   throw new Error(errors.join('; ') || 'fetchAvailableModels failed')
 }
 
-export interface FetchGeminiCliQuotaOptions {
-  accessToken: string
-  projectId: string
-  endpoints: readonly string[]
-  timeoutMs?: number
-  userAgent?: string
-  /**
-   * Optional transport override. Production callers omit this; the e2e
-   * harness and tests inject a stub. Mirrors `fetchQuotaSummary`'s seam.
-   */
-  fetchVia?: (
-    url: string,
-    options: RequestInit,
-    extra: { timeoutMs: number },
-  ) => Promise<Response>
-}
-
-export async function fetchGeminiCliQuota(
-  options: FetchGeminiCliQuotaOptions,
-): Promise<RetrieveUserQuotaResponse> {
-  const timeoutMs = options.timeoutMs ?? QUOTA_MANAGER_DEFAULT_TIMEOUT_MS
-  const userAgent = options.userAgent ?? buildAntigravityHarnessUserAgent()
-  const transport = options.fetchVia ?? defaultTransport
-  const errors: string[] = []
-
-  for (const endpoint of options.endpoints) {
-    const body = options.projectId ? { project: options.projectId } : {}
-    try {
-      const response = await transport(
-        `${endpoint}/v1internal:retrieveUserQuota`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${options.accessToken}`,
-            'Content-Type': 'application/json',
-            'User-Agent': userAgent,
-          },
-          body: JSON.stringify(body),
-        },
-        { timeoutMs },
-      )
-
-      if (response.ok) {
-        return (await response.json()) as RetrieveUserQuotaResponse
-      }
-
-      const status = response.status
-      if (status === 429 || status >= 500) {
-        errors.push(`fetchGeminiCliQuota ${status} at ${endpoint}`)
-        continue
-      }
-      // Non-retryable server response (e.g. 403) — treat as no CLI quota.
-      return { buckets: [] }
-    } catch (error) {
-      // Transport-level failure (network abort, DNS, timeout). Collect the
-      // error and try the next endpoint; if all endpoints fail, throw so
-      // the caller can distinguish a transient network failure from an
-      // authoritative 'no CLI quota configured' response.
-      errors.push(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  // All endpoints produced transport-level errors — propagate so the
-  // outer caller (quota.ts .catch) can surface the real failure reason
-  // rather than the generic 'No Gemini CLI quota available' message.
-  if (errors.length > 0) {
-    throw new Error(errors.join('; ') || 'fetchGeminiCliQuota failed')
-  }
-
-  return { buckets: [] }
-}
-
-async function defaultTransport(
+function defaultTransport(
   url: string,
   init: RequestInit,
   options: { timeoutMs: number },

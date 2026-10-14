@@ -253,9 +253,9 @@ function readSidebar(): SidebarStateV1 {
 }
 
 function enqueueQuota(h: E2eHarness): void {
-  for (const [project, bearer, remainingFraction, cliFraction] of [
-    ['managed-a', 'Bearer access-a', 0.7, 0.4],
-    ['managed-b', 'Bearer access-b', 0.8, 0.5],
+  for (const [project, bearer, remainingFraction] of [
+    ['managed-a', 'Bearer access-a', 0.7],
+    ['managed-b', 'Bearer access-b', 0.8],
   ] as const) {
     h.server.enqueue({
       kind: 'quotaSummaryWindow',
@@ -279,15 +279,6 @@ function enqueueQuota(h: E2eHarness): void {
           ],
         },
       ],
-    })
-    h.server.enqueue({
-      kind: 'geminiCliQuota',
-      match: {
-        method: 'POST',
-        endpoint: '/v1internal:retrieveUserQuota',
-        bearer,
-      },
-      buckets: [{ model: 'gemini-3-flash', remainingFraction: cliFraction }],
     })
   }
 }
@@ -729,21 +720,9 @@ describe('plugin flow (e2e)', () => {
       ).toEqual([
         {
           method: 'POST',
-          path: '/v1internal:retrieveUserQuota',
-          bearer: 'Bearer access-a',
-          project: 'managed-a',
-        },
-        {
-          method: 'POST',
           path: '/v1internal:retrieveUserQuotaSummary',
           bearer: 'Bearer access-a',
           project: 'managed-a',
-        },
-        {
-          method: 'POST',
-          path: '/v1internal:retrieveUserQuota',
-          bearer: 'Bearer access-b',
-          project: 'managed-b',
         },
         {
           method: 'POST',

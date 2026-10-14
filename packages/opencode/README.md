@@ -17,7 +17,6 @@ This package is part of the Antigravity Auth monorepo. See the [root README](../
 - **Claude Opus 4.6 / Sonnet 4.6 (thinking)** and **Gemini 3 Pro / Flash / 3.6 Flash / 3.1 Pro / 3.1 Flash Image** via Google OAuth against the Antigravity quota pool.
 - **GPT-OSS 120B Medium** through the Antigravity-style headers.
 - **Multi-account rotation** with deterministic selection (`sticky`, `round-robin`, `hybrid`), per-account rate-limit cooldowns, and a failsafe **killswitch** that hard-blocks accounts below a quota threshold.
-- **Dual quota pools:** Antigravity headers + Gemini CLI headers with style-fallback so a single exhausted pool does not stall a request.
 - **OpenTUI sidebar** — read-only account/quota state; V1 polls the on-disk sidebar-state file, while GA polls location-scoped snapshots through native host RPC. Neither carries credentials.
 - **One `/antigravity` menu** for accounts, quota, routing, limits, diagnostics, sign-in, and vault setup. See [`src/plugin/commands.ts`](src/plugin/commands.ts) and [`src/tui/command-dialogs.tsx`](src/tui/command-dialogs.tsx).
 - **Thinking models** with optional signature caching and precompiled OpenTUI JSX.
@@ -148,13 +147,11 @@ The model registry lives at `packages/core/src/model-registry.ts`; the OpenCode 
 
 > Gemini 3.8 Flash Cyber is absent from the captured AGY 1.3.5 server catalog, so it is not exposed by this plugin. Gemini 3.5 Flash Lite is a server helper route, not a public picker entry. Gemini 3.5 Flash Cyber remains restricted to a limited-access CodeMender pilot.
 
-### Routing
+### Account routing
 
-- **Antigravity-first (default).** Gemini requests go to the Antigravity header style first; on `429 RESOURCE_EXHAUSTED` they fall back to the Gemini CLI header set.
-- **CLI-first** (`cli_first: true`). Flip the order — Gemini CLI first, Antigravity fallback. Change the live setting in `/antigravity` → Routing.
-- **Style-fallback** (`quota_style_fallback: true`). Re-send the SAME request through the other header set on a rate limit. Default OFF because retrying can consume quota from both header-style pools. Change it in `/antigravity` → Routing.
-- **Argon, Claude and image models** always use Antigravity regardless of toggles.
-- Model names transform automatically between Antigravity and Gemini CLI namespaces (`antigravity-gemini-3-flash` ↔ `gemini-3-flash-preview`).
+Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
+
+`/antigravity` → Routing shows the effective account selection strategy and its `antigravity.json` configuration key, without runtime actions. Vault mode follows the vault's served accounts. Antigravity endpoint fallback (daily → prod), account rotation, cooldowns and quota policies remain in place.
 
 ### Quota, killswitch, and the soft-threshold fail-open
 
@@ -250,7 +247,7 @@ Combined with the runtime log-level filter (`operator.log_level`, mutable throug
 
 ## Plugin interactions
 
-For load-balancing, dual quota pools, and account storage details, see [docs/MULTI-ACCOUNT.md](./docs/MULTI-ACCOUNT.md).
+For load-balancing, account rotation and quota, and account storage details, see [docs/MULTI-ACCOUNT.md](./docs/MULTI-ACCOUNT.md).
 
 ### `@tarquinen/opencode-dcp`
 

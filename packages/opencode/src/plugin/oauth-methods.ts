@@ -12,7 +12,6 @@ import {
   authorizeAntigravity as defaultAuthorizeAntigravity,
   exchangeAntigravity as defaultExchangeAntigravity,
 } from '../antigravity/oauth'
-import { formatQuotaReading } from '../quota-presentation'
 import type {
   AccountAccessService,
   RepositoryAccountAccessService,
@@ -717,45 +716,6 @@ export function createOAuthMethods({
                     const color = getColor(remaining)
                     const bar = `${color}${'█'.repeat(filled)}${colors.reset}${'░'.repeat(empty)}`
                     return bar
-                  }
-
-                  // Display Gemini CLI Quota first (as requested - swap order)
-                  const hasGeminiCli =
-                    res.geminiCliQuota && res.geminiCliQuota.models.length > 0
-                  console.log(`\n  ┌─ Gemini CLI Quota`)
-                  if (!hasGeminiCli) {
-                    const errorMsg =
-                      res.geminiCliQuota?.error ||
-                      'No Gemini CLI quota available'
-                    console.log(`  │  └─ ${errorMsg}`)
-                  } else {
-                    const models = res.geminiCliQuota!.models
-                    models.forEach((model, idx) => {
-                      const isLast = idx === models.length - 1
-                      const connector = isLast ? '└─' : '├─'
-                      const bar = createProgressBar(model.remainingFraction)
-                      const text = formatQuotaReading(
-                        model.modelId,
-                        {
-                          remainingPercent:
-                            typeof model.remainingFraction === 'number'
-                              ? model.remainingFraction * 100
-                              : Number.NaN,
-                          checkedAt: res.checkedAt,
-                          ...(model.resetTime
-                            ? { resetAt: Date.parse(model.resetTime) }
-                            : {}),
-                        },
-                        Date.now(),
-                      )
-                      const status = classifyGroupStatus({
-                        remainingFraction: model.remainingFraction,
-                        resetTime: model.resetTime,
-                        modelCount: 1,
-                      })
-                      const badge = formatQuotaStatusBadge(status)
-                      console.log(`  │  ${connector} ${text} ${bar} ${badge}`)
-                    })
                   }
 
                   // Display Antigravity Quota second

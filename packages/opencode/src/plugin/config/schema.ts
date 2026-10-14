@@ -305,25 +305,6 @@ export const AntigravityConfigSchema = z.object({
   max_rate_limit_wait_seconds: z.number().min(0).max(3600).default(300),
 
   /**
-   * @deprecated Kept only for backward compatibility.
-   * This flag is ignored at runtime.
-   * Gemini requests always fall back between Antigravity and Gemini CLI quotas.
-   *
-   * @default false
-   */
-  quota_fallback: z.boolean().default(false),
-
-  /**
-   * Prefer gemini-cli routing before Antigravity for Gemini models.
-   *
-   * When false (default): Antigravity is tried first, then gemini-cli.
-   * When true: gemini-cli is tried first, then Antigravity.
-   *
-   * @default false
-   */
-  cli_first: z.boolean().default(false),
-
-  /**
    * Strategy for selecting accounts when making requests.
    * Env override: OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY
    * @default "hybrid"
@@ -361,19 +342,6 @@ export const AntigravityConfigSchema = z.object({
    * @default 10
    */
   max_account_switches: z.number().min(0).max(500).default(10),
-
-  /**
-   * Allow falling back between quota pools (antigravity ↔ gemini-cli) when rate-limited.
-   * When enabled, if one quota pool is exhausted the plugin re-sends the SAME request
-   * using the alternate header style, consuming tokens from BOTH pools.
-   * Disable to prevent double-spending quota across pools — the plugin will only
-   * rotate accounts instead.
-   * Only applies to Gemini models (Claude always uses antigravity).
-   *
-   * Env override: OPENCODE_ANTIGRAVITY_QUOTA_STYLE_FALLBACK
-   * @default false
-   */
-  quota_style_fallback: z.boolean().default(false),
 
   /**
    * Scheduling mode for rate limit behavior.     *
@@ -553,18 +521,8 @@ export const AntigravityConfigSchema = z.object({
   // `config/writer.ts` so they use the same fenced lock + atomic rename the
   // account pool uses — concurrent writers do not silently corrupt state.
 
-  /**
-   * Routing overrides the static `cli_first` / `quota_style_fallback` flags
-   * when the operator toggles them through `/antigravity-routing`.
-   */
   operator: z
     .object({
-      routing: z
-        .object({
-          cli_first: z.boolean().default(false),
-          quota_style_fallback: z.boolean().default(false),
-        })
-        .optional(),
       killswitch: z
         .object({
           enabled: z.boolean().default(false),
@@ -610,13 +568,10 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   proactive_refresh_buffer_seconds: 1800,
   proactive_refresh_check_interval_seconds: 300,
   max_rate_limit_wait_seconds: 300,
-  quota_fallback: false,
-  cli_first: false,
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
   max_account_switches: 10,
-  quota_style_fallback: false,
   scheduling_mode: 'cache_first',
   max_cache_first_wait_seconds: 60,
   failure_ttl_seconds: 3600,
@@ -652,7 +607,6 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
     initial_tokens: 50,
   },
   operator: {
-    routing: { cli_first: false, quota_style_fallback: false },
     killswitch: { enabled: false, minimum_remaining_percent: 5 },
     log_level: 'info',
   },

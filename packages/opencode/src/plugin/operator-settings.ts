@@ -35,12 +35,6 @@ import { writeOperatorConfig, writeOperatorConfigAt } from './config/writer'
 // user edits); the merge-with-defaults step below fills any gaps.
 const PartialOperatorSettingsSchema: z.ZodType<Partial<OperatorSettings>> =
   z.object({
-    routing: z
-      .object({
-        cli_first: z.boolean().optional(),
-        quota_style_fallback: z.boolean().optional(),
-      })
-      .optional(),
     killswitch: z
       .object({
         enabled: z.boolean().optional(),
@@ -248,7 +242,7 @@ export interface LocationOperatorSettings extends OperatorSettingsController {
  * A location whose project file exists without a block reads through the
  * user file; its first mutation seeds a project block from its effective
  * values and rebinds it to the project file. Applying the values (log level,
- * routing, killswitch) is the caller's per-location concern.
+ * killswitch) is the caller's per-location concern.
  */
 export function acquireLocationOperatorSettings(
   options: LocationOperatorSettingsOptions,
@@ -319,7 +313,6 @@ function mergeWithDefaults(
 ): OperatorSettings {
   const defaults = emptyOperatorSettings()
   return {
-    routing: { ...defaults.routing, ...(partial.routing ?? {}) },
     killswitch: {
       ...defaults.killswitch,
       ...(partial.killswitch ?? {}),

@@ -29,7 +29,6 @@ import type {
 import type {
   AccountSelectionStrategy,
   CooldownReason,
-  HeaderStyle,
   AccountModelFamily as ModelFamily,
   RateLimitStateV3,
 } from './account-types.ts'
@@ -50,7 +49,7 @@ import {
   TokenBucketTracker,
 } from './rotation.ts'
 
-export type BaseQuotaKey = 'claude' | 'gemini-antigravity' | 'gemini-cli'
+export type BaseQuotaKey = ModelFamily
 export type QuotaKey = BaseQuotaKey | `${BaseQuotaKey}:${string}`
 
 /**
@@ -66,8 +65,8 @@ export interface SelectableAccount {
   enabled: boolean
   lastUsed: number
   /**
-   * Rate-limit reset time per quota key (see `getQuotaKey`): `claude`, or
-   * a Gemini header style, optionally with a model.
+   * Rate-limit reset time per quota key (see `getQuotaKey`): a model family,
+   * optionally with a model. Unknown legacy keys remain inert persisted data.
    */
   rateLimitResetTimes: RateLimitStateV3
   lastSwitchReason?: LastSwitchReason
@@ -197,18 +196,9 @@ export function clampNonNegativeInt(value: unknown, fallback: number): number {
 
 export function getQuotaKey(
   family: ModelFamily,
-  headerStyle: HeaderStyle,
   model?: string | null,
 ): QuotaKey {
-  if (family === 'claude') {
-    return 'claude'
-  }
-  const base =
-    headerStyle === 'gemini-cli' ? 'gemini-cli' : 'gemini-antigravity'
-  if (model) {
-    return `${base}:${model}`
-  }
-  return base
+  return model ? `${family}:${model}` : family
 }
 
 function isRateLimitedForQuotaKey(
@@ -226,52 +216,12 @@ function isRateLimitedForFamily(
   now: () => number,
   model?: string | null,
 ): boolean {
-  if (family === 'claude') {
-    return isRateLimitedForQuotaKey(account, 'claude', now)
-  }
-
-  const antigravityIsLimited = isRateLimitedForHeaderStyle(
-    account,
-    family,
-    'antigravity',
-    now,
-    model,
-  )
-  const cliIsLimited = isRateLimitedForHeaderStyle(
-    account,
-    family,
-    'gemini-cli',
-    now,
-    model,
-  )
-
-  return antigravityIsLimited && cliIsLimited
-}
-
-function isRateLimitedForHeaderStyle(
-  account: SelectableAccount,
-  family: ModelFamily,
-  headerStyle: HeaderStyle,
-  now: () => number,
-  model?: string | null,
-): boolean {
   clearExpiredRateLimits(account, now)
-
-  if (family === 'claude') {
-    return isRateLimitedForQuotaKey(account, 'claude', now)
-  }
-
-  // Check model-specific quota first if provided
-  if (model) {
-    const modelKey = getQuotaKey(family, headerStyle, model)
-    if (isRateLimitedForQuotaKey(account, modelKey, now)) {
-      return true
-    }
-  }
-
-  // Then check base family quota
-  const baseKey = getQuotaKey(family, headerStyle)
-  return isRateLimitedForQuotaKey(account, baseKey, now)
+  return (
+    (model != null &&
+      isRateLimitedForQuotaKey(account, getQuotaKey(family, model), now)) ||
+    isRateLimitedForQuotaKey(account, family, now)
+  )
 }
 
 function clearExpiredRateLimits(
@@ -282,7 +232,11 @@ function clearExpiredRateLimits(
   const keys = Object.keys(account.rateLimitResetTimes) as QuotaKey[]
   for (const key of keys) {
     const resetTime = account.rateLimitResetTimes[key]
-    if (resetTime !== undefined && now >= resetTime) {
+    if (
+      /^(claude|gemini)(:|$)/.test(key) &&
+      resetTime !== undefined &&
+      now >= resetTime
+    ) {
       delete account.rateLimitResetTimes[key]
     }
   }
@@ -420,7 +374,7 @@ const FAMILIES: readonly ModelFamily[] = ['claude', 'gemini']
  * health and token trackers, and the clock, random source and pid they use.
  *
  * Uses the same account until it hits a rate limit (429), then switches.
- * Rate limits are tracked per quota key (family, model and header style),
+ * Rate limits are tracked per quota key (family and optional model),
  * so an account rate-limited for Claude can still be used for Gemini.
  *
  * Rows are held by reference, never copied, and their selection fields are
@@ -930,7 +884,6 @@ export class AccountSelector<A extends SelectableAccount> {
     family: ModelFamily,
     model?: string | null,
     strategy: AccountSelectionStrategy = 'sticky',
-    headerStyle: HeaderStyle = 'antigravity',
     pidOffsetEnabled: boolean = false,
     softQuotaThresholdPercent: number = 100,
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
@@ -945,7 +898,7 @@ export class AccountSelector<A extends SelectableAccount> {
      */
     excludeIndexes?: Set<number>,
   ): A | null {
-    const quotaKey = getQuotaKey(family, headerStyle, model)
+    const quotaKey = getQuotaKey(family, model)
     const effectiveSoftQuotaThreshold = this.getEffectiveSoftQuotaThreshold(
       softQuotaThresholdPercent,
     )
@@ -958,13 +911,7 @@ export class AccountSelector<A extends SelectableAccount> {
         clearExpiredRateLimits(pinned, this.now)
         const unavailable =
           (excludeIndexes?.has(pinned.index) ?? false) ||
-          isRateLimitedForHeaderStyle(
-            pinned,
-            family,
-            headerStyle,
-            this.now,
-            model,
-          ) ||
+          isRateLimitedForFamily(pinned, family, this.now, model) ||
           isOverSoftQuotaThreshold(
             pinned,
             family,
@@ -985,7 +932,6 @@ export class AccountSelector<A extends SelectableAccount> {
       const next = this.getNextForFamily(
         family,
         model,
-        headerStyle,
         effectiveSoftQuotaThreshold,
         softQuotaCacheTtlMs,
         identity,
@@ -1017,13 +963,7 @@ export class AccountSelector<A extends SelectableAccount> {
             lastUsed: acc.lastUsed,
             healthScore: healthTracker.getScore(acc.index),
             isRateLimited:
-              isRateLimitedForHeaderStyle(
-                acc,
-                family,
-                headerStyle,
-                this.now,
-                model,
-              ) ||
+              isRateLimitedForFamily(acc, family, this.now, model) ||
               isOverSoftQuotaThreshold(
                 acc,
                 family,
@@ -1090,10 +1030,9 @@ export class AccountSelector<A extends SelectableAccount> {
     const current = this.getCurrentAccountForFamily(family, identity)
     if (current && !excludeIndexes?.has(current.index)) {
       clearExpiredRateLimits(current, this.now)
-      const isLimitedForRequestedStyle = isRateLimitedForHeaderStyle(
+      const isLimitedForRequestedStyle = isRateLimitedForFamily(
         current,
         family,
-        headerStyle,
         this.now,
         model,
       )
@@ -1118,7 +1057,6 @@ export class AccountSelector<A extends SelectableAccount> {
     const next = this.getNextForFamily(
       family,
       model,
-      headerStyle,
       effectiveSoftQuotaThreshold,
       softQuotaCacheTtlMs,
       identity,
@@ -1134,7 +1072,6 @@ export class AccountSelector<A extends SelectableAccount> {
   getNextForFamily(
     family: ModelFamily,
     model?: string | null,
-    headerStyle: HeaderStyle = 'antigravity',
     softQuotaThresholdPercent: number = 100,
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
     identity?: AccountSessionIdentity,
@@ -1149,13 +1086,7 @@ export class AccountSelector<A extends SelectableAccount> {
       return (
         account.enabled !== false &&
         !excludeIndexes?.has(account.index) &&
-        !isRateLimitedForHeaderStyle(
-          account,
-          family,
-          headerStyle,
-          this.now,
-          model,
-        ) &&
+        !isRateLimitedForFamily(account, family, this.now, model) &&
         !isOverSoftQuotaThreshold(
           account,
           family,
@@ -1196,10 +1127,9 @@ export class AccountSelector<A extends SelectableAccount> {
     account: A,
     retryAfterMs: number,
     family: ModelFamily,
-    headerStyle: HeaderStyle = 'antigravity',
     model?: string | null,
   ): void {
-    const key = getQuotaKey(family, headerStyle, model)
+    const key = getQuotaKey(family, model)
     this.setRateLimit(account, key, this.now() + retryAfterMs)
   }
 
@@ -1284,7 +1214,6 @@ export class AccountSelector<A extends SelectableAccount> {
   proactivelyRotateForFamily(
     family: ModelFamily,
     model: string | null | undefined,
-    headerStyle: HeaderStyle,
     softQuotaThresholdPercent: number,
     softQuotaCacheTtlMs: number,
     identity?: AccountSessionIdentity,
@@ -1296,10 +1225,7 @@ export class AccountSelector<A extends SelectableAccount> {
         if (acc.enabled === false) return false
         if (acc.index === currentIndex) return false
         clearExpiredRateLimits(acc, this.now)
-        if (
-          isRateLimitedForHeaderStyle(acc, family, headerStyle, this.now, model)
-        )
-          return false
+        if (isRateLimitedForFamily(acc, family, this.now, model)) return false
         if (
           isOverSoftQuotaThreshold(
             acc,
@@ -1336,7 +1262,7 @@ export class AccountSelector<A extends SelectableAccount> {
     const selected = pool[0]
     if (!selected) return null
 
-    const quotaKey = getQuotaKey(family, headerStyle, model)
+    const quotaKey = getQuotaKey(family, model)
     this.markTouchedForQuota(selected, quotaKey)
     this.setActiveIndex(family, selected.index, identity)
 
@@ -1346,7 +1272,6 @@ export class AccountSelector<A extends SelectableAccount> {
   markRateLimitedWithReason(
     account: A,
     family: ModelFamily,
-    headerStyle: HeaderStyle,
     model: string | null | undefined,
     reason: RateLimitReason,
     retryAfterMs?: number | null,
@@ -1372,7 +1297,7 @@ export class AccountSelector<A extends SelectableAccount> {
       retryAfterMs,
       this.random,
     )
-    const key = getQuotaKey(family, headerStyle, model)
+    const key = getQuotaKey(family, model)
     this.setRateLimit(account, key, now + backoffMs)
 
     return backoffMs
@@ -1389,14 +1314,7 @@ export class AccountSelector<A extends SelectableAccount> {
     model?: string | null,
   ): void {
     for (const account of this.accounts) {
-      if (family === 'claude') {
-        this.clearRateLimit(account, 'claude')
-      } else {
-        const antigravityKey = getQuotaKey(family, 'antigravity', model)
-        const cliKey = getQuotaKey(family, 'gemini-cli', model)
-        this.clearRateLimit(account, antigravityKey)
-        this.clearRateLimit(account, cliKey)
-      }
+      this.clearRateLimit(account, getQuotaKey(family, model))
       account.consecutiveFailures = 0
     }
   }
@@ -1486,109 +1404,12 @@ export class AccountSelector<A extends SelectableAccount> {
     })
   }
 
-  isRateLimitedForHeaderStyle(
-    account: A,
-    family: ModelFamily,
-    headerStyle: HeaderStyle,
-    model?: string | null,
-  ): boolean {
-    return isRateLimitedForHeaderStyle(
-      account,
-      family,
-      headerStyle,
-      this.now,
-      model,
-    )
-  }
-
-  getAvailableHeaderStyle(
+  isRateLimited(
     account: A,
     family: ModelFamily,
     model?: string | null,
-  ): HeaderStyle | null {
-    clearExpiredRateLimits(account, this.now)
-    if (family === 'claude') {
-      return isRateLimitedForHeaderStyle(
-        account,
-        family,
-        'antigravity',
-        this.now,
-      )
-        ? null
-        : 'antigravity'
-    }
-    if (
-      !isRateLimitedForHeaderStyle(
-        account,
-        family,
-        'antigravity',
-        this.now,
-        model,
-      )
-    ) {
-      return 'antigravity'
-    }
-    if (
-      !isRateLimitedForHeaderStyle(
-        account,
-        family,
-        'gemini-cli',
-        this.now,
-        model,
-      )
-    ) {
-      return 'gemini-cli'
-    }
-    return null
-  }
-
-  /**
-   * Check if any OTHER account has antigravity quota available for the given family/model.
-   *
-   * Used to determine whether to switch accounts vs fall back to gemini-cli:
-   * - If true: Switch to another account (preserve antigravity priority)
-   * - If false: All accounts exhausted antigravity, safe to fall back to gemini-cli
-   *
-   * @param currentAccountIndex - Index of the current account (will be excluded from check)
-   * @param family - Model family ("gemini" or "claude")
-   * @param model - Optional model name for model-specific rate limits
-   * @returns true if any other enabled, non-cooling-down account has antigravity available
-   */
-  hasOtherAccountWithAntigravityAvailable(
-    currentAccountIndex: number,
-    family: ModelFamily,
-    model?: string | null,
   ): boolean {
-    // Claude has no gemini-cli fallback - always return false
-    // (This method is only relevant for Gemini's dual quota pools)
-    if (family === 'claude') {
-      return false
-    }
-
-    return this.accounts.some((acc) => {
-      // Skip current account
-      if (acc.index === currentAccountIndex) {
-        return false
-      }
-      // Skip disabled accounts
-      if (acc.enabled === false) {
-        return false
-      }
-      // Skip cooling down accounts
-      if (this.isAccountCoolingDown(acc)) {
-        return false
-      }
-      // Clear expired rate limits before checking
-      clearExpiredRateLimits(acc, this.now)
-      // Check if antigravity is available for this account
-      return !isRateLimitedForHeaderStyle(
-        acc,
-        family,
-        'antigravity',
-        this.now,
-        model,
-      )
-    })
+    return isRateLimitedForFamily(account, family, this.now, model)
   }
 
   setAccountEnabled(accountIndex: number, enabled: boolean): boolean {
@@ -1768,57 +1589,22 @@ export class AccountSelector<A extends SelectableAccount> {
     return true
   }
 
-  getMinWaitTimeForFamily(
-    family: ModelFamily,
-    model?: string | null,
-    headerStyle?: HeaderStyle,
-    strict?: boolean,
-  ): number {
-    const available = this.accounts.filter((a) => {
-      clearExpiredRateLimits(a, this.now)
-      return (
-        a.enabled !== false &&
-        (strict && headerStyle
-          ? !isRateLimitedForHeaderStyle(
-              a,
-              family,
-              headerStyle,
-              this.now,
-              model,
-            )
-          : !isRateLimitedForFamily(a, family, this.now, model))
-      )
-    })
-    if (available.length > 0) {
-      return 0
-    }
-
-    const waitTimes: number[] = []
-    for (const a of this.accounts) {
-      if (family === 'claude') {
-        const t = a.rateLimitResetTimes.claude
-        if (t !== undefined) waitTimes.push(Math.max(0, t - this.now()))
-      } else if (strict && headerStyle) {
-        const key = getQuotaKey(family, headerStyle, model)
-        const t = a.rateLimitResetTimes[key]
-        if (t !== undefined) waitTimes.push(Math.max(0, t - this.now()))
-      } else {
-        // For Gemini, account becomes available when EITHER pool expires for this model/family
-        const antigravityKey = getQuotaKey(family, 'antigravity', model)
-        const cliKey = getQuotaKey(family, 'gemini-cli', model)
-
-        const t1 = a.rateLimitResetTimes[antigravityKey]
-        const t2 = a.rateLimitResetTimes[cliKey]
-
-        const accountWait = Math.min(
-          t1 !== undefined ? Math.max(0, t1 - this.now()) : Infinity,
-          t2 !== undefined ? Math.max(0, t2 - this.now()) : Infinity,
+  getMinWaitTimeForFamily(family: ModelFamily, model?: string | null): number {
+    const now = this.now()
+    const waits = this.accounts
+      .filter((a) => a.enabled !== false)
+      .map((a) => {
+        clearExpiredRateLimits(a, this.now)
+        const modelReset = model
+          ? a.rateLimitResetTimes[getQuotaKey(family, model)]
+          : undefined
+        return Math.max(
+          0,
+          (a.rateLimitResetTimes[family] ?? now) - now,
+          (modelReset ?? now) - now,
         )
-        if (accountWait !== Infinity) waitTimes.push(accountWait)
-      }
-    }
-
-    return waitTimes.length > 0 ? Math.min(...waitTimes) : 0
+      })
+    return waits.length > 0 ? Math.min(...waits) : 0
   }
 
   /**

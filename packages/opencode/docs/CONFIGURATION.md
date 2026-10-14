@@ -57,12 +57,13 @@ When `false` (default), thinking is stripped:
 
 Settings for managing multiple Google accounts.
 
+Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `account_selection_strategy` | `"hybrid"` | How to select accounts |
 | `switch_on_first_rate_limit` | `true` | Switch account immediately on first 429 |
 | `pid_offset_enabled` | `false` | Distribute sessions across accounts (for parallel agents) |
-| `quota_fallback` | `false` | Deprecated (ignored). Kept for backward compatibility; Gemini fallback is automatic |
 
 ### Strategy Guide
 

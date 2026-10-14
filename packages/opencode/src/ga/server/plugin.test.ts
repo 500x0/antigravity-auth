@@ -965,7 +965,7 @@ describe('setup against a host context', () => {
                 routingAuthoritative: false,
               },
               settings: {
-                routing: { cliFirst: false, quotaStyleFallback: true },
+                selectionStrategy: 'hybrid',
                 killswitch: { enabled: false, minimumRemainingPercent: 5 },
                 logLevel: 'info',
                 dump: { enabled: false },

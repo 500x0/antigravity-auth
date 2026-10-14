@@ -395,10 +395,10 @@ describe('location configuration', () => {
 
     // Writing into one location's nested objects changes no other tree.
     token.health_score!.initial = 1
-    token.operator!.routing!.cli_first = true
+    token.operator!.killswitch!.enabled = true
     cache.signature_cache!.enabled = false
     expect(userOnly.health_score?.initial).toBe(70)
-    expect(cache.operator?.routing?.cli_first).toBe(false)
+    expect(cache.operator?.killswitch?.enabled).toBe(false)
     expect(userOnly.signature_cache?.enabled).toBe(true)
     expect(DEFAULT_CONFIG).toEqual(defaultsSnapshot)
   })
@@ -659,7 +659,7 @@ describe('location operator settings', () => {
       ) as Record<'A' | 'B', LocationOperatorSettings>
 
       await settings.A.update((draft) => {
-        draft.routing.cli_first = true
+        draft.killswitch.enabled = true
       })
       await settings.B.update((draft) => {
         draft.log_level = 'error'
@@ -670,39 +670,39 @@ describe('location operator settings', () => {
       expect(fileA.debug).toBe(true)
       expect(fileA.operator).toMatchObject({
         log_level: 'debug',
-        routing: { cli_first: true },
+        killswitch: { enabled: true },
       })
       expect(fileB.operator).toMatchObject({
         log_level: 'error',
-        routing: { cli_first: false },
+        killswitch: { enabled: false },
       })
       expect(settings.A.get().log_level).toBe('debug')
-      expect(settings.B.get().routing.cli_first).toBe(false)
+      expect(settings.B.get().killswitch.enabled).toBe(false)
       expect(readFileSync(userPath, 'utf8')).toBe(userBytes)
     })
   }
 
-  it("shares one user-file controller: A's routing reaches B, B's logging keeps it, C's block is unaffected", async () => {
+  it("shares one user-file controller: A's killswitch reaches B, B's logging keeps it, C's block is unaffected", async () => {
     const settingsA = acquire(makeProject('a'))
     const settingsB = acquire(makeProject('b'))
     const dirC = makeProject('c', { operator: { log_level: 'warn' } })
     const settingsC = acquire(dirC)
-    expect(settingsB.get().routing.cli_first).toBe(false)
+    expect(settingsB.get().killswitch.enabled).toBe(false)
 
     await settingsA.update((draft) => {
-      draft.routing.cli_first = true
+      draft.killswitch.enabled = true
     })
-    expect(settingsB.get().routing.cli_first).toBe(true)
+    expect(settingsB.get().killswitch.enabled).toBe(true)
 
     await settingsB.update((draft) => {
       draft.log_level = 'error'
     })
     expect(readJson(userPath).operator).toMatchObject({
       log_level: 'error',
-      routing: { cli_first: true },
+      killswitch: { enabled: true },
     })
     expect(settingsC.get().log_level).toBe('warn')
-    expect(settingsC.get().routing.cli_first).toBe(false)
+    expect(settingsC.get().killswitch.enabled).toBe(false)
     expect(
       readJson(join(dirC, '.opencode', 'antigravity.json')).operator,
     ).toEqual({ log_level: 'warn' })
@@ -715,9 +715,9 @@ describe('location operator settings', () => {
     const projectPathA = join(dirA, '.opencode', 'antigravity.json')
 
     await settingsB.update((draft) => {
-      draft.routing.cli_first = true
+      draft.killswitch.enabled = true
     })
-    expect(settingsA.get().routing.cli_first).toBe(true)
+    expect(settingsA.get().killswitch.enabled).toBe(true)
     expect(settingsA.sourcePath()).toBe(settingsB.sourcePath())
     const userBytes = readFileSync(userPath, 'utf8')
 
@@ -726,17 +726,17 @@ describe('location operator settings', () => {
     })
     expect(readJson(projectPathA)).toMatchObject({
       debug: true,
-      operator: { log_level: 'error', routing: { cli_first: true } },
+      operator: { log_level: 'error', killswitch: { enabled: true } },
     })
     expect(readFileSync(userPath, 'utf8')).toBe(userBytes)
     expect(settingsB.get().log_level).toBe('info')
     expect(settingsA.sourcePath()).not.toBe(settingsB.sourcePath())
 
     await settingsB.update((draft) => {
-      draft.routing.quota_style_fallback = true
+      draft.killswitch.minimum_remaining_percent = 20
     })
-    expect(settingsA.get().routing.quota_style_fallback).toBe(false)
-    expect(settingsB.get().routing.quota_style_fallback).toBe(true)
+    expect(settingsA.get().killswitch.minimum_remaining_percent).toBe(5)
+    expect(settingsB.get().killswitch.minimum_remaining_percent).toBe(20)
   })
 
   it('serializes concurrent updates to one file without losing either', async () => {
@@ -745,15 +745,15 @@ describe('location operator settings', () => {
 
     await Promise.all([
       settingsA.update((draft) => {
-        draft.routing.cli_first = true
+        draft.killswitch.enabled = true
       }),
       settingsB.update((draft) => {
-        draft.routing.quota_style_fallback = true
+        draft.killswitch.minimum_remaining_percent = 20
       }),
     ])
 
     expect(readJson(userPath).operator).toMatchObject({
-      routing: { cli_first: true, quota_style_fallback: true },
+      killswitch: { enabled: true, minimum_remaining_percent: 20 },
     })
   })
 

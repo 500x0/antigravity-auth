@@ -96,7 +96,11 @@ describe('mock antigravity server', () => {
     })
   })
 
-  for (const order of ['summary-first', 'cli-first', 'concurrent'] as const) {
+  for (const order of [
+    'summary-first',
+    'model-list-first',
+    'concurrent',
+  ] as const) {
     it(`attributes scoped quota responses to each credential (${order})`, async () => {
       await withServer(async (server) => {
         const expected = [
@@ -107,10 +111,10 @@ describe('mock antigravity server', () => {
             body: { summary: 0.7 },
           },
           {
-            endpoint: '/v1internal:retrieveUserQuota',
+            endpoint: '/v1internal:fetchAvailableModels',
             bearer: 'Bearer access-a',
             project: 'managed-a',
-            body: { cli: 0.4 },
+            body: { models: 0.4 },
           },
           {
             endpoint: '/v1internal:retrieveUserQuotaSummary',
@@ -119,10 +123,10 @@ describe('mock antigravity server', () => {
             body: { summary: 0.8 },
           },
           {
-            endpoint: '/v1internal:retrieveUserQuota',
+            endpoint: '/v1internal:fetchAvailableModels',
             bearer: 'Bearer access-b',
             project: 'managed-b',
-            body: { cli: 0.5 },
+            body: { models: 0.5 },
           },
         ] as const
         for (const entry of expected) {
@@ -202,7 +206,7 @@ describe('mock antigravity server', () => {
         { method: 'GET', endpoint, bearer: 'Bearer access-a' },
         {
           method: 'POST',
-          endpoint: '/v1internal:retrieveUserQuota',
+          endpoint: '/v1internal:fetchAvailableModels',
           bearer: 'Bearer access-a',
         },
         { method: 'POST', endpoint, bearer: 'Bearer access-a-extra' },
@@ -232,7 +236,7 @@ describe('mock antigravity server', () => {
         { method: 'GET', path: endpoint, bearer: 'Bearer access-a' },
         {
           method: 'POST',
-          path: '/v1internal:retrieveUserQuota',
+          path: '/v1internal:fetchAvailableModels',
           bearer: 'Bearer access-a',
         },
         { method: 'POST', path: endpoint, bearer: 'Bearer access-a-extra' },
@@ -241,7 +245,7 @@ describe('mock antigravity server', () => {
     })
   })
 
-  it('does not swap Summary and CLI responses for the same bearer', async () => {
+  it('does not swap Summary and model-list responses for the same bearer', async () => {
     await withServer(async (server) => {
       server.enqueue({
         kind: 'json',
@@ -256,20 +260,20 @@ describe('mock antigravity server', () => {
         kind: 'json',
         match: {
           method: 'POST',
-          endpoint: '/v1internal:retrieveUserQuota',
+          endpoint: '/v1internal:fetchAvailableModels',
           bearer: 'Bearer access-a',
         },
-        body: { cli: 0.4 },
+        body: { models: 0.4 },
       })
-      const cli = await fetch(
-        `${server.baseUrl}/v1internal:retrieveUserQuota`,
+      const models = await fetch(
+        `${server.baseUrl}/v1internal:fetchAvailableModels`,
         {
           method: 'POST',
           headers: { authorization: 'Bearer access-a' },
         },
       )
-      expect(cli.status).toBe(200)
-      expect(await cli.json()).toEqual({ cli: 0.4 })
+      expect(models.status).toBe(200)
+      expect(await models.json()).toEqual({ models: 0.4 })
       const summary = await fetch(
         `${server.baseUrl}/v1internal:retrieveUserQuotaSummary`,
         {

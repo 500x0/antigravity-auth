@@ -156,18 +156,9 @@ A fresh install may auto-fetch a project ID from the Cloud Code Assist API. If t
 
 `packages/core/src/model-registry.ts` is the canonical source of truth. The OpenCode package re-exports it as `getAntigravityOpencodeModelIds()` (consumed by `applyAntigravityProviderCatalog`).
 
-| Family | Header style | Quota group | Routing |
-| --- | --- | --- | --- |
-| Claude (Opus / Sonnet thinking) | `antigravity` | `claude` | Antigravity only |
-| Gemini 3.x / 2.5 (Pro / Flash / Image) | `antigravity` then `gemini-cli` | `gemini-pro`, `gemini-flash` | Antigravity first; `cli_first: true` reverses it |
-| GPT-OSS 120B | `antigravity` | `gpt-oss` | Antigravity only |
+Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
 
-Header style controls the `User-Agent`, `X-Goog-Api-Client`, and `Client-Metadata` triplets that the request transform attaches. The interceptor picks style per request:
-
-- **Antigravity-first (default):** Gemini requests first try the Antigravity header set; on `429 RESOURCE_EXHAUSTED` they fall back to the Gemini CLI header set.
-- **CLI-first (`cli_first: true`):** Gemini requests first try the Gemini CLI header set; on `429` they fall back to Antigravity.
-- **Style-fallback (`quota_style_fallback: true`):** Re-sends the SAME request through the other header set when the active pool is rate-limited, consuming tokens from BOTH pools (default off to prevent double-spend across pools). Change the live routing setting from `/antigravity` → Routing.
-- **Claude always uses Antigravity** regardless of the toggles.
+Content requests use the Antigravity User-Agent without `X-Goog-Api-Client` or `Client-Metadata` headers. Quota and rate limits are tracked per account, model family and model; rate limits rotate accounts rather than switching header styles.
 
 When all accounts for a given family cool down, the fetch interceptor waits up to `max_rate_limit_wait_seconds` (default `300`) before failing fast.
 
@@ -186,7 +177,6 @@ Gemini 4 Argon requires **Google AI Ultra**, supports low/medium/high variants
 It uses Antigravity only. Its per-model quota is reported independently; weekly
 pool attribution is unverified.
 - `antigravity-gpt-oss-120b-medium`
-- `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools` (Gemini CLI namespace)
 
 Legacy `antigravity-gemini-3-flash` style aliases resolve through `MODEL_ALIASES` in the resolver; new model names should be added through the registry, not hand-coded in the transforms. The Transform layer renames old → new automatically.
 
@@ -196,7 +186,7 @@ In local mode, OpenCode V1 and GA share the account repository at the resolved a
 
 - `refreshToken` (stored in plaintext in owner-only files/directories — filesystem permissions are not encryption)
 - `email`, `enabled`, `coolingDownUntil`, `cachedQuota`, `healthScore`
-- `projectId` (optional; used by Gemini CLI)
+- `projectId` (optional; used for Antigravity project context)
 - `fingerprintHistory` and `verificationRequired` / `verificationUrl` (used by the verification flow)
 
 Account selection (`account_selection_strategy`):
@@ -248,7 +238,7 @@ There is one public command: **`/antigravity`**. It opens the shared menu rather
 | --- | --- |
 | Accounts / Sign in | Inspect, enable/disable, remove, or reauthorize local accounts; start Google OAuth. Availability depends on the active source. |
 | Quota | Inspect readings or check quota now. |
-| Routing | Change live routing settings, including CLI-first and style fallback. |
+| Routing | Change live routing settings, including read-only account selection strategy. |
 | Limits | Configure the killswitch and account floors. |
 | Diagnostics | Adjust logging and wire-dump capture. Treat dumps as sensitive. |
 | Vault | Request enrollment, choose approved vault accounts, or disconnect to return to local authority. |
@@ -320,13 +310,10 @@ The Pi extension registers the `google` provider through `pi.extensions`; select
 | `proactive_refresh_buffer_seconds` | number (60-7200) | `1800` | — | Pre-expiry refresh window. |
 | `proactive_refresh_check_interval_seconds` | number (30-1800) | `300` | — | Refresh-check cadence. |
 | `max_rate_limit_wait_seconds` | number (0-3600) | `300` | — | Cap on queueing wait; `0` waits indefinitely. |
-| `quota_fallback` | bool | `false` | — | **Deprecated**, ignored at runtime; kept for back-compat. |
-| `cli_first` | bool | `false` | — | CLI header first instead of Antigravity for Gemini. |
 | `account_selection_strategy` | `sticky` \| `round-robin` \| `hybrid` | `hybrid` | `OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY` | Account picker. |
 | `pid_offset_enabled` | bool | `false` | `OPENCODE_ANTIGRAVITY_PID_OFFSET_ENABLED=1` | Per-PID starting account index. |
 | `switch_on_first_rate_limit` | bool | `true` | — | Switch immediately on first 429. |
 | `max_account_switches` | number (0-500) | `10` | `OPENCODE_ANTIGRAVITY_MAX_ACCOUNT_SWITCHES` | Account-switch budget per request. |
-| `quota_style_fallback` | bool | `false` | `OPENCODE_ANTIGRAVITY_QUOTA_STYLE_FALLBACK` | Re-send through the other header pool on exhaustion. |
 | `scheduling_mode` | `cache_first` \| `balance` \| `performance_first` | `cache_first` | `OPENCODE_ANTIGRAVITY_SCHEDULING_MODE` | Rate-limit scheduling strategy. |
 | `max_cache_first_wait_seconds` | number (5-300) | `60` | — | Wait cap when `scheduling_mode=cache_first`. |
 | `failure_ttl_seconds` | number (60-7200) | `3600` | — | Failure-count reset window. |
@@ -349,8 +336,6 @@ The Pi extension registers the `google` provider through `pi.extensions`; select
 | `token_bucket.regeneration_rate_per_minute` | number (0.1-60) | `6` | — | Rate budget refills. |
 | `token_bucket.initial_tokens` | number (1-1000) | `50` | — | Starting budget. |
 | `auto_update` | bool | `true` | — | Background npm update check + auto-pin. |
-| `operator.routing.cli_first` | bool | `false` | — | Live override of `cli_first` (from `/antigravity` → Routing). |
-| `operator.routing.quota_style_fallback` | bool | `false` | — | Live override of `quota_style_fallback`. |
 | `operator.killswitch.enabled` | bool | `false` | — | Master killswitch. |
 | `operator.killswitch.minimum_remaining_percent` | number (0-100) | `5` | — | Global hard block threshold. |
 | `operator.killswitch.accounts` | record<string, number> | unset | — | Optional per-account override (key = `sha256(refreshToken).slice(0,12)`). Absent by default; falls back to `minimum_remaining_percent`. |
@@ -371,7 +356,7 @@ Raw generative AGY sends and standard-fetch callers use different timeout scopes
 | Signature cache | `signature-cache-disk-<hash>.json` under `keep_thinking` path | `0600` | 2-day default TTL. |
 | Wire dump | `antigravity-logs/dumps/` | `0600` | Sensitive — see [Security and redaction](#security-and-redaction). |
 
-The raw generative AGY path uses [`agy-transport.ts`](packages/core/src/agy-transport.ts), with a default **`180_000` ms (3 min) response-header wait** and a separate **`180_000` ms no-body-data idle timeout**. Neither is a total streaming deadline. The standard-fetch helper [`fetchWithActiveTimeout`](packages/core/src/fetch-timeout.ts), used by other callers including Gemini CLI-style sends, defaults to **`15_000` ms until headers arrive**; it removes that timeout at headers but keeps caller cancellation connected until the body ends, errors, or is canceled. Do not interpret the helper's 15s budget as the raw AGY transport's limit.
+The raw generative AGY path uses [`agy-transport.ts`](packages/core/src/agy-transport.ts), with a default **`180_000` ms (3 min) response-header wait** and a separate **`180_000` ms no-body-data idle timeout**. Neither is a total streaming deadline. The standard-fetch helper [`fetchWithActiveTimeout`](packages/core/src/fetch-timeout.ts), used by other callers including non-Antigravity passthrough sends, defaults to **`15_000` ms until headers arrive**; it removes that timeout at headers but keeps caller cancellation connected until the body ends, errors, or is canceled. Do not interpret the helper's 15s budget as the raw AGY transport's limit.
 
 The **V1 RPC** between the TUI and [`rpc-server.ts`](packages/opencode/src/rpc/rpc-server.ts) uses a per-PID port file (`$XDG_STATE_HOME/cortexkit/antigravity-auth/rpc/<project-hash>/port-<pid>.json`). The TUI reads a live entry and exchanges shared menu requests/notifications with the loopback server using a `Bearer <token>` header. GA has its own server/TUI integration; do not treat the V1 port-file protocol as a host config requirement.
 
@@ -419,7 +404,6 @@ bun run typecheck                                   # tsc across the workspace +
 bun run test                                        # isolated source selectors from package.json
 bun run test:e2e                                    # plugin-flow + cli-flow + rpc-tui-flow
 bun run test:e2e:models                             # live Antigravity model inventory (gated by CI)
-bun run test:e2e:regression                         # cross-model + Gemini CLI regression
 bun run --cwd packages/opencode smoke:tui           # bundle + spawn the TUI precompiled tree against the npm package shape
 bun run format:check && bun run lint                # Biome format + lint (no auto-fix in CI)
 ```
@@ -468,7 +452,7 @@ CI (`.github/workflows/ci.yml`) reuses the same typecheck → build → smoke �
 - [packages/opencode/STRUCTURE.md](packages/opencode/STRUCTURE.md) — OpenCode package file-system map.
 - [packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md) — version history.
 - [packages/opencode/docs/CONFIGURATION.md](packages/opencode/docs/CONFIGURATION.md) — detailed option walkthrough.
-- [packages/opencode/docs/MULTI-ACCOUNT.md](packages/opencode/docs/MULTI-ACCOUNT.md) — load balancing, dual quota pools, account storage.
+- [packages/opencode/docs/MULTI-ACCOUNT.md](packages/opencode/docs/MULTI-ACCOUNT.md) — load balancing, account rotation and quota, account storage.
 - [packages/opencode/docs/MODEL-VARIANTS.md](packages/opencode/docs/MODEL-VARIANTS.md) — variants, thinking budgets, model selection.
 - [packages/opencode/docs/TROUBLESHOOTING.md](packages/opencode/docs/TROUBLESHOOTING.md) — long-form troubleshooting with platform-specific commands.
 - [packages/opencode/docs/ANTIGRAVITY_API_SPEC.md](packages/opencode/docs/ANTIGRAVITY_API_SPEC.md) — Antigravity API reference.

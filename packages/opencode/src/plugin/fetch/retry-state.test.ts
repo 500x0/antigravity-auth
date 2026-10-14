@@ -11,27 +11,35 @@ describe('RetryState', () => {
 
   describe('rate limit backoff', () => {
     it('returns attempt 1 on first 429 within the reset window', () => {
-      const result = state.getRateLimitBackoff(0, 'gemini-antigravity', null)
+      const result = state.getRateLimitBackoff(
+        0,
+        'gemini:gemini-3.5-flash',
+        null,
+      )
       expect(result.attempt).toBe(1)
       expect(result.isDuplicate).toBe(false)
       expect(result.delayMs).toBeGreaterThanOrEqual(1000)
     })
 
     it('treats concurrent 429s within the dedup window as one event', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
-      const dup = state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
+      const dup = state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
       expect(dup.isDuplicate).toBe(true)
       expect(dup.attempt).toBe(1)
     })
 
     it('separates accounts and quota keys', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
       const otherAccount = state.getRateLimitBackoff(
         1,
-        'gemini-antigravity',
+        'gemini:gemini-3.5-flash',
         1000,
       )
-      const otherQuota = state.getRateLimitBackoff(0, 'gemini-cli', 1000)
+      const otherQuota = state.getRateLimitBackoff(
+        0,
+        'gemini:gemini-4-argon',
+        1000,
+      )
       expect(otherAccount.isDuplicate).toBe(false)
       expect(otherQuota.isDuplicate).toBe(false)
     })
@@ -43,31 +51,27 @@ describe('RetryState', () => {
     })
 
     it('resets a single quota key', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
-      state.resetRateLimitState(0, 'gemini-antigravity')
-      const after = state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
+      state.resetRateLimitState(0, 'gemini:gemini-3.5-flash')
+      const after = state.getRateLimitBackoff(
+        0,
+        'gemini:gemini-3.5-flash',
+        1000,
+      )
       expect(after.isDuplicate).toBe(false)
       expect(after.attempt).toBe(1)
     })
 
     it('resets all quotas for an account', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
-      state.getRateLimitBackoff(0, 'gemini-cli', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-4-argon', 1000)
       state.resetAllRateLimitStateForAccount(0)
-      const afterAg = state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      const afterAg = state.getRateLimitBackoff(
+        0,
+        'gemini:gemini-3.5-flash',
+        1000,
+      )
       expect(afterAg.isDuplicate).toBe(false)
-    })
-
-    it('maps header style + family to a quota key', () => {
-      expect(state.headerStyleToQuotaKey('antigravity', 'gemini')).toBe(
-        'gemini-antigravity',
-      )
-      expect(state.headerStyleToQuotaKey('gemini-cli', 'gemini')).toBe(
-        'gemini-cli',
-      )
-      expect(state.headerStyleToQuotaKey('antigravity', 'claude')).toBe(
-        'claude',
-      )
     })
   })
 
@@ -154,7 +158,7 @@ describe('RetryState', () => {
 
   describe('clear()', () => {
     it('resets every map/flag', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
       state.trackAccountFailure(0)
       state.shouldShowRateLimitToast('429 for 60s')
       state.recordEmptyResponseAttempt('sess:model')
@@ -162,7 +166,7 @@ describe('RetryState', () => {
       state.clear()
 
       expect(
-        state.getRateLimitBackoff(0, 'gemini-antigravity', 1000).attempt,
+        state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000).attempt,
       ).toBe(1)
       expect(state.trackAccountFailure(0).failures).toBe(1)
       expect(state.shouldShowRateLimitToast('429 for 60s')).toBe(true)
@@ -178,7 +182,7 @@ describe('RetryState', () => {
     })
 
     it('makes every mutating method a no-op after dispose()', () => {
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
       state.trackAccountFailure(0)
       state.shouldShowRateLimitToast('429 for 60s')
       state.recordEmptyResponseAttempt('sess:model')
@@ -190,13 +194,13 @@ describe('RetryState', () => {
       expect(state.disposed).toBe(true)
 
       // Mutating methods must NOT grow any map after dispose.
-      state.getRateLimitBackoff(0, 'gemini-antigravity', 1000)
+      state.getRateLimitBackoff(0, 'gemini:gemini-3.5-flash', 1000)
       state.trackAccountFailure(0)
       state.shouldShowRateLimitToast('429 for 60s')
       state.recordEmptyResponseAttempt('sess:model')
       state.markSoftQuotaToastShown()
       state.markRateLimitToastShown()
-      state.resetRateLimitState(0, 'gemini-antigravity')
+      state.resetRateLimitState(0, 'gemini:gemini-3.5-flash')
       state.resetAllRateLimitStateForAccount(0)
       state.resetAccountFailureState(0)
       state.clearEmptyResponseAttempts()

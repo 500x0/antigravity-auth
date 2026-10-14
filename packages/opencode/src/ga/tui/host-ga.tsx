@@ -170,7 +170,6 @@ export type GaScope =
 export const GA_COMMANDS = [
   'antigravity-quota',
   'antigravity-account',
-  'antigravity-routing',
   'antigravity-killswitch',
   'antigravity-dump',
   'antigravity-logging',
@@ -200,10 +199,7 @@ export interface GaAccount extends ProjectionAccount {
 
 /** The location's operator settings, read fresh for every `state` answer. */
 export interface GaSettings {
-  readonly routing: {
-    readonly cliFirst: boolean
-    readonly quotaStyleFallback: boolean
-  }
+  readonly selectionStrategy: 'sticky' | 'round-robin' | 'hybrid' | 'vault'
   readonly killswitch: {
     readonly enabled: boolean
     readonly minimumRemainingPercent: number
@@ -516,10 +512,7 @@ function checkRoute(value: unknown, path: string, issues: Issues) {
   if (value.modelFamily !== 'claude' && value.modelFamily !== 'gemini') {
     issues.push(`${path}.modelFamily: unknown family`)
   }
-  if (
-    value.headerStyle !== 'antigravity' &&
-    value.headerStyle !== 'gemini-cli'
-  ) {
+  if (value.headerStyle !== 'antigravity') {
     issues.push(`${path}.headerStyle: unknown header style`)
   }
   if (
@@ -584,22 +577,21 @@ function checkSettings(value: unknown, path: string, issues: Issues) {
     issues.push(`${path}: expected settings`)
     return
   }
-  keys(value, ['routing', 'killswitch', 'logLevel', 'dump'], [], path, issues)
-  const { routing, killswitch, dump } = value
-  if (!isRecord(routing)) issues.push(`${path}.routing: expected an object`)
-  else {
-    keys(
-      routing,
-      ['cliFirst', 'quotaStyleFallback'],
-      [],
-      `${path}.routing`,
-      issues,
+  keys(
+    value,
+    ['selectionStrategy', 'killswitch', 'logLevel', 'dump'],
+    [],
+    path,
+    issues,
+  )
+  const { killswitch, dump } = value
+  if (
+    !['sticky', 'round-robin', 'hybrid', 'vault'].includes(
+      value.selectionStrategy as string,
     )
-    checkBool(routing.cliFirst, `${path}.routing.cliFirst`, issues)
-    checkBool(
-      routing.quotaStyleFallback,
-      `${path}.routing.quotaStyleFallback`,
-      issues,
+  ) {
+    issues.push(
+      `${path}.selectionStrategy: expected an account selection strategy`,
     )
   }
   if (!isRecord(killswitch))
@@ -703,9 +695,6 @@ function checkCommandResult(value: unknown, path: string, issues: Issues) {
       ) {
         issues.push(`${path}.targetOutcome: unknown outcome`)
       }
-      return
-    case 'antigravity-routing':
-      keys(value, [...base, 'routing'], [], path, issues)
       return
     case 'antigravity-killswitch':
       keys(value, [...base, 'killswitch'], [], path, issues)
@@ -1017,7 +1006,6 @@ export function createGaLocationClient(options: {
 const SECTION_FOR_COMMAND: Readonly<Record<GaCommand, string>> = {
   'antigravity-account': 'accounts',
   'antigravity-quota': 'quota',
-  'antigravity-routing': 'routing',
   'antigravity-killswitch': 'limits',
   'antigravity-dump': 'diagnostics',
   'antigravity-logging': 'diagnostics',
@@ -1150,25 +1138,22 @@ export function buildGaMenu(snapshot: GaSnapshot, now: number): MenuModel {
       id: 'routing',
       slot: 'routing',
       title: 'Routing',
-      lines: [
-        `Gemini CLI first: ${onOff(settings.routing.cliFirst)}`,
-        `Quota-style fallback: ${onOff(settings.routing.quotaStyleFallback)}`,
-      ],
+      lines:
+        settings.selectionStrategy === 'vault'
+          ? ["Selection follows the vault's served accounts."]
+          : [
+              `Account selection strategy: ${settings.selectionStrategy}`,
+              {
+                sticky: 'Keep the current account until it is unavailable.',
+                'round-robin':
+                  'Rotate among available accounts for each request.',
+                hybrid:
+                  'Choose available accounts using health and quota signals.',
+              }[settings.selectionStrategy],
+              'Configured in antigravity.json: account_selection_strategy',
+            ],
       items: [],
-      actions: [
-        {
-          id: settings.routing.cliFirst ? 'cli-first-off' : 'cli-first-on',
-          label: `Turn Gemini CLI first ${settings.routing.cliFirst ? 'off' : 'on'}`,
-          knobs: [],
-        },
-        {
-          id: settings.routing.quotaStyleFallback
-            ? 'quota-fallback-off'
-            : 'quota-fallback-on',
-          label: `Turn quota-style fallback ${settings.routing.quotaStyleFallback ? 'off' : 'on'}`,
-          knobs: [],
-        },
-      ],
+      actions: [],
     },
     {
       id: 'limits',
@@ -1259,22 +1244,6 @@ const TEXT_ACTIONS: Readonly<Record<string, GaApplyBody>> = {
     arguments: 'add-oauth-start',
   },
   'quota/refresh': { command: 'antigravity-quota', arguments: 'refresh' },
-  'routing/cli-first-on': {
-    command: 'antigravity-routing',
-    arguments: 'cli_first=true',
-  },
-  'routing/cli-first-off': {
-    command: 'antigravity-routing',
-    arguments: 'cli_first=false',
-  },
-  'routing/quota-fallback-on': {
-    command: 'antigravity-routing',
-    arguments: 'quota_style_fallback=true',
-  },
-  'routing/quota-fallback-off': {
-    command: 'antigravity-routing',
-    arguments: 'quota_style_fallback=false',
-  },
   'limits/killswitch-on': {
     command: 'antigravity-killswitch',
     arguments: 'enabled=true',

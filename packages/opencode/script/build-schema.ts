@@ -44,10 +44,6 @@ const optionDescriptions: Record<string, string> = {
   proactive_refresh_check_interval_seconds:
     'Interval between proactive refresh checks in seconds.',
   auto_update: 'Enable automatic plugin updates.',
-  quota_fallback:
-    'Deprecated: accepted for backward compatibility but ignored at runtime. Gemini fallback between Antigravity and Gemini CLI is always enabled.',
-  cli_first:
-    'Prefer gemini-cli routing before Antigravity for Gemini models. When false (default), Antigravity is tried first and gemini-cli is fallback.',
   toast_scope:
     "Controls which sessions show toast notifications. 'root_only' (default) shows in root session only, 'all' shows in all sessions.",
   scheduling_mode:
@@ -66,12 +62,6 @@ const optionDescriptions: Record<string, string> = {
     "TTL for cached soft quota data. 'auto' (default) calculates from refresh interval, or set a fixed number of minutes.",
   operator:
     'Runtime operator-controlled settings (mutable from /antigravity-* slash commands). Persists across restarts.',
-}
-
-const operatorRoutingDescriptions: Record<string, string> = {
-  cli_first:
-    'Override cli_first routing flag live (read by the fetch interceptor per request).',
-  quota_style_fallback: 'Override quota_style_fallback routing flag live.',
 }
 
 const operatorKillswitchDescriptions: Record<string, string> = {
@@ -126,19 +116,6 @@ function addDescriptions(schema: Record<string, unknown>): void {
         if (operatorDescriptions[opKey]) {
           opProp.description = operatorDescriptions[opKey]
         }
-      }
-      if (opProps.routing?.properties) {
-        const routingProps = opProps.routing.properties as Record<
-          string,
-          Record<string, unknown>
-        >
-        for (const [rKey, rProp] of Object.entries(routingProps)) {
-          if (operatorRoutingDescriptions[rKey]) {
-            rProp.description = operatorRoutingDescriptions[rKey]
-          }
-        }
-        opProps.routing.description =
-          'Routing overrides applied live by the fetch interceptor.'
       }
       if (opProps.killswitch?.properties) {
         const ksProps = opProps.killswitch.properties as Record<

@@ -1,6 +1,6 @@
 /**
  * Shared Antigravity request engine: account selection, retries, endpoint
- * and quota fallback, warmups and response handling for one plugin location.
+ * fallback, warmups and response handling for one plugin location.
  *
  * OpenCode 1's `createFetchInterceptor` and the GA location services both
  * call `createRequestExecutor`, so there is exactly one retry loop. Every
@@ -24,6 +24,7 @@ import {
   computeSoftQuotaCacheTtlMs,
   type Fingerprint,
   getPublicModelDefinitions,
+  getQuotaKey,
   getResolverAliasMap,
   type HealthScoreTracker,
   isClaudeThinkingModel,
@@ -45,10 +46,7 @@ import {
   type TokenBucketTracker,
   VAULT_ACCOUNT_REMEDY,
 } from '@cortexkit/antigravity-auth-core'
-import {
-  ANTIGRAVITY_ENDPOINT_FALLBACKS,
-  type HeaderStyle,
-} from '../../constants'
+import { ANTIGRAVITY_ENDPOINT_FALLBACKS } from '../../constants'
 import type { AntigravityConfig } from '../config'
 import type { LocationDebug } from '../debug'
 import { AntigravityKillswitchError } from '../errors'
@@ -63,8 +61,6 @@ import {
   getModelFamilyFromUrl,
   isCapacityRetryBudgetExhausted,
   MAX_TOTAL_CAPACITY_RETRIES,
-  resolveHeaderRoutingDecision,
-  resolveQuotaFallbackHeaderStyle,
   toUrlString,
   toWarmupStreamUrl,
 } from '../fetch-routing'
@@ -112,20 +108,6 @@ export type RequestTransport = (
   options?: AgyTransportOptions,
 ) => Promise<Response>
 
-/**
- * Standard fetch, used for `gemini-cli` header-style sends and their warmups;
- * `antigravity` header-style sends use the raw HTTP/1.1 AGY sender instead.
- */
-export type RequestFetch = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>
-
-/**
- * The fields of a pool row the engine reads: selection, logging, killswitch
- * and backoff metadata only. A row carries no credential. OpenCode 1's rows
- * are core `ManagedAccount`s; a vault location supplies metadata-only rows.
- */
 export interface RequestAccountRow {
   readonly index: number
   readonly email?: string
@@ -188,10 +170,7 @@ export interface RequestAccountPool<A extends RequestAccountRow> {
   getAccounts(): A[]
   getAccountsSnapshot(): A[]
   getEnabledAccounts(): A[]
-  getAvailableHeaderStyle(
-    account: A,
-    ...rest: CoreArgsAfterAccount<'getAvailableHeaderStyle'>
-  ): CoreResult<'getAvailableHeaderStyle'>
+
   getCurrentOrNextForFamily(
     ...args: CoreArgs<'getCurrentOrNextForFamily'>
   ): A | null
@@ -204,12 +183,9 @@ export interface RequestAccountPool<A extends RequestAccountRow> {
   ): number | null
   getSessionSummary(): CoreResult<'getSessionSummary'>
   getTotalDailyRequests(...args: CoreArgs<'getTotalDailyRequests'>): number
-  hasOtherAccountWithAntigravityAvailable(
-    ...args: CoreArgs<'hasOtherAccountWithAntigravityAvailable'>
-  ): boolean
-  isRateLimitedForHeaderStyle(
+  isRateLimited(
     account: A,
-    ...rest: CoreArgsAfterAccount<'isRateLimitedForHeaderStyle'>
+    ...rest: CoreArgsAfterAccount<'isRateLimited'>
   ): boolean
   markAccountCoolingDown(
     account: A,
@@ -363,7 +339,7 @@ export interface AccountAccessErrorDetails {
 export interface RequestRoutingEntry {
   accountId: string
   modelFamily: 'claude' | 'gemini'
-  headerStyle: 'antigravity' | 'gemini-cli'
+  headerStyle: 'antigravity'
   strategy?: 'sticky' | 'round-robin' | 'hybrid'
   updatedAt: number
 }
@@ -379,7 +355,6 @@ export interface AgyWireRequestInput {
   readonly projectId: string
   /** Antigravity endpoint for this attempt. */
   readonly endpoint?: string
-  readonly headerStyle?: HeaderStyle
   /** Close the tool loop and retry after a corrupted-thinking rejection. */
   readonly forceThinkingRecovery?: boolean
   readonly options?: PrepareRequestOptions
@@ -401,7 +376,6 @@ export function prepareAgyWireRequest(
     request.accessToken,
     request.projectId,
     request.endpoint,
-    request.headerStyle,
     request.forceThinkingRecovery ?? false,
     request.options,
   )
@@ -439,13 +413,11 @@ export interface RequestServicesDeps<A extends RequestAccountRow> {
    */
   readonly operatorSettings?: Pick<OperatorSettingsController, 'get'>
   /**
-   * Raw HTTP/1.1 AGY sender for `antigravity` header-style sends. The engine
+   * Raw HTTP/1.1 AGY sender for content requests. The engine
    * transforms the request first, then passes the prepared URL, init and
    * the caller's AbortSignal to it.
    */
   readonly transport: RequestTransport
-  /** Standard fetch for `gemini-cli` header-style sends and their warmups. */
-  readonly fetchImpl: RequestFetch
   readonly wire: RequestWire
   readonly debug: RequestDebug
   readonly dump: Pick<GeminiDumpState, 'dumpRequest'>
@@ -759,7 +731,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
     sessions: agySessionRegistry,
     operatorSettings,
     transport: defaultTransport,
-    fetchImpl: upstreamFetch,
     wire,
     debug,
     dump,
@@ -964,18 +935,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
     const quietMode = config.quiet_mode
     const toastScope = config.toast_scope
 
-    // Apply operator-controlled routing overrides live. The slash
-    // commands mutate these values through `applyCommand`; reading
-    // them per-request means a runtime flip takes effect on the next
-    // dispatched call without restarting the plugin.
-    const operatorRouting = operatorSettings?.get().routing
-    const effectiveConfig: AntigravityConfig = {
-      ...config,
-      cli_first: operatorRouting?.cli_first ?? config.cli_first,
-      quota_style_fallback:
-        operatorRouting?.quota_style_fallback ?? config.quota_style_fallback,
-    }
-
     const showToast = async (
       message: string,
       variant: 'info' | 'warning' | 'success' | 'error',
@@ -1012,15 +971,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
       }
     }
 
-    const hasOtherAccountWithAntigravity = (currentAccount: any): boolean => {
-      if (family !== 'gemini') return false
-      return accountManager.hasOtherAccountWithAntigravityAvailable(
-        currentAccount.index,
-        family,
-        model,
-      )
-    }
-
     let accountSwitchCount = 0
     const maxAccountSwitches = config.max_account_switches ?? 2
     let previousAccountIndex = -1
@@ -1031,14 +981,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
       await assertAdmission()
       checkAborted()
       const accountCount = accountManager.getAccountCount()
-      const routingDecision = resolveHeaderRoutingDecision(
-        urlString,
-        family,
-        effectiveConfig,
-      )
-      const { preferredHeaderStyle, explicitQuota, allowQuotaFallback } =
-        routingDecision
-
       if (accountCount === 0) {
         // Mirror the no-account short-circuit inside the retry loop so callers
         // that race with account removal still get a proper 401 instead of a
@@ -1068,14 +1010,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                   entry,
                   family,
                   {
-                    routing:
-                      effectiveConfig.cli_first !== undefined
-                        ? {
-                            cli_first: effectiveConfig.cli_first,
-                            quota_style_fallback:
-                              !!effectiveConfig.quota_style_fallback,
-                          }
-                        : { cli_first: false, quota_style_fallback: false },
                     killswitch: operatorKillswitch,
                     log_level: 'info',
                   },
@@ -1098,7 +1032,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
             model: model ?? 'unknown',
             accounts: accountManager.getAccounts(),
             settings: {
-              routing: { cli_first: false, quota_style_fallback: false },
               killswitch: operatorKillswitch ?? {
                 enabled: false,
                 minimum_remaining_percent: 0,
@@ -1125,8 +1058,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
       }
 
       // The eligibility mask above is computed once for this selection
-      // pass and applies to both the initial selection and the header-style
-      // fallback below. Selection does not re-evaluate quota, so a killed
+      // pass and applies to the account selection below. Selection does not re-evaluate quota, so a killed
       // current account falls through to the next eligible account.
       const killedIndexes =
         eligibleIndexes === null
@@ -1142,7 +1074,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
         family,
         model,
         config.account_selection_strategy,
-        preferredHeaderStyle,
         config.pid_offset_enabled,
         config.soft_quota_threshold_percent,
         softQuotaCacheTtlMs,
@@ -1160,39 +1091,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
           `killswitch-excluded idx=${account.index} (precomputed eligible set)`,
         )
         account = null
-      }
-
-      if (!account && allowQuotaFallback) {
-        const alternateHeaderStyle: 'antigravity' | 'gemini-cli' =
-          preferredHeaderStyle === 'antigravity' ? 'gemini-cli' : 'antigravity'
-        account = accountManager.getCurrentOrNextForFamily(
-          family,
-          model,
-          config.account_selection_strategy,
-          alternateHeaderStyle,
-          config.pid_offset_enabled,
-          config.soft_quota_threshold_percent,
-          softQuotaCacheTtlMs,
-          accountSessionIdentity,
-          killedIndexes,
-        )
-        if (account) {
-          pushDebug(
-            `selected-by-fallback idx=${account.index} preferred=${preferredHeaderStyle} alternate=${alternateHeaderStyle}`,
-          )
-        }
-        // The header-style fallback may not select an account outside the
-        // eligibility mask.
-        if (
-          account &&
-          eligibleIndexes !== null &&
-          !eligibleIndexes.has(account.index)
-        ) {
-          pushDebug(
-            `killswitch-excluded idx=${account.index} after fallback (precomputed eligible set)`,
-          )
-          account = null
-        }
       }
 
       if (!account) {
@@ -1247,13 +1145,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
           continue
         }
 
-        const strictWait = !allowQuotaFallback
-        const minWaitMs = accountManager.getMinWaitTimeForFamily(
-          family,
-          model,
-          preferredHeaderStyle,
-          strictWait,
-        )
+        const minWaitMs = accountManager.getMinWaitTimeForFamily(family, model)
         const waitMs = minWaitMs || 60_000
 
         pushDebug(
@@ -1439,7 +1331,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                   account,
                   cooldownMs,
                   family,
-                  'antigravity',
                   model,
                 )
                 pushDebug(
@@ -1509,13 +1400,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                 cooldownMs,
                 'auth-failure',
               )
-              accountManager.markRateLimited(
-                account,
-                cooldownMs,
-                family,
-                'antigravity',
-                model,
-              )
+              accountManager.markRateLimited(account, cooldownMs, family, model)
               pushDebug(
                 `token-refresh-error: cooldown ${cooldownMs}ms after ${failures} failures`,
               )
@@ -1552,13 +1437,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               cooldownMs,
               'project-error',
             )
-            accountManager.markRateLimited(
-              account,
-              cooldownMs,
-              family,
-              'antigravity',
-              model,
-            )
+            accountManager.markRateLimited(account, cooldownMs, family, model)
             pushDebug(
               `project-context-error: cooldown ${cooldownMs}ms after ${failures} failures`,
             )
@@ -1647,13 +1526,10 @@ export function createRequestExecutor<A extends RequestAccountRow>(
             warmupInit,
             projectId,
           )
-          const warmupResponse =
-            prepared.headerStyle === 'antigravity'
-              ? await transport(warmupUrl, warmupSend.init, {
-                  signal: abortSignal,
-                  onDebug: pushDebug,
-                })
-              : await upstreamFetch(warmupUrl, warmupSend.init)
+          const warmupResponse = await transport(warmupUrl, warmupSend.init, {
+            signal: abortSignal,
+            onDebug: pushDebug,
+          })
           reportVault401(warmupSend.admission, warmupResponse.status)
           const transformed = await wire.transformResponse(
             warmupResponse,
@@ -1696,16 +1572,14 @@ export function createRequestExecutor<A extends RequestAccountRow>(
             { ...prepared.init, method: 'POST', body: bodyStr },
             prepared.projectId ?? '',
           )
-          const probeResponse =
-            prepared.headerStyle === 'antigravity'
-              ? await transport(toUrlString(prepared.request), probeSend.init, {
-                  signal: abortSignal,
-                  onDebug: pushDebug,
-                })
-              : await upstreamFetch(
-                  toUrlString(prepared.request),
-                  probeSend.init,
-                )
+          const probeResponse = await transport(
+            toUrlString(prepared.request),
+            probeSend.init,
+            {
+              signal: abortSignal,
+              onDebug: pushDebug,
+            },
+          )
           reportVault401(probeSend.admission, probeResponse.status)
 
           if (probeResponse.body) {
@@ -1744,90 +1618,14 @@ export function createRequestExecutor<A extends RequestAccountRow>(
 
       let apiRequestCount = 0
       let shouldSwitchAccount = false
-      let headerStyle = preferredHeaderStyle
-      pushDebug(`headerStyle=${headerStyle} explicit=${explicitQuota}`)
       if (account.fingerprint) {
         pushDebug(
           `fingerprint: deviceId=${account.fingerprint.deviceId.slice(0, 8)}...`,
         )
       }
 
-      if (
-        accountManager.isRateLimitedForHeaderStyle(
-          account,
-          family,
-          headerStyle,
-          model,
-        )
-      ) {
-        if (
-          allowQuotaFallback &&
-          family === 'gemini' &&
-          headerStyle === 'antigravity'
-        ) {
-          if (
-            accountManager.hasOtherAccountWithAntigravityAvailable(
-              account.index,
-              family,
-              model,
-            )
-          ) {
-            pushDebug(
-              `antigravity rate-limited on account ${account.index}, but available on other accounts. Switching.`,
-            )
-            shouldSwitchAccount = true
-          } else {
-            const alternateStyle = accountManager.getAvailableHeaderStyle(
-              account,
-              family,
-              model,
-            )
-            const fallbackStyle = resolveQuotaFallbackHeaderStyle({
-              family,
-              headerStyle,
-              alternateStyle,
-            })
-            if (fallbackStyle) {
-              await showToast(
-                `Antigravity quota exhausted on all accounts. Using Gemini CLI quota.`,
-                'warning',
-              )
-              headerStyle = fallbackStyle
-              pushDebug(
-                `all-accounts antigravity exhausted, quota fallback: ${headerStyle}`,
-              )
-            } else {
-              shouldSwitchAccount = true
-            }
-          }
-        } else if (allowQuotaFallback && family === 'gemini') {
-          const alternateStyle = accountManager.getAvailableHeaderStyle(
-            account,
-            family,
-            model,
-          )
-          const fallbackStyle = resolveQuotaFallbackHeaderStyle({
-            family,
-            headerStyle,
-            alternateStyle,
-          })
-          if (fallbackStyle) {
-            const quotaName =
-              headerStyle === 'gemini-cli' ? 'Gemini CLI' : 'Antigravity'
-            const altQuotaName =
-              fallbackStyle === 'gemini-cli' ? 'Gemini CLI' : 'Antigravity'
-            await showToast(
-              `${quotaName} quota exhausted, using ${altQuotaName} quota`,
-              'warning',
-            )
-            headerStyle = fallbackStyle
-            pushDebug(`quota fallback: ${headerStyle}`)
-          } else {
-            shouldSwitchAccount = true
-          }
-        } else {
-          shouldSwitchAccount = true
-        }
+      if (accountManager.isRateLimited(account, family, model)) {
+        shouldSwitchAccount = true
       }
 
       let totalCapacityRetries = 0
@@ -1848,16 +1646,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
           }
 
           const currentEndpoint = ANTIGRAVITY_ENDPOINT_FALLBACKS[i]
-
-          if (
-            headerStyle === 'gemini-cli' &&
-            currentEndpoint !== 'https://cloudcode-pa.googleapis.com'
-          ) {
-            pushDebug(
-              `Skipping sandbox endpoint ${currentEndpoint} for gemini-cli headerStyle`,
-            )
-            continue
-          }
 
           let tokenConsumed = false
           let physicalAttemptStarted = false
@@ -1896,7 +1684,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               accessToken: sendAccessToken,
               projectId: sendProjectId,
               endpoint: currentEndpoint,
-              headerStyle,
+
               forceThinkingRecovery,
               options: {
                 claudeToolHardening: config.claude_tool_hardening,
@@ -1981,14 +1769,11 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               `dispatching request via ${prepared.headerStyle} transport`,
             )
             physicalAttemptStarted = true
-            const response =
-              prepared.headerStyle === 'antigravity'
-                ? await transport(
-                    toUrlString(prepared.request),
-                    prepared.init,
-                    { signal: abortSignal, onDebug: pushDebug },
-                  )
-                : await upstreamFetch(prepared.request, prepared.init)
+            const response = await transport(
+              toUrlString(prepared.request),
+              prepared.init,
+              { signal: abortSignal, onDebug: pushDebug },
+            )
             apiRequestCount++
             accountManager.recordRequest(account.index, family)
             const requestCounts = accountManager.getDailyRequestCounts(
@@ -2150,10 +1935,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                 }
               }
 
-              const quotaKey = retryState.headerStyleToQuotaKey(
-                headerStyle,
-                family,
-              )
+              const quotaKey = getQuotaKey(family, model)
               const backoff: RateLimitBackoffResult =
                 retryState.getRateLimitBackoff(
                   account.index,
@@ -2213,7 +1995,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                     accountManager.markRateLimitedWithReason(
                       account,
                       family,
-                      headerStyle,
                       model,
                       rateLimitReason,
                       serverRetryMs,
@@ -2231,7 +2012,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                   accountManager.markRateLimitedWithReason(
                     account,
                     family,
-                    headerStyle,
                     model,
                     rateLimitReason,
                     serverRetryMs,
@@ -2248,7 +2028,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               accountManager.markRateLimitedWithReason(
                 account,
                 family,
-                headerStyle,
                 model,
                 rateLimitReason,
                 serverRetryMs,
@@ -2257,71 +2036,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               accountManager.requestSaveToDisk()
 
               const switchAccountDelayMs = config.switch_account_delay_ms ?? 500
-
-              if (family === 'gemini') {
-                if (headerStyle === 'antigravity') {
-                  if (hasOtherAccountWithAntigravity(account)) {
-                    pushDebug(
-                      `antigravity exhausted on account ${account.index}, but available on others. Switching account.`,
-                    )
-                    await showToast(
-                      `Rate limited again. Switching account in ${formatWaitTime(switchAccountDelayMs)}...`,
-                      'warning',
-                    )
-                    await sleep(switchAccountDelayMs, abortSignal)
-                    shouldSwitchAccount = true
-                    break
-                  }
-
-                  if (allowQuotaFallback) {
-                    const alternateStyle =
-                      accountManager.getAvailableHeaderStyle(
-                        account,
-                        family,
-                        model,
-                      )
-                    const fallbackStyle = resolveQuotaFallbackHeaderStyle({
-                      family,
-                      headerStyle,
-                      alternateStyle,
-                    })
-                    if (fallbackStyle) {
-                      const safeModelName = model || 'this model'
-                      await showToast(
-                        `Antigravity quota exhausted for ${safeModelName}. Switching to Gemini CLI quota...`,
-                        'warning',
-                      )
-                      headerStyle = fallbackStyle
-                      pushDebug(`quota fallback: ${headerStyle}`)
-                      continue
-                    }
-                  }
-                } else if (headerStyle === 'gemini-cli') {
-                  if (allowQuotaFallback) {
-                    const alternateStyle =
-                      accountManager.getAvailableHeaderStyle(
-                        account,
-                        family,
-                        model,
-                      )
-                    const fallbackStyle = resolveQuotaFallbackHeaderStyle({
-                      family,
-                      headerStyle,
-                      alternateStyle,
-                    })
-                    if (fallbackStyle) {
-                      const safeModelName = model || 'this model'
-                      await showToast(
-                        `Gemini CLI quota exhausted for ${safeModelName}. Switching to Antigravity quota...`,
-                        'warning',
-                      )
-                      headerStyle = fallbackStyle
-                      pushDebug(`quota fallback: ${headerStyle}`)
-                      continue
-                    }
-                  }
-                }
-              }
 
               if (accountCount > 1) {
                 const quotaMsg = reasonInfo.quotaResetTime
@@ -2353,10 +2067,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
               break
             }
 
-            const quotaKey = retryState.headerStyleToQuotaKey(
-              headerStyle,
-              family,
-            )
+            const quotaKey = getQuotaKey(family, model)
             retryState.resetRateLimitState(account.index, quotaKey)
             retryState.resetAccountFailureState(account.index)
 
@@ -2416,7 +2127,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                   account,
                   cooldownMs,
                   family,
-                  headerStyle,
                   model,
                 )
 
@@ -2491,7 +2201,6 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                 const rotated = accountManager.proactivelyRotateForFamily(
                   family,
                   model,
-                  headerStyle,
                   config.soft_quota_threshold_percent,
                   softQuotaCacheTtlMs,
                   accountSessionIdentity,
@@ -2760,13 +2469,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                 cooldownMs,
                 'network-error',
               )
-              accountManager.markRateLimited(
-                account,
-                cooldownMs,
-                family,
-                headerStyle,
-                model,
-              )
+              accountManager.markRateLimited(account, cooldownMs, family, model)
               pushDebug(
                 `endpoint-error: cooldown ${cooldownMs}ms after ${failures} failures`,
               )

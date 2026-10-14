@@ -406,3 +406,39 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^retired\sClaude\sadmission\srefuses\suser\sselections\sbefore\sselection,\srefresh,\swarmup\sor\sphysical\ssend$']
+
+[[control]]
+id = "gemini-antigravity-user-agent"
+guards = "Gemini content requests use the Antigravity User-Agent even when a real legacy config prefers Gemini CLI."
+file = "packages/opencode/src/plugin/request.ts"
+old = "      fingerprintHeaders['User-Agent'] || selectedHeaders['User-Agent'],"
+new = "      'GeminiCLI/retired', // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^single\sAntigravity\srequest\spath\slegacy\sCLI\srouting\sconfig\ssends\sGemini\sthrough\sAntigravity\sonly$']
+
+[[control]]
+id = "gemini-no-api-client-header"
+guards = "Legacy Gemini CLI preference and an incoming X-Goog-Api-Client never leak that header onto a Gemini content request."
+file = "packages/opencode/src/plugin/request.ts"
+old = "  headers.delete('X-Goog-Api-Client')"
+new = "  // NON-VACUITY BREAK: retain the incoming API client header."
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^single\sAntigravity\srequest\spath\slegacy\sCLI\srouting\sconfig\ssends\sGemini\sthrough\sAntigravity\sonly$']
+
+[[control]]
+id = "gemini-no-client-metadata-header"
+guards = "Legacy Gemini CLI preference and incoming Client-Metadata never leak that header onto a Gemini content request."
+file = "packages/opencode/src/plugin/request.ts"
+old = "  headers.delete('Client-Metadata')"
+new = "  // NON-VACUITY BREAK: retain the incoming client metadata header."
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^single\sAntigravity\srequest\spath\slegacy\sCLI\srouting\sconfig\ssends\sGemini\sthrough\sAntigravity\sonly$']

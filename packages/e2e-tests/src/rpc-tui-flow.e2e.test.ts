@@ -357,10 +357,6 @@ describe('rpc / tui flow (e2e)', () => {
           },
         ],
       })
-      h.server.enqueue({
-        kind: 'geminiCliQuota',
-        buckets: [{ model: 'gemini-3-flash', remainingFraction: 0.7 }],
-      })
 
       const plugin = await h.createPlugin()
       try {
@@ -382,33 +378,29 @@ describe('rpc / tui flow (e2e)', () => {
     })
   })
 
-  it('runs the Routing section’s own set action and persists the new settings', async () => {
+  it('shows read-only account routing and refuses stale header-setting actions', async () => {
     await withHarness(async (h) => {
       const plugin = await h.createPlugin()
       try {
         const payload = await openMenu(plugin)
+        const routing = payload.menu.sections.find((s) => s.slot === 'routing')
+        expect(routing?.lines).toContain('Account selection strategy: sticky')
+        expect(routing?.lines).toContain(
+          'Configured in antigravity.json: account_selection_strategy',
+        )
+        expect(routing?.actions).toEqual([])
+        expect(JSON.stringify(routing)).not.toMatch(/Gemini CLI|header.style/i)
         const { rpcDir } = await portEntry()
-        const client = createRpcClient(rpcDir, process.pid)
-        const request = {
-          ...requestFor(payload, 'routing', 'set'),
-          sessionId: SESSION,
-          values: { cliFirst: true, quotaStyleFallback: false },
-        }
-        const result = checkedResult(await client.apply(request))
-        expect(result.ok).toBe(true)
-        // The refreshed menu, and a menu opened afterwards, show the values.
-        for (const menu of [result.menu, (await openMenu(plugin)).menu]) {
-          const routing = menu.sections.find((s) => s.slot === 'routing')
-          const knobs = routing?.actions.find((a) => a.id === 'set')?.knobs
-          expect(
-            knobs?.map((knob) =>
-              knob.kind === 'toggle' ? [knob.id, knob.value] : [knob.id],
-            ),
-          ).toEqual([
-            ['cliFirst', true],
-            ['quotaStyleFallback', false],
-          ])
-        }
+        const result = checkedResult(
+          await createRpcClient(rpcDir, process.pid).apply({
+            command: 'antigravity',
+            sectionId: 'routing',
+            actionId: 'set',
+            sessionId: SESSION,
+            values: {},
+          }),
+        )
+        expect(result.ok).toBe(false)
       } finally {
         await plugin.dispose()
       }

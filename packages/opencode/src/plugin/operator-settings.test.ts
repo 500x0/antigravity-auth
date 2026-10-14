@@ -53,7 +53,6 @@ describe('createOperatorSettingsController', () => {
 
     const settings = controller.get()
     expect(settings).toEqual<OperatorSettings>({
-      routing: { cli_first: false, quota_style_fallback: false },
       killswitch: { enabled: false, minimum_remaining_percent: 5 },
       log_level: 'info',
     })
@@ -83,8 +82,7 @@ describe('createOperatorSettingsController', () => {
     })
 
     const settings = controller.get()
-    expect(settings.routing.cli_first).toBe(true)
-    expect(settings.routing.quota_style_fallback).toBe(true)
+    expect(settings).not.toHaveProperty('routing')
     expect(settings.killswitch.enabled).toBe(true)
     expect(settings.killswitch.minimum_remaining_percent).toBe(17)
     expect(settings.killswitch.accounts?.[hashAccountKey(REFRESH_TOKEN)]).toBe(
@@ -105,14 +103,14 @@ describe('createOperatorSettingsController', () => {
     })
 
     await controller.update((draft) => {
-      draft.routing.cli_first = true
+      draft.killswitch.enabled = true
       draft.killswitch.enabled = true
       draft.killswitch.minimum_remaining_percent = 25
       draft.log_level = 'warn'
     })
 
     const afterUpdate = controller.get()
-    expect(afterUpdate.routing.cli_first).toBe(true)
+    expect(afterUpdate.killswitch.enabled).toBe(true)
     expect(afterUpdate.killswitch.enabled).toBe(true)
     expect(afterUpdate.killswitch.minimum_remaining_percent).toBe(25)
     expect(afterUpdate.log_level).toBe('warn')
@@ -120,7 +118,7 @@ describe('createOperatorSettingsController', () => {
     const persisted = JSON.parse(readFileSync(projectPath, 'utf-8')) as {
       operator: OperatorSettings
     }
-    expect(persisted.operator.routing.cli_first).toBe(true)
+    expect(persisted.operator.killswitch.enabled).toBe(true)
     expect(persisted.operator.killswitch.enabled).toBe(true)
     expect(persisted.operator.killswitch.minimum_remaining_percent).toBe(25)
     expect(persisted.operator.log_level).toBe('warn')

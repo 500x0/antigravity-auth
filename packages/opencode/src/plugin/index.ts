@@ -660,6 +660,7 @@ export const createAntigravityPlugin =
         builtMenu = {
           repository: opening.repository,
           menu: createOpenCodeAntigravityMenu({
+            selectionStrategy: () => config.account_selection_strategy,
             commands: commandsModule,
             accounts: opening.repository,
             settings: operatorSettings,

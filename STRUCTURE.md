@@ -497,3 +497,5 @@ These are the file clusters where one logical change needs to touch more than on
 | Change the loopback RPC contract | V1 RPC adapters or GA protocol, embedded public capability contract and renderer tests; do not hand-edit producer output. |
 | Add a TUI-rendered field | Source projection/schema + appropriate V1/GA render root + import-graph/emission and packed-consumer checks. |
 | Change repository/migration semantics | Core repository/types/codecs/identity/migration + host storage composition, source tests and attributed public-store consumer coverage. |
+
+All content requests use Antigravity. Gemini CLI consumer service retired on June 18, 2026; old header-routing config keys are ignored. The Routing menu now describes account selection without header-style controls.

@@ -122,7 +122,8 @@ class MemoryRepository {
 const A: RowRef = { id: 'row-a', credentialEpoch: 1, identity: 'a@example' }
 const B: RowRef = { id: 'row-b', credentialEpoch: 1 }
 
-const settingsDto = () => gaSettingsOf(emptyOperatorSettings(), dumpOff)
+const settingsDto = () =>
+  gaSettingsOf(emptyOperatorSettings(), dumpOff, 'hybrid')
 const dumpOff = { isEnabled: () => false }
 const status = () => ({
   checkedAt: null,
@@ -244,7 +245,7 @@ describe('GA account state', () => {
       repository: new MemoryRepository([]),
       registry: createGaSelectorRegistry(),
       generation: 'g-test',
-      settings: () => gaSettingsOf(settings, dumpOff),
+      settings: () => gaSettingsOf(settings, dumpOff, 'hybrid'),
       status,
       route: () => null,
     })
@@ -298,7 +299,7 @@ describe('GA menu command service', () => {
     })
     const request = {
       command: 'antigravity',
-      sectionId: 'routing',
+      sectionId: 'limits',
       actionId: 'set',
     }
     const scope = { kind: 'session', sessionID: 'ses-1' } as const
@@ -1208,9 +1209,9 @@ describe('GA vault custody location', () => {
         const answer = await serving.commands.apply({
           request: {
             command: 'antigravity',
-            sectionId: 'routing',
+            sectionId: 'limits',
             actionId: 'set',
-            values: { cliFirst: true },
+            values: { enabled: true },
           },
           scope,
           signal,
@@ -1225,7 +1226,7 @@ describe('GA vault custody location', () => {
           'extra',
         ])
         expect(JSON.stringify(answer)).not.toContain('vault-a@example.com')
-        expect(runtime.operatorSettings.get().routing.cli_first).toBe(true)
+        expect(runtime.operatorSettings.get().killswitch.enabled).toBe(true)
         // The apply re-read the vault roster for routing.
         expect(refreshed).toBe(2)
 

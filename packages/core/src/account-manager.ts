@@ -38,7 +38,6 @@ import type {
   AccountSelectionStrategy,
   AccountStorageV4,
   CooldownReason,
-  HeaderStyle,
   AccountModelFamily as ModelFamily,
   RateLimitStateV3,
 } from './account-types.ts'
@@ -62,12 +61,7 @@ import {
   TokenBucketTracker,
 } from './rotation.ts'
 
-export type {
-  AccountSelectionStrategy,
-  CooldownReason,
-  HeaderStyle,
-  ModelFamily,
-}
+export type { AccountSelectionStrategy, CooldownReason, ModelFamily }
 
 function isStorageLockContention(error: unknown): boolean {
   if (error instanceof AccountStorageLockContentionError) return true
@@ -1364,7 +1358,6 @@ export class AccountManager {
     family: ModelFamily,
     model?: string | null,
     strategy: AccountSelectionStrategy = 'sticky',
-    headerStyle: HeaderStyle = 'antigravity',
     pidOffsetEnabled: boolean = false,
     softQuotaThresholdPercent: number = 100,
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
@@ -1383,7 +1376,6 @@ export class AccountManager {
       family,
       model,
       strategy,
-      headerStyle,
       pidOffsetEnabled,
       softQuotaThresholdPercent,
       softQuotaCacheTtlMs,
@@ -1395,7 +1387,6 @@ export class AccountManager {
   getNextForFamily(
     family: ModelFamily,
     model?: string | null,
-    headerStyle: HeaderStyle = 'antigravity',
     softQuotaThresholdPercent: number = 100,
     softQuotaCacheTtlMs: number = 10 * 60 * 1000,
     identity?: AccountSessionIdentity,
@@ -1405,7 +1396,6 @@ export class AccountManager {
     return this.selection.getNextForFamily(
       family,
       model,
-      headerStyle,
       softQuotaThresholdPercent,
       softQuotaCacheTtlMs,
       identity,
@@ -1417,16 +1407,9 @@ export class AccountManager {
     account: ManagedAccount,
     retryAfterMs: number,
     family: ModelFamily,
-    headerStyle: HeaderStyle = 'antigravity',
     model?: string | null,
   ): void {
-    this.selection.markRateLimited(
-      account,
-      retryAfterMs,
-      family,
-      headerStyle,
-      model,
-    )
+    this.selection.markRateLimited(account, retryAfterMs, family, model)
   }
 
   /**
@@ -1471,7 +1454,6 @@ export class AccountManager {
   proactivelyRotateForFamily(
     family: ModelFamily,
     model: string | null | undefined,
-    headerStyle: HeaderStyle,
     softQuotaThresholdPercent: number,
     softQuotaCacheTtlMs: number,
     identity?: AccountSessionIdentity,
@@ -1479,7 +1461,6 @@ export class AccountManager {
     return this.selection.proactivelyRotateForFamily(
       family,
       model,
-      headerStyle,
       softQuotaThresholdPercent,
       softQuotaCacheTtlMs,
       identity,
@@ -1489,7 +1470,6 @@ export class AccountManager {
   markRateLimitedWithReason(
     account: ManagedAccount,
     family: ModelFamily,
-    headerStyle: HeaderStyle,
     model: string | null | undefined,
     reason: RateLimitReason,
     retryAfterMs?: number | null,
@@ -1498,7 +1478,6 @@ export class AccountManager {
     return this.selection.markRateLimitedWithReason(
       account,
       family,
-      headerStyle,
       model,
       reason,
       retryAfterMs,
@@ -1562,50 +1541,12 @@ export class AccountManager {
     return this.selection.getFreshAccountsForQuota(quotaKey, family, model)
   }
 
-  isRateLimitedForHeaderStyle(
-    account: ManagedAccount,
-    family: ModelFamily,
-    headerStyle: HeaderStyle,
-    model?: string | null,
-  ): boolean {
-    return this.selection.isRateLimitedForHeaderStyle(
-      account,
-      family,
-      headerStyle,
-      model,
-    )
-  }
-
-  getAvailableHeaderStyle(
+  isRateLimited(
     account: ManagedAccount,
     family: ModelFamily,
     model?: string | null,
-  ): HeaderStyle | null {
-    return this.selection.getAvailableHeaderStyle(account, family, model)
-  }
-
-  /**
-   * Check if any OTHER account has antigravity quota available for the given family/model.
-   *
-   * Used to determine whether to switch accounts vs fall back to gemini-cli:
-   * - If true: Switch to another account (preserve antigravity priority)
-   * - If false: All accounts exhausted antigravity, safe to fall back to gemini-cli
-   *
-   * @param currentAccountIndex - Index of the current account (will be excluded from check)
-   * @param family - Model family ("gemini" or "claude")
-   * @param model - Optional model name for model-specific rate limits
-   * @returns true if any other enabled, non-cooling-down account has antigravity available
-   */
-  hasOtherAccountWithAntigravityAvailable(
-    currentAccountIndex: number,
-    family: ModelFamily,
-    model?: string | null,
   ): boolean {
-    return this.selection.hasOtherAccountWithAntigravityAvailable(
-      currentAccountIndex,
-      family,
-      model,
-    )
+    return this.selection.isRateLimited(account, family, model)
   }
 
   setAccountEnabled(accountIndex: number, enabled: boolean): boolean {
@@ -1708,18 +1649,8 @@ export class AccountManager {
     }
   }
 
-  getMinWaitTimeForFamily(
-    family: ModelFamily,
-    model?: string | null,
-    headerStyle?: HeaderStyle,
-    strict?: boolean,
-  ): number {
-    return this.selection.getMinWaitTimeForFamily(
-      family,
-      model,
-      headerStyle,
-      strict,
-    )
+  getMinWaitTimeForFamily(family: ModelFamily, model?: string | null): number {
+    return this.selection.getMinWaitTimeForFamily(family, model)
   }
 
   getAccounts(): ManagedAccount[] {

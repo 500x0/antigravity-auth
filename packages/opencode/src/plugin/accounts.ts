@@ -30,7 +30,6 @@ export type {
   AccountModelFamily as ModelFamily,
   AccountSessionIdentity,
   CooldownReason,
-  HeaderStyle,
   ManagedAccount,
   RateLimitReason,
 } from '@cortexkit/antigravity-auth-core'

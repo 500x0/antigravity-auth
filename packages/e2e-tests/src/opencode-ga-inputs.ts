@@ -141,9 +141,7 @@ export function normalizeSameReadState(
         nonGeminiRemaining: row.quota['non-gemini']?.remainingPercent,
       }
     }),
-    routing: state.settings.routing.cliFirst
-      ? 'cli_first'
-      : 'antigravity_first',
+    routing: state.settings.selectionStrategy,
     logging: state.settings.logLevel,
     dump: state.settings.dump,
     killswitch: state.settings.killswitch,

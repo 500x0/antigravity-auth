@@ -96,7 +96,7 @@ export interface SidebarAccountState {
 export interface SidebarRoutingEntry {
   accountId: string
   modelFamily: 'claude' | 'gemini'
-  headerStyle: 'antigravity' | 'gemini-cli'
+  headerStyle: 'antigravity'
   strategy?: 'sticky' | 'round-robin' | 'hybrid'
   updatedAt: number
 }
@@ -419,7 +419,7 @@ function normalizeRouting(input: unknown): SidebarRoutingEntry | null {
   return {
     accountId,
     modelFamily,
-    headerStyle,
+    headerStyle: 'antigravity',
     strategy:
       strategy === 'sticky' ||
       strategy === 'round-robin' ||

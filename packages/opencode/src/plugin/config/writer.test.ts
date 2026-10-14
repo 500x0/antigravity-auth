@@ -37,7 +37,6 @@ describe('writeOperatorConfig', () => {
       projectConfigPath: projectPath,
       userConfigPath: join(fixture.dir, 'user.json'),
       operator: {
-        routing: { cli_first: true, quota_style_fallback: false },
         killswitch: { enabled: true, minimum_remaining_percent: 10 },
         log_level: 'debug',
       },
@@ -61,7 +60,6 @@ describe('writeOperatorConfig', () => {
       projectConfigPath: projectPath,
       userConfigPath: userPath,
       operator: {
-        routing: { cli_first: false, quota_style_fallback: true },
         killswitch: { enabled: false, minimum_remaining_percent: 5 },
         log_level: 'info',
       },
@@ -91,7 +89,6 @@ describe('writeOperatorConfig', () => {
       projectConfigPath: projectPath,
       userConfigPath: join(fixture.dir, 'user.json'),
       operator: {
-        routing: { cli_first: true, quota_style_fallback: false },
         killswitch: { enabled: false, minimum_remaining_percent: 5 },
         log_level: 'trace',
       },
@@ -115,7 +112,6 @@ describe('writeOperatorConfig', () => {
         projectConfigPath: join(fixture.dir, 'antigravity.json'),
         userConfigPath: join(fixture.dir, 'user.json'),
         operator: {
-          routing: { cli_first: false, quota_style_fallback: false },
           killswitch: { enabled: false, minimum_remaining_percent: 5 },
           log_level: 'nonsense' as unknown as 'info',
         },
@@ -129,7 +125,6 @@ describe('writeOperatorConfig', () => {
         projectConfigPath: join(fixture.dir, 'antigravity.json'),
         userConfigPath: join(fixture.dir, 'user.json'),
         operator: {
-          routing: { cli_first: false, quota_style_fallback: false },
           killswitch: {
             enabled: false,
             minimum_remaining_percent: 999,
@@ -149,7 +144,6 @@ describe('writeOperatorConfig', () => {
         projectConfigPath: projectPath,
         userConfigPath: join(fixture.dir, 'user.json'),
         operator: {
-          routing: { cli_first: false, quota_style_fallback: false },
           killswitch: { enabled: false, minimum_remaining_percent: 5 },
           log_level: 'no-such-level' as unknown as 'info',
         },

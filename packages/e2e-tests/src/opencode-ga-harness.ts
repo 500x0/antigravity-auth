@@ -46,7 +46,7 @@ import {
 } from 'typescript'
 import { getAgyModelEnum } from '../../core/src/agy-request-metadata.ts'
 import { getPublicModelDefinitions } from '../../core/src/model-registry.ts'
-import { resolveModelForHeaderStyle } from '../../core/src/transform/model-resolver.ts'
+import { resolveAntigravityModel } from '../../core/src/transform/model-resolver.ts'
 import type {
   AntigravityAppliedOutput,
   AntigravityApplyInput,
@@ -3473,9 +3473,8 @@ function assertGaWire(
 ): Record<string, unknown> {
   const [id, variant] = model.replace(/^google\//, '').split('#')
   requireCondition(id, 'Missing requested public model')
-  const resolved = resolveModelForHeaderStyle(
+  const resolved = resolveAntigravityModel(
     `${id}${variant ? `-${variant}` : ''}`,
-    'antigravity',
   )
   const envelope = record(JSON.parse(recorded.body))
   requireCondition(

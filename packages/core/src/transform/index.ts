@@ -53,7 +53,7 @@ export {
   GEMINI_3_THINKING_LEVELS,
   getModelFamily,
   MODEL_ALIASES,
-  resolveModelForHeaderStyle,
+  resolveAntigravityModel,
   resolveModelWithTier,
   resolveModelWithVariant,
   THINKING_TIER_BUDGETS,

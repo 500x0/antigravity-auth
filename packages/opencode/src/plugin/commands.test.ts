@@ -195,6 +195,7 @@ describe('createOpenCodeAntigravityMenu', () => {
         const levels: string[] = []
         const signIns: string[] = []
         const menu = await createOpenCodeAntigravityMenu({
+          selectionStrategy: () => 'hybrid',
           accounts: repository,
           settings,
           dump: {
@@ -241,14 +242,14 @@ describe('createOpenCodeAntigravityMenu', () => {
         const routed = await menu.apply(
           {
             command: 'antigravity',
-            sectionId: 'routing',
+            sectionId: 'limits',
             actionId: 'set',
-            values: { cliFirst: true },
+            values: { enabled: true },
           },
           invocation,
         )
         expect(routed.ok).toBe(true)
-        expect(settings.get().routing.cli_first).toBe(true)
+        expect(settings.get().killswitch.enabled).toBe(true)
 
         const logged = await menu.apply(
           {
@@ -345,6 +346,7 @@ describe('createStoreAccountLimits', () => {
     try {
       const key = accountKeyForRefreshToken('floor-refresh-secret')
       const menu = await createOpenCodeAntigravityMenu({
+        selectionStrategy: () => 'hybrid',
         accounts: repository,
         settings,
         dump: { isEnabled: () => false, setEnabled: () => undefined },

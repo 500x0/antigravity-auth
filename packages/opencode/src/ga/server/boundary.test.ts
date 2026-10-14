@@ -122,7 +122,7 @@ function selectorFor(index: number): string {
 }
 
 const SETTINGS: GaStateRead['settings'] = {
-  routing: { cliFirst: false, quotaStyleFallback: true },
+  selectionStrategy: 'hybrid',
   killswitch: { enabled: false, minimumRemainingPercent: 5 },
   logLevel: 'info',
   dump: { enabled: false },

@@ -1,8 +1,3 @@
-import type {
-  HeaderStyle,
-  AccountModelFamily as ModelFamily,
-} from '@cortexkit/antigravity-auth-core'
-
 /**
  * Per-interceptor state that was previously module-global.
  *
@@ -74,8 +69,6 @@ export interface RetryState {
   resetRateLimitState(accountIndex: number, quotaKey: string): void
   /** Resets every quota key for the given account. */
   resetAllRateLimitStateForAccount(accountIndex: number): void
-  /** Maps header style + family to a deduplication bucket. */
-  headerStyleToQuotaKey(headerStyle: HeaderStyle, family: ModelFamily): string
   /** Records a non-429 failure and returns cooldown state. */
   trackAccountFailure(accountIndex: number): AccountFailureResult
   /** Clears the failure counter for one account. */
@@ -216,14 +209,6 @@ export function createRetryState(): RetryState {
     }
   }
 
-  function headerStyleToQuotaKey(
-    headerStyle: HeaderStyle,
-    family: ModelFamily,
-  ): string {
-    if (family === 'claude') return 'claude'
-    return headerStyle === 'antigravity' ? 'gemini-antigravity' : 'gemini-cli'
-  }
-
   function trackAccountFailure(accountIndex: number): AccountFailureResult {
     if (isDisposed()) return DISPOSED_FAILURE
     const now = Date.now()
@@ -335,7 +320,6 @@ export function createRetryState(): RetryState {
     getRateLimitBackoff,
     resetRateLimitState,
     resetAllRateLimitStateForAccount,
-    headerStyleToQuotaKey,
     trackAccountFailure,
     resetAccountFailureState,
     shouldShowRateLimitToast,

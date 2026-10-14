@@ -15,7 +15,6 @@ import type {
   AccountSelectionStrategy,
   AccountStorageV4,
   CooldownReason,
-  HeaderStyle,
 } from './account-types.ts'
 import { HealthScoreTracker, TokenBucketTracker } from './rotation.ts'
 
@@ -124,7 +123,6 @@ interface OraclePool<R extends OracleRow> {
     family: AccountModelFamily,
     model?: string | null,
     strategy?: AccountSelectionStrategy,
-    headerStyle?: HeaderStyle,
     pidOffsetEnabled?: boolean,
     softQuotaThresholdPercent?: number,
     softQuotaCacheTtlMs?: number,
@@ -134,7 +132,6 @@ interface OraclePool<R extends OracleRow> {
   getNextForFamily(
     family: AccountModelFamily,
     model?: string | null,
-    headerStyle?: HeaderStyle,
     softQuotaThresholdPercent?: number,
     softQuotaCacheTtlMs?: number,
     identity?: AccountSessionIdentity,
@@ -151,13 +148,11 @@ interface OraclePool<R extends OracleRow> {
     account: R,
     retryAfterMs: number,
     family: AccountModelFamily,
-    headerStyle?: HeaderStyle,
     model?: string | null,
   ): void
   markRateLimitedWithReason(
     account: R,
     family: AccountModelFamily,
-    headerStyle: HeaderStyle,
     model: string | null | undefined,
     reason: RateLimitReason,
     retryAfterMs?: number | null,
@@ -175,22 +170,9 @@ interface OraclePool<R extends OracleRow> {
   getMinWaitTimeForFamily(
     family: AccountModelFamily,
     model?: string | null,
-    headerStyle?: HeaderStyle,
-    strict?: boolean,
   ): number
-  getAvailableHeaderStyle(
+  isRateLimited(
     account: R,
-    family: AccountModelFamily,
-    model?: string | null,
-  ): HeaderStyle | null
-  isRateLimitedForHeaderStyle(
-    account: R,
-    family: AccountModelFamily,
-    headerStyle: HeaderStyle,
-    model?: string | null,
-  ): boolean
-  hasOtherAccountWithAntigravityAvailable(
-    currentAccountIndex: number,
     family: AccountModelFamily,
     model?: string | null,
   ): boolean
@@ -239,7 +221,6 @@ interface OraclePool<R extends OracleRow> {
   proactivelyRotateForFamily(
     family: AccountModelFamily,
     model: string | null | undefined,
-    headerStyle: HeaderStyle,
     softQuotaThresholdPercent: number,
     softQuotaCacheTtlMs: number,
     identity?: AccountSessionIdentity,
@@ -360,38 +341,23 @@ function runOracle<R extends OracleRow>(
     'claude',
     null,
     'sticky',
-    'antigravity',
     false,
     100,
     TTL,
     undefined,
     new Set([claudeNow]),
   )
-  // Round-robin over per-model and per-header-style limits.
+  // Round-robin over model-specific and family-wide limits.
   out.push([
     'round-robin gemini model',
     [1, 2, 3, 4].map(() =>
-      idx(
-        pool.getCurrentOrNextForFamily(
-          'gemini',
-          MODEL,
-          'round-robin',
-          'antigravity',
-        ),
-      ),
+      idx(pool.getCurrentOrNextForFamily('gemini', MODEL, 'round-robin')),
     ),
   ])
   out.push([
-    'round-robin gemini cli',
+    'round-robin gemini family',
     [1, 2, 3].map(() =>
-      idx(
-        pool.getCurrentOrNextForFamily(
-          'gemini',
-          null,
-          'round-robin',
-          'gemini-cli',
-        ),
-      ),
+      idx(pool.getCurrentOrNextForFamily('gemini', null, 'round-robin')),
     ),
   ])
   state('after round-robin')
@@ -401,34 +367,13 @@ function runOracle<R extends OracleRow>(
   pool.healthTracker.recordFailure(0)
   pool.tokenTracker.consume(1, 5)
   sessions.push(root, child)
-  select(
-    'hybrid root',
-    'gemini',
-    MODEL,
-    'hybrid',
-    'gemini-cli',
-    false,
-    100,
-    TTL,
-    root,
-  )
-  select(
-    'hybrid child',
-    'gemini',
-    MODEL,
-    'hybrid',
-    'gemini-cli',
-    false,
-    100,
-    TTL,
-    child,
-  )
+  select('hybrid root', 'gemini', MODEL, 'hybrid', false, 100, TTL, root)
+  select('hybrid child', 'gemini', MODEL, 'hybrid', false, 100, TTL, child)
   select(
     'hybrid global excluding 0 and 1',
     'gemini',
     MODEL,
     'hybrid',
-    'gemini-cli',
     false,
     100,
     TTL,
@@ -438,88 +383,46 @@ function runOracle<R extends OracleRow>(
   state('after hybrid')
 
   // Exact session pinning until the pinned account becomes unavailable.
-  select(
-    'root pinned',
-    'gemini',
-    MODEL,
-    'sticky',
-    'gemini-cli',
-    false,
-    100,
-    TTL,
-    root,
-  )
+  select('root pinned', 'gemini', MODEL, 'sticky', false, 100, TTL, root)
   const pinned = pool.getCurrentAccountForFamily('gemini', root)
   if (pinned === null) throw new Error('root has no pin')
-  pool.markRateLimited(pinned, 5_000, 'gemini', 'gemini-cli', MODEL)
+  pool.markRateLimited(pinned, 5_000, 'gemini', MODEL)
   select(
     'root after its pin is limited',
     'gemini',
     MODEL,
     'sticky',
-    'gemini-cli',
     false,
     100,
     TTL,
     root,
   )
-  select(
-    'child sticky',
-    'gemini',
-    MODEL,
-    'sticky',
-    'gemini-cli',
-    false,
-    100,
-    TTL,
-    child,
-  )
+  select('child sticky', 'gemini', MODEL, 'sticky', false, 100, TTL, child)
   state('after pinning')
 
   // PID offset, once per session and family.
   sessions.push(offset)
-  select(
-    'pid offset session',
-    'gemini',
-    null,
-    'sticky',
-    'antigravity',
-    true,
-    100,
-    TTL,
-    offset,
-  )
+  select('pid offset session', 'gemini', null, 'sticky', true, 100, TTL, offset)
   select(
     'pid offset session again',
     'gemini',
     null,
     'sticky',
-    'antigravity',
     true,
     100,
     TTL,
     offset,
   )
-  select('pid offset global', 'claude', null, 'sticky', 'antigravity', true)
+  select('pid offset global', 'claude', null, 'sticky', true)
   state('after pid offset')
 
   // Soft quota: over-threshold accounts are skipped, cold ones pass.
-  select(
-    'soft quota sticky',
-    'gemini',
-    FLASH,
-    'sticky',
-    'antigravity',
-    false,
-    50,
-    TTL,
-  )
+  select('soft quota sticky', 'gemini', FLASH, 'sticky', false, 50, TTL)
   select(
     'soft quota round-robin',
     'gemini',
     FLASH,
     'round-robin',
-    'antigravity',
     false,
     50,
     TTL,
@@ -550,35 +453,21 @@ function runOracle<R extends OracleRow>(
   ])
   out.push(['oldest quota age', pool.getOldestQuotaCacheAge()])
 
-  // Waits, header styles and the antigravity fallback check.
   out.push([
     'waits',
     [
       pool.getMinWaitTimeForFamily('claude'),
       pool.getMinWaitTimeForFamily('gemini', MODEL),
-      pool.getMinWaitTimeForFamily('gemini', MODEL, 'gemini-cli', true),
-      pool.getMinWaitTimeForFamily('gemini', null, 'antigravity', true),
     ],
   ])
   out.push([
-    'header styles',
+    'rate limits',
     pool
       .getAccounts()
       .map((row) => [
-        pool.getAvailableHeaderStyle(row, 'gemini', MODEL),
-        pool.getAvailableHeaderStyle(row, 'claude'),
-        pool.isRateLimitedForHeaderStyle(row, 'gemini', 'antigravity', MODEL),
+        pool.isRateLimited(row, 'gemini', MODEL),
+        pool.isRateLimited(row, 'claude'),
       ]),
-  ])
-  out.push([
-    'other antigravity',
-    [0, 1, 2, 3, 4, 5].map((i) =>
-      pool.hasOtherAccountWithAntigravityAvailable(i, 'gemini', MODEL),
-    ),
-  ])
-  out.push([
-    'other antigravity claude',
-    pool.hasOtherAccountWithAntigravityAvailable(0, 'claude'),
   ])
 
   // Toast debounce.
@@ -601,7 +490,6 @@ function runOracle<R extends OracleRow>(
       pool.markRateLimitedWithReason(
         at(4),
         'claude',
-        'antigravity',
         null,
         'MODEL_CAPACITY_EXHAUSTED',
         null,
@@ -609,7 +497,6 @@ function runOracle<R extends OracleRow>(
       pool.markRateLimitedWithReason(
         at(4),
         'claude',
-        'antigravity',
         null,
         'QUOTA_EXHAUSTED',
         null,
@@ -617,7 +504,6 @@ function runOracle<R extends OracleRow>(
       pool.markRateLimitedWithReason(
         at(5),
         'gemini',
-        'gemini-cli',
         MODEL,
         'RATE_LIMIT_EXCEEDED',
         4_000,
@@ -661,7 +547,7 @@ function runOracle<R extends OracleRow>(
   ])
   out.push([
     'next prefers session-used',
-    idx(pool.getNextForFamily('gemini', null, 'antigravity', 100, TTL, root)),
+    idx(pool.getNextForFamily('gemini', null, 100, TTL, root)),
   ])
   state('after usage')
 
@@ -711,25 +597,8 @@ function runOracle<R extends OracleRow>(
   out.push([
     'proactive rotate',
     [
-      idx(
-        pool.proactivelyRotateForFamily(
-          'gemini',
-          MODEL,
-          'antigravity',
-          100,
-          TTL,
-          root,
-        ),
-      ),
-      idx(
-        pool.proactivelyRotateForFamily(
-          'claude',
-          null,
-          'antigravity',
-          100,
-          TTL,
-        ),
-      ),
+      idx(pool.proactivelyRotateForFamily('gemini', MODEL, 100, TTL, root)),
+      idx(pool.proactivelyRotateForFamily('claude', null, 100, TTL)),
     ],
   ])
   out.push(['optimistic reset', pool.shouldTryOptimisticReset('claude')])
@@ -811,7 +680,6 @@ function runOracle<R extends OracleRow>(
           'gemini',
           FLASH,
           'sticky',
-          'antigravity',
           false,
           1,
           TTL,
@@ -882,107 +750,71 @@ async function runManagerOracle(): Promise<Output> {
 }
 
 /**
- * The outputs recorded from the pool-file AccountManager at commit
- * d0d3182a, before its selection state moved into AccountSelector.
+ * Fixed-clock selection transcript for a single account/family/model quota pool.
+ * Legacy style keys remain in the rows as inert persisted data.
  */
 // biome-ignore format: a recorded literal, one output per line
 const ORACLE_EXPECTED: Output = [
   ["sticky claude",0],
   ["sticky claude after limit",4],
   ["sticky claude excluding current",5],
-  ["round-robin gemini model",[1,5,0,1]],
-  ["round-robin gemini cli",[4,0,1]],
-  ["after round-robin: state",{"active":{"claude":5,"gemini":1},"pins":[],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":0,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini-cli":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[70,70,70,70,70,70],"tokens":[50,50,50,50,50,50],"diagnostics":[]}],
+  ["round-robin gemini model",[1,4,5,0]],
+  ["round-robin gemini family",[1,4,5]],
+  ["after round-robin: state",{"active":{"claude":5,"gemini":5},"pins":[],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":0,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[70,70,70,70,70,70],"tokens":[50,50,50,50,50,50],"diagnostics":[]}],
   ["hybrid root",4],
-  ["hybrid child",1],
+  ["hybrid child",5],
   ["hybrid global excluding 0 and 1",4],
-  ["after hybrid: state",{"active":{"claude":5,"gemini":4},"pins":[["root",{"claude":-1,"gemini":4}],["child",{"claude":-1,"gemini":1}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":[]}],
+  ["after hybrid: state",{"active":{"claude":5,"gemini":4},"pins":[["root",{"claude":-1,"gemini":4}],["child",{"claude":-1,"gemini":5}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":[]}],
   ["root pinned",4],
-  ["root after its pin is limited",0],
-  ["child sticky",1],
-  ["after pinning: state",{"active":{"claude":5,"gemini":0},"pins":[["root",{"claude":-1,"gemini":0}],["child",{"claude":-1,"gemini":1}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":[]}],
+  ["root after its pin is limited",5],
+  ["child sticky",5],
+  ["after pinning: state",{"active":{"claude":5,"gemini":5},"pins":[["root",{"claude":-1,"gemini":5}],["child",{"claude":-1,"gemini":5}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":[]}],
   ["pid offset session",4],
   ["pid offset session again",4],
   ["pid offset global",4],
-  ["after pid offset: state",{"active":{"claude":4,"gemini":4},"pins":[["root",{"claude":-1,"gemini":0}],["child",{"claude":-1,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":["Applying PID account offset","Applying PID account offset"]}],
+  ["after pid offset: state",{"active":{"claude":4,"gemini":4},"pins":[["root",{"claude":-1,"gemini":5}],["child",{"claude":-1,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45,50,50,50,50],"diagnostics":["Applying PID account offset","Applying PID account offset"]}],
   ["soft quota sticky",4],
   ["soft quota round-robin",0],
   ["all over soft quota",[false,false,false]],
   ["soft quota waits",[0,0,0,0,0]],
   ["over soft quota",[false,true,false,false,false,false]],
   ["oldest quota age",null],
-  ["waits",[0,0,0,0]],
-  ["header styles",[["antigravity",null,false],["antigravity",null,false],["antigravity","antigravity",false],["antigravity","antigravity",false],[null,"antigravity",true],["antigravity","antigravity",false]]],
-  ["other antigravity",[true,true,true,true,true,true]],
-  ["other antigravity claude",false],
+  ["waits",[0,0]],
+  ["rate limits",[[false,true],[false,true],[false,false],[false,false],[true,false],[false,false]]],
   ["toast 1",true],
   ["toast after shown",[false,true,true]],
   ["backoff",[47469.227691181004,300000,4000]],
-  ["after backoff: state",{"active":{"claude":4,"gemini":0},"pins":[["root",{"claude":-1,"gemini":0}],["child",{"claude":-1,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":2,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":1,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.1,50,50,50,50],"diagnostics":[]}],
+  ["after backoff: state",{"active":{"claude":4,"gemini":0},"pins":[["root",{"claude":-1,"gemini":5}],["child",{"claude":-1,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":500,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":2,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":1,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.1,50,50,50,50],"diagnostics":[]}],
   ["daily counts",[{"date":"2026-10-07","claude":2,"gemini":0},{"date":"2026-10-07","claude":0,"gemini":1},null]],
   ["daily totals",[2,1]],
   ["daily summary",[{"index":0,"email":"zero@example.test","count":2}]],
   ["session summary",{"durationMinutes":0,"totalClaude":2,"totalGemini":1,"requestsPerHour":10800,"accountsUsed":2,"perAccount":[{"index":0,"email":"zero@example.test","claude":2,"gemini":0},{"index":4,"claude":0,"gemini":1}]}],
   ["session usage",[true,false,true]],
   ["next prefers session-used",1],
-  ["after usage: state",{"active":{"claude":4,"gemini":0},"pins":[["root",{"claude":-1,"gemini":0}],["child",{"claude":-1,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000,"gemini-cli:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":1,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.1,50,50,50,50],"diagnostics":[]}],
+  ["after usage: state",{"active":{"claude":4,"gemini":0},"pins":[["root",{"claude":-1,"gemini":5}],["child",{"claude":-1,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{},"cooldown":[1791374405000,"network-error"],"failures":null,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":null,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000,"gemini:gemini-2.5-pro":1791374405000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":1,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.1,50,50,50,50],"diagnostics":[]}],
   ["cooling",[true,"auth-failure"]],
   ["cooling later",[false,"network-error",5,6]],
   ["cooling 2 expired",false],
-  ["fresh",[true,true,[2],[2,4]]],
+  ["fresh",[true,true,[2],[0,1,2,4,5]]],
   ["should rotate",[false,true,false]],
   ["proactive rotate",[2,5]],
   ["optimistic reset",false],
-  ["after proactive rotation and clearing: state",{"active":{"claude":5,"gemini":2},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":-1,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
-  ["after switches: state",{"active":{"claude":5,"gemini":0},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":2,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
+  ["after proactive rotation and clearing: state",{"active":{"claude":5,"gemini":2},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":-1,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
+  ["after switches: state",{"active":{"claude":5,"gemini":0},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":2,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":true,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
   ["disable gemini active",[0,true]],
   ["access verdicts",[true,true,false,true,false,false]],
-  ["after access verdicts: state",{"active":{"claude":1,"gemini":1},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":2,"gemini":1}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374400000,"limits":{"claude":1791374430000},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini-antigravity:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":false,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
+  ["after access verdicts: state",{"active":{"claude":1,"gemini":1},"pins":[["root",{"claude":-1,"gemini":2}],["child",{"claude":2,"gemini":5}],["offset",{"claude":-1,"gemini":4}]],"rows":[{"index":0,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":2000,"limits":{"claude":1791374430000},"touched":{"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":2,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"gemini:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":3,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":5,"enabled":false,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
   ["fingerprints",[true,1,true,2,null,null]],
   ["remove 1",true],
   ["rows after removal",[[0,"zero@example.test"],[1,null],[2,null],[3,null],[4,"five@example.test"]]],
-  ["after removal",[null,null,true,false]],
-  ["session summary after removal",{"durationMinutes":0,"totalClaude":2,"totalGemini":1,"requestsPerHour":1800,"accountsUsed":2,"perAccount":[{"index":0,"email":"zero@example.test","claude":2,"gemini":0},{"index":4,"email":"five@example.test","claude":0,"gemini":1}]}],
+  ["after removal",[null,null,true,true]],
+  ["session summary after removal",{"durationMinutes":0,"totalClaude":2,"totalGemini":1,"requestsPerHour":1800,"accountsUsed":2,"perAccount":[{"index":0,"email":"zero@example.test","claude":2,"gemini":0},{"index":3,"claude":0,"gemini":1}]}],
   ["sticky claude after removal",1],
   ["round-robin after removal",[1,3,1]],
-  ["after removal: state",{"active":{"claude":1,"gemini":1},"pins":[["root",{"claude":-1,"gemini":1}],["child",{"claude":1,"gemini":-1}],["offset",{"claude":-1,"gemini":3}]],"rows":[{"index":0,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"claude":1791374406000,"gemini-antigravity":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":2,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374406000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":false,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
+  ["after removal: state",{"active":{"claude":1,"gemini":1},"pins":[["root",{"claude":-1,"gemini":1}],["child",{"claude":1,"gemini":4}],["offset",{"claude":-1,"gemini":3}]],"rows":[{"index":0,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":true,"lastUsed":1791374401000,"limits":{},"touched":{"claude":1791374406000,"gemini":1791374406000,"gemini:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":2,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374406000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":false,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,50,50,50,50,50],"diagnostics":[]}],
   ["single enabled",[0,false,0,false]],
-  ["single enabled: state",{"active":{"claude":0,"gemini":0},"pins":[["root",{"claude":-1,"gemini":1}],["child",{"claude":1,"gemini":-1}],["offset",{"claude":-1,"gemini":3}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini-antigravity:gemini-2.5-flash":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":false,"lastUsed":1791374401000,"limits":{},"touched":{"claude":1791374406000,"gemini-antigravity":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":2,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374701000},"touched":{"claude":1791374400000,"gemini-antigravity":1791374406000,"gemini-antigravity:gemini-2.5-flash":1791374400000,"gemini-cli":1791374400000,"gemini-cli:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":false,"lastUsed":300,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini-antigravity:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,45.6,50,50,50,50],"diagnostics":[]}],
+  ["single enabled: state",{"active":{"claude":0,"gemini":0},"pins":[["root",{"claude":-1,"gemini":1}],["child",{"claude":1,"gemini":4}],["offset",{"claude":-1,"gemini":3}]],"rows":[{"index":0,"enabled":true,"lastUsed":1791374401000,"limits":{"claude":1791374460000},"touched":{"claude":1791374400000,"gemini:gemini-2.5-flash":1791374406000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":1,"enabled":false,"lastUsed":1791374401000,"limits":{},"touched":{"claude":1791374406000,"gemini":1791374406000,"gemini:gemini-2.5-pro":1791374406000},"cooldown":[null,null],"failures":0,"verification":[false,null,false]},{"index":2,"enabled":false,"lastUsed":0,"limits":{},"touched":{},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":3,"enabled":false,"lastUsed":1791374401000,"limits":{"claude":1791374701000,"gemini-antigravity:gemini-2.5-pro":1791374410000},"touched":{"claude":1791374400000,"gemini":1791374406000,"gemini:gemini-2.5-flash":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[null,null,null]},{"index":4,"enabled":false,"lastUsed":1791374400000,"limits":{"gemini-cli":1791374420000},"touched":{"claude":1791374406000,"gemini":1791374400000,"gemini:gemini-2.5-pro":1791374400000},"cooldown":[null,null],"failures":0,"verification":[true,"https://verify",null]}],"health":[30,70,70,70,70,70],"tokens":[50,50,50,50,50,50],"diagnostics":[]}],
 ]
-
-/**
- * The recorded outputs with the corrections made when selection state moved
- * into AccountSelector. Before that move, removing a row left three kinds of index-keyed state where the
- * removed row had been, so they applied to the row that moved into its
- * place: its token balance (owned trackers were not reindexed on removal),
- * its toast debounce, and its session request counts. Removal now moves
- * that state with its row, as a reload always did. Nothing else differs.
- */
-function oracleWithRemovalCorrections(): Output {
-  const corrected: Output = structuredClone(ORACLE_EXPECTED)
-  const entry = (label: string): [string, unknown] => {
-    const found = corrected.find(([name]) => name === label)
-    if (found === undefined) throw new Error(`no oracle entry ${label}`)
-    return found
-  }
-  // The removed row 1 had shown the last toast; the row now at 1 has not.
-  const afterRemoval = entry('after removal')[1] as unknown[]
-  afterRemoval[3] = true
-  // Row 4's request moves with it to index 3; row 3 has no email.
-  const summary = entry('session summary after removal')[1] as {
-    perAccount: Array<{ index: number; email?: string }>
-  }
-  const moved = summary.perAccount[1]
-  if (moved === undefined) throw new Error('no second per-account entry')
-  moved.index = 3
-  delete moved.email
-  // The removed row 1's spent tokens are dropped, not given to row 2.
-  for (const label of ['after removal: state', 'single enabled: state']) {
-    const state = entry(label)[1] as { tokens: number[] }
-    state.tokens[1] = 50
-  }
-  return corrected
-}
 
 const ORACLE_FINGERPRINT = {
   deviceId: 'device-oracle',
@@ -1058,27 +890,33 @@ const CREDENTIAL_KEYS = [
 
 describe('selection oracle', () => {
   it('the pool-file manager reproduces the recorded outputs', async () => {
-    expect(await runManagerOracle()).toEqual(oracleWithRemovalCorrections())
+    expect(await runManagerOracle()).toEqual(ORACLE_EXPECTED)
   })
 
   it('a bare selector over credential-free rows reproduces them too', () => {
-    expect(runSelectorOracle().out).toEqual(oracleWithRemovalCorrections())
+    expect(runSelectorOracle().out).toEqual(ORACLE_EXPECTED)
   })
 
-  it('corrects only the removal entries of the recorded outputs', () => {
-    const corrected = oracleWithRemovalCorrections()
-    const changed = corrected
-      .filter(
-        ([, value], index) =>
-          JSON.stringify(value) !== JSON.stringify(ORACLE_EXPECTED[index]?.[1]),
-      )
-      .map(([label]) => label)
-    expect(changed).toEqual([
-      'after removal',
-      'session summary after removal',
-      'after removal: state',
-      'single enabled: state',
-    ])
+  it('moves token balances, toast debounce and request counts with surviving rows', () => {
+    const output = runSelectorOracle().out
+    const entry = (label: string) =>
+      output.find(([name]) => name === label)?.[1]
+    expect(entry('after removal')).toEqual([null, null, true, true])
+    expect(
+      (entry('after removal: state') as { tokens: number[] }).tokens[1],
+    ).toBe(50)
+    expect(
+      (
+        entry('session summary after removal') as {
+          perAccount: Array<{
+            index: number
+            email?: string
+            claude: number
+            gemini: number
+          }>
+        }
+      ).perAccount[1],
+    ).toEqual({ index: 3, claude: 0, gemini: 1 })
   })
 })
 

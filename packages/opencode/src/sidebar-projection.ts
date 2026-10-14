@@ -52,7 +52,7 @@ export interface ProjectionAccount {
 export interface ProjectionRoute {
   readonly accountId: string
   readonly modelFamily: 'claude' | 'gemini'
-  readonly headerStyle: 'antigravity' | 'gemini-cli'
+  readonly headerStyle: 'antigravity'
   readonly strategy?: 'sticky' | 'round-robin' | 'hybrid' | null
 }
 
