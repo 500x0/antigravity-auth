@@ -16,6 +16,8 @@ import {
   reapPublicCommandScope,
 } from '../packages/core/src/__fixtures__/public-command-processes.test.ts'
 
+import { createBuildPhaseReporter } from './build-phase-clock.ts'
+
 export const PUBLIC_COMMAND_BOUNDS = {
   executionMs: 20 * 60_000,
   reapMs: 5_000,
@@ -113,6 +115,7 @@ export async function runPublicConsumerCommand(
   let child: ReturnType<typeof spawn> | undefined
   let executionTimer: ReturnType<typeof setTimeout> | undefined
   let monitor: ReturnType<typeof setInterval> | undefined
+  let phaseMonitor: ReturnType<typeof setInterval> | undefined
   let pipeTimer: ReturnType<typeof setTimeout> | undefined
   let leaderExited = false
   let pipesClosed = false
@@ -192,6 +195,8 @@ export async function runPublicConsumerCommand(
       wake()
     })
     child.once('error', stop)
+    const reportBuildPhases = createBuildPhaseReporter(fixture.root)
+    phaseMonitor = setInterval(() => reportBuildPhases(), 1_000)
     const closed = new Promise<void>((resolve) =>
       child?.once('close', () => {
         pipesClosed = true
@@ -289,6 +294,12 @@ export async function runPublicConsumerCommand(
       bounds.executionMs,
     )
     await stopped
+    reportBuildPhases(
+      primary || status !== 0
+        ? String(primary ?? `test command exited with code ${status}`)
+        : undefined,
+    )
+    clearInterval(phaseMonitor)
     clearTimeout(executionTimer)
     clearInterval(monitor)
     const deadline = performance.now() + bounds.reapMs
@@ -337,6 +348,7 @@ export async function runPublicConsumerCommand(
     clearTimeout(executionTimer)
     clearTimeout(pipeTimer)
     clearInterval(monitor)
+    clearInterval(phaseMonitor)
     child?.stdout?.destroy()
     child?.stderr?.destroy()
     try {

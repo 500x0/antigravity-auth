@@ -3,6 +3,10 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildPhase,
+  withBuildPhaseClock,
+} from '../../../scripts/build-phase-clock.ts'
+import {
   baselineRevision,
   baseline as buildBaseline,
   expectedCandidateGraph,
@@ -15,34 +19,59 @@ const metadata = { version: '3.0.0', corePin: '3.0.0' }
 const installCutoff = new Date('2026-05-14T12:00:00.000Z')
 
 describe('historical baseline build', () => {
-  it('archives the baseline core revision and bundles against that core', async () => {
-    expect(baselineRevision).toBe('45625093922278e7d8f1f1415df42bbc0ca1883e')
-
-    const workspace = await mkdtemp(join(tmpdir(), 'smoke-tui-baseline-'))
-    try {
-      const packageRoot = await buildBaseline(workspace)
-      const coreRoot = join(workspace, 'baseline/packages/core')
-      const coreLink = join(
-        packageRoot,
-        'node_modules/@cortexkit/antigravity-auth-core',
-      )
-      expect(await realpath(coreLink)).toBe(await realpath(coreRoot))
-      expect(
-        JSON.parse(await readFile(join(coreRoot, 'package.json'), 'utf8'))
-          .version,
-      ).toBe('2.2.1')
-
-      for (const entry of ['index', 'cli']) {
-        const bundle = await readFile(
-          join(packageRoot, 'dist', `${entry}.js`),
-          'utf8',
+  it(
+    'archives the baseline core revision and bundles against that core',
+    async () =>
+      withBuildPhaseClock('historical baseline build', 30_000, async () => {
+        expect(baselineRevision).toBe(
+          '45625093922278e7d8f1f1415df42bbc0ca1883e',
         )
-        expect(bundle).not.toContain('isGeminiArgonModel')
-      }
-    } finally {
-      await rm(workspace, { force: true, recursive: true })
-    }
-  }, 30_000)
+
+        const workspace = await buildPhase('baseline test.mkdtemp', () =>
+          mkdtemp(join(tmpdir(), 'smoke-tui-baseline-')),
+        )
+        try {
+          const packageRoot = await buildPhase(
+            'baseline test.buildBaseline',
+            () => buildBaseline(workspace),
+          )
+          const coreRoot = join(workspace, 'baseline/packages/core')
+          const coreLink = join(
+            packageRoot,
+            'node_modules/@cortexkit/antigravity-auth-core',
+          )
+          expect(
+            await buildPhase('baseline test.realpath core link', () =>
+              realpath(coreLink),
+            ),
+          ).toBe(
+            await buildPhase('baseline test.realpath archived core', () =>
+              realpath(coreRoot),
+            ),
+          )
+          expect(
+            JSON.parse(
+              await buildPhase('baseline test.readFile core manifest', () =>
+                readFile(join(coreRoot, 'package.json'), 'utf8'),
+              ),
+            ).version,
+          ).toBe('2.2.1')
+
+          for (const entry of ['index', 'cli']) {
+            const bundle = await buildPhase(
+              `baseline test.readFile bundle ${entry}`,
+              () => readFile(join(packageRoot, 'dist', `${entry}.js`), 'utf8'),
+            )
+            expect(bundle).not.toContain('isGeminiArgonModel')
+          }
+        } finally {
+          await buildPhase('baseline test.rm workspace', () =>
+            rm(workspace, { force: true, recursive: true }),
+          )
+        }
+      }),
+    30_000,
+  )
 })
 const baseline = () => [
   [
