@@ -618,7 +618,12 @@ it('the production V1 entry opens the vault menu without opening or changing dor
 for (const direction of ['local to vault', 'vault to local'] as const) {
   it(`the production V1 RPC apply refreshes sections when switching ${direction}`, async () => {
     const owned = realpathSync(
-      mkdtempSync(join(tmpdir(), 'agy-v1-menu-switch-')),
+      mkdtempSync(
+        join(
+          process.platform === 'win32' ? tmpdir() : '/tmp',
+          'agy-v1-menu-switch-',
+        ),
+      ),
     )
     const daemon = await startMenuVaultFixture(owned)
     const overrides = {

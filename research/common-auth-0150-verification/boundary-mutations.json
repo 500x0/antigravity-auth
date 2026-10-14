@@ -1,0 +1,16 @@
+[
+  {
+    "control": "Remove @cortexkit/private-files from production BUNDLE_EXTERNALS",
+    "expected_red": "graph.server_cli",
+    "captured_output": "(fail) graph.server_cli: forbidden bundled input ../../node_modules/.bun/@cortexkit+private-files@0.1.0/node_modules/@cortexkit/private-files/dist/loader.js. graph.source, graph.renderer_private_files_external_dynamic_import and graph.ga_roots passed; 3 pass, 1 fail.",
+    "applied_evidence": "packages/opencode/scripts/build-tui.ts; staged live state: git diff --stat empty; during NON-VACUITY BREAK: 1 file changed, 2 insertions(+), 1 deletion(-); after git checkout -- path && touch path: git diff --stat empty",
+    "outcome": "reddened"
+  },
+  {
+    "control": "Rewrite emitted renderer backend dynamic import to an eager static import",
+    "expected_red": "graph.renderer_private_files_external_dynamic_import",
+    "captured_output": "(fail) graph.renderer_private_files_external_dynamic_import: expect(ts.isCallExpression(node.parent)).toBe(true), Received false. graph.source, graph.server_cli and graph.ga_roots passed; 3 pass, 1 fail.",
+    "applied_evidence": "tools/common-auth-build/build.mjs; staged live state: git diff --stat empty; during NON-VACUITY BREAK: 1 file changed, 9 insertions(+); after git checkout -- path && touch path: git diff --stat empty",
+    "outcome": "reddened"
+  }
+]

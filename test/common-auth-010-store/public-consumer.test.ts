@@ -109,7 +109,12 @@ beforeAll(() => {
   )
   installed = installPacked(coreRoot, corePackage, 'core.tgz')
   installPacked(piRoot, piPackage, 'pi.tgz')
-  for (const name of [CLAUSTRUM_CLIENT, 'xdg-basedir', 'zod'])
+  for (const name of [
+    CLAUSTRUM_CLIENT,
+    '@cortexkit/private-files',
+    'xdg-basedir',
+    'zod',
+  ])
     linkDependency(name)
 })
 

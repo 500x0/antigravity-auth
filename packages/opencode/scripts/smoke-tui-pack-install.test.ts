@@ -120,6 +120,37 @@ describe('packed consumer graph comparison', () => {
       ).not.toEqual(changed)
   })
 
+  it('preserves the fresh core store graph without admitting unrelated additions', () => {
+    const store = [
+      '@cortexkit/store',
+      '@cortexkit/store',
+      '0.2.2',
+      { '@cortexkit/private-files': '^0.1.0' },
+      {},
+    ]
+    const backend = [
+      '@cortexkit/private-files',
+      '@cortexkit/private-files',
+      '0.1.0',
+      {},
+      {},
+    ]
+    const base = [...baseline(), store, backend]
+    const expected = [...candidate(), store, backend].sort((a, b) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b)),
+    )
+    const actual = expectedCandidateGraph(base, {
+      version: '2.2.1',
+      corePin: '2.2.1',
+    })
+    expect(actual).toEqual(expected)
+    expect(actual).not.toEqual([
+      ...expected,
+      ['unexpected', 'unexpected', '1.0.0', {}, {}],
+    ])
+    expect(actual).not.toEqual(expected.filter((row) => row !== store))
+  })
+
   it('updates only historical product version and core pin from candidate metadata', () => {
     const graph = baseline()
     const before = JSON.stringify(graph)

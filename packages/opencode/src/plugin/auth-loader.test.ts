@@ -1430,7 +1430,12 @@ describe('createAuthLoader on the account store', () => {
 describe('enrollment authority at loader and request start', () => {
   it('serves public vault enrollment with a genuinely corrupt unused local store', async () => {
     const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'corrupt-unused-store-')),
+      mkdtempSync(
+        join(
+          process.platform === 'win32' ? tmpdir() : '/tmp',
+          'corrupt-unused-store-',
+        ),
+      ),
     )
     const lifecycle = createPluginLifecycle({
       sessionRegistry: { clear() {} },

@@ -257,7 +257,12 @@ describe('selected credential boundary', () => {
 
   it('production Pi provider refuses enrollment approved during its project await', async () => {
     const root = await realpath(
-      await mkdtemp(join(tmpdir(), 'pi-public-authority-')),
+      await mkdtemp(
+        join(
+          process.platform === 'win32' ? tmpdir() : '/tmp',
+          'pi-public-authority-',
+        ),
+      ),
     )
     try {
       const { registerCortexKitPiAntigravity } = await import('./index.ts')

@@ -1,0 +1,904 @@
+[
+  {
+    "id": "command-projection-both-quota-groups",
+    "source": {
+      "file": "mutations.toml",
+      "line": 134
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n      \"remainingPercent\": 70,\n      \"resetAt\": undefined,\n-   },\n-   {\n-     \"key\": \"non-gemini\",\n-     \"label\": \"Non-Gemini\",\n-     \"remainingPercent\": 40,\n-     \"resetAt\": 0,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 6\n+ Received  + 1\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.49ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [89.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1626,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1691,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.31ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 10 expect() calls\nRan 1 test across 1 file. [142.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n      \"remainingPercent\": 70,\n      \"resetAt\": undefined,\n-   },\n-   {\n-     \"key\": \"non-gemini\",\n-     \"label\": \"Non-Gemini\",\n-     \"remainingPercent\": 40,\n-     \"resetAt\": 0,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 6\n+ Received  + 1\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.49ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [89.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-cache-only",
+    "source": {
+      "file": "mutations.toml",
+      "line": 48
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sis\\sa\\spure\\scache\\sread\\s\u2014\\sopening\\sperforms\\szero\\sfetch\\scalls$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sis\\sa\\spure\\scache\\sread\\s\u2014\\sopening\\sperforms\\szero\\sfetch\\scalls$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n149 |       // Reopening an account view must project its cache without network I/O.\n150 |       for (let i = 0; i < 3; i += 1) {\n151 |         const rows = projectCommandAccountRows(storage)\n152 |         expect(rows).toHaveLength(1)\n153 |       }\n154 |       expect(fetchSpy).not.toHaveBeenCalled()\n                                 ^\nerror: expect(received).not.toHaveBeenCalled()\n\nExpected number of calls: 0\nReceived number of calls: 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:154:28)\n(fail) projectCommandAccountRows > is a pure cache read \u2014 opening performs zero fetch calls [0.43ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 4 expect() calls\nRan 1 test across 1 file. [95.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1677,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1613,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sis\\sa\\spure\\scache\\sread\\s\u2014\\sopening\\sperforms\\szero\\sfetch\\scalls$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > is a pure cache read \u2014 opening performs zero fetch calls [0.27ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 4 expect() calls\nRan 1 test across 1 file. [86.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sis\\sa\\spure\\scache\\sread\\s\u2014\\sopening\\sperforms\\szero\\sfetch\\scalls$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n149 |       // Reopening an account view must project its cache without network I/O.\n150 |       for (let i = 0; i < 3; i += 1) {\n151 |         const rows = projectCommandAccountRows(storage)\n152 |         expect(rows).toHaveLength(1)\n153 |       }\n154 |       expect(fetchSpy).not.toHaveBeenCalled()\n                                 ^\nerror: expect(received).not.toHaveBeenCalled()\n\nExpected number of calls: 0\nReceived number of calls: 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:154:28)\n(fail) projectCommandAccountRows > is a pure cache read \u2014 opening performs zero fetch calls [0.43ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 4 expect() calls\nRan 1 test across 1 file. [95.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-cache-wiring",
+    "source": {
+      "file": "mutations.toml",
+      "line": 84
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n230 |     const rows = projectCommandAccountRows(storage)\n231 | \n232 |     expect(rows).toHaveLength(1)\n233 |     // Both canonical and normalized-from-legacy keys must render.\n234 |     const quota = rows[0]?.quota\n235 |     expect(quota?.find((q) => q.key === 'gemini')?.remainingPercent).toBe(50)\n                                                                           ^\nerror: expect(received).toBe(expected)\n\nExpected: 50\nReceived: undefined\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:235:70)\n(fail) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.46ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [102.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1699,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1611,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.26ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 4 expect() calls\nRan 1 test across 1 file. [88.00ms]\n\nmutated command output: ^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n230 |     const rows = projectCommandAccountRows(storage)\n231 | \n232 |     expect(rows).toHaveLength(1)\n233 |     // Both canonical and normalized-from-legacy keys must render.\n234 |     const quota = rows[0]?.quota\n235 |     expect(quota?.find((q) => q.key === 'gemini')?.remainingPercent).toBe(50)\n                                                                           ^\nerror: expect(received).toBe(expected)\n\nExpected: 50\nReceived: undefined\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:235:70)\n(fail) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.46ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [102.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-email-redaction",
+    "source": {
+      "file": "mutations.toml",
+      "line": 32
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n89 |     const rows = projectCommandAccountRows(storage)\n90 |     expect(rows).toHaveLength(2)\n91 | \n92 |     // Privacy: no email or stored profile label in any row.\n93 |     const serialized = JSON.stringify(rows)\n94 |     expect(serialized).not.toContain('refresh-a@example.test')\n                                ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"refresh-a@example.test\"\nReceived: \"[{\\\"id\\\":\\\"acct-0\\\",\\\"index\\\":0,\\\"label\\\":\\\"Account 1\\\",\\\"enabled\\\":true,\\\"current\\\":true,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":70},{\\\"key\\\":\\\"non-gemini\\\",\\\"label\\\":\\\"Non-Gemini\\\",\\\"remainingPercent\\\":40,\\\"resetAt\\\":0}],\\\"email\\\":\\\"refresh-a@example.test\\\"},{\\\"id\\\":\\\"acct-1\\\",\\\"index\\\":1,\\\"label\\\":\\\"Account 2\\\",\\\"enabled\\\":false,\\\"current\\\":false,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":15}],\\\"email\\\":\\\"refresh-b@example.test\\\"}]\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:94:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.43ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [94.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1636,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1570,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.30ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 10 expect() calls\nRan 1 test across 1 file. [86.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n89 |     const rows = projectCommandAccountRows(storage)\n90 |     expect(rows).toHaveLength(2)\n91 | \n92 |     // Privacy: no email or stored profile label in any row.\n93 |     const serialized = JSON.stringify(rows)\n94 |     expect(serialized).not.toContain('refresh-a@example.test')\n                                ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"refresh-a@example.test\"\nReceived: \"[{\\\"id\\\":\\\"acct-0\\\",\\\"index\\\":0,\\\"label\\\":\\\"Account 1\\\",\\\"enabled\\\":true,\\\"current\\\":true,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":70},{\\\"key\\\":\\\"non-gemini\\\",\\\"label\\\":\\\"Non-Gemini\\\",\\\"remainingPercent\\\":40,\\\"resetAt\\\":0}],\\\"email\\\":\\\"refresh-a@example.test\\\"},{\\\"id\\\":\\\"acct-1\\\",\\\"index\\\":1,\\\"label\\\":\\\"Account 2\\\",\\\"enabled\\\":false,\\\"current\\\":false,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":15}],\\\"email\\\":\\\"refresh-b@example.test\\\"}]\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:94:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.43ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [94.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-legacy-normalization",
+    "source": {
+      "file": "mutations.toml",
+      "line": 96
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n231 | \n232 |     expect(rows).toHaveLength(1)\n233 |     // Both canonical and normalized-from-legacy keys must render.\n234 |     const quota = rows[0]?.quota\n235 |     expect(quota?.find((q) => q.key === 'gemini')?.remainingPercent).toBe(50)\n236 |     expect(quota?.find((q) => q.key === 'non-gemini')?.remainingPercent).toBe(\n                                                                               ^\nerror: expect(received).toBe(expected)\n\nExpected: 90\nReceived: undefined\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:236:74)\n(fail) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.32ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 3 expect() calls\nRan 1 test across 1 file. [85.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1720,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1559,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.25ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 4 expect() calls\nRan 1 test across 1 file. [86.00ms]\n\nmutated command output: ^projectCommandAccountRows\\snormalizes\\slegacy\\squota\\skeys\\sand\\ssilently\\sskips\\struly\\sunknown\\skeys$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n231 | \n232 |     expect(rows).toHaveLength(1)\n233 |     // Both canonical and normalized-from-legacy keys must render.\n234 |     const quota = rows[0]?.quota\n235 |     expect(quota?.find((q) => q.key === 'gemini')?.remainingPercent).toBe(50)\n236 |     expect(quota?.find((q) => q.key === 'non-gemini')?.remainingPercent).toBe(\n                                                                               ^\nerror: expect(received).toBe(expected)\n\nExpected: 90\nReceived: undefined\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:236:74)\n(fail) projectCommandAccountRows > normalizes legacy quota keys and silently skips truly unknown keys [0.32ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 3 expect() calls\nRan 1 test across 1 file. [85.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-ordinal-labels",
+    "source": {
+      "file": "mutations.toml",
+      "line": 20
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n91 | \n92 |     // Privacy: no email or stored profile label in any row.\n93 |     const serialized = JSON.stringify(rows)\n94 |     expect(serialized).not.toContain('refresh-a@example.test')\n95 |     expect(serialized).not.toContain('refresh-b@example.test')\n96 |     expect(serialized).not.toContain('Primary')\n                                ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"Primary\"\nReceived: \"[{\\\"id\\\":\\\"acct-0\\\",\\\"index\\\":0,\\\"label\\\":\\\"Primary\\\",\\\"enabled\\\":true,\\\"current\\\":true,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":70},{\\\"key\\\":\\\"non-gemini\\\",\\\"label\\\":\\\"Non-Gemini\\\",\\\"remainingPercent\\\":40,\\\"resetAt\\\":0}]},{\\\"id\\\":\\\"acct-1\\\",\\\"index\\\":1,\\\"label\\\":\\\"Backup\\\",\\\"enabled\\\":false,\\\"current\\\":false,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":15}]}]\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:96:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.41ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 4 expect() calls\nRan 1 test across 1 file. [84.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1581,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1594,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.30ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 10 expect() calls\nRan 1 test across 1 file. [87.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n91 | \n92 |     // Privacy: no email or stored profile label in any row.\n93 |     const serialized = JSON.stringify(rows)\n94 |     expect(serialized).not.toContain('refresh-a@example.test')\n95 |     expect(serialized).not.toContain('refresh-b@example.test')\n96 |     expect(serialized).not.toContain('Primary')\n                                ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"Primary\"\nReceived: \"[{\\\"id\\\":\\\"acct-0\\\",\\\"index\\\":0,\\\"label\\\":\\\"Primary\\\",\\\"enabled\\\":true,\\\"current\\\":true,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":70},{\\\"key\\\":\\\"non-gemini\\\",\\\"label\\\":\\\"Non-Gemini\\\",\\\"remainingPercent\\\":40,\\\"resetAt\\\":0}]},{\\\"id\\\":\\\"acct-1\\\",\\\"index\\\":1,\\\"label\\\":\\\"Backup\\\",\\\"enabled\\\":false,\\\"current\\\":false,\\\"quota\\\":[{\\\"key\\\":\\\"gemini\\\",\\\"label\\\":\\\"Gemini\\\",\\\"remainingPercent\\\":15}]}]\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:96:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.41ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 4 expect() calls\nRan 1 test across 1 file. [84.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-percentages",
+    "source": {
+      "file": "mutations.toml",
+      "line": 110
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n-     \"remainingPercent\": 70,\n+     \"remainingPercent\": 1,\n      \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n    {\n      \"key\": \"non-gemini\",\n      \"label\": \"Non-Gemini\",\n-     \"remainingPercent\": 40,\n+     \"remainingPercent\": 0,\n      \"resetAt\": 0,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 2\n+ Received  + 4\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.44ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [85.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1589,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1596,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.31ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 10 expect() calls\nRan 1 test across 1 file. [87.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n-     \"remainingPercent\": 70,\n+     \"remainingPercent\": 1,\n      \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n    {\n      \"key\": \"non-gemini\",\n      \"label\": \"Non-Gemini\",\n-     \"remainingPercent\": 40,\n+     \"remainingPercent\": 0,\n      \"resetAt\": 0,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 2\n+ Received  + 4\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.44ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [85.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-quota-identity",
+    "source": {
+      "file": "mutations.toml",
+      "line": 60
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sdrops\\sa\\squota\\ssnapshot\\swhen\\sthe\\sidentity\\sstamp\\sdoes\\snot\\smatch\\sthe\\scurrent\\saccount$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sdrops\\sa\\squota\\ssnapshot\\swhen\\sthe\\sidentity\\sstamp\\sdoes\\snot\\smatch\\sthe\\scurrent\\saccount$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n174 | \n175 |     const rows = projectCommandAccountRows(storage)\n176 | \n177 |     expect(rows).toHaveLength(1)\n178 |     // Identity mismatch \u2014 cached quota dropped; row must render empty quota.\n179 |     expect(rows[0]?.quota).toEqual([])\n                                 ^\nerror: expect(received).toEqual(expected)\n\n- []\n+ [\n+   {\n+     \"key\": \"gemini\",\n+     \"label\": \"Gemini\",\n+     \"remainingPercent\": 50,\n+     \"resetAt\": undefined,\n+     \"windows\": undefined,\n+   },\n+ ]\n\n- Expected  - 1\n+ Received  + 9\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:179:28)\n(fail) projectCommandAccountRows > drops a quota snapshot when the identity stamp does not match the current account [0.46ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [91.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1632,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1596,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sdrops\\sa\\squota\\ssnapshot\\swhen\\sthe\\sidentity\\sstamp\\sdoes\\snot\\smatch\\sthe\\scurrent\\saccount$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > drops a quota snapshot when the identity stamp does not match the current account [0.31ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 2 expect() calls\nRan 1 test across 1 file. [87.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sdrops\\sa\\squota\\ssnapshot\\swhen\\sthe\\sidentity\\sstamp\\sdoes\\snot\\smatch\\sthe\\scurrent\\saccount$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n174 | \n175 |     const rows = projectCommandAccountRows(storage)\n176 | \n177 |     expect(rows).toHaveLength(1)\n178 |     // Identity mismatch \u2014 cached quota dropped; row must render empty quota.\n179 |     expect(rows[0]?.quota).toEqual([])\n                                 ^\nerror: expect(received).toEqual(expected)\n\n- []\n+ [\n+   {\n+     \"key\": \"gemini\",\n+     \"label\": \"Gemini\",\n+     \"remainingPercent\": 50,\n+     \"resetAt\": undefined,\n+     \"windows\": undefined,\n+   },\n+ ]\n\n- Expected  - 1\n+ Received  + 9\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:179:28)\n(fail) projectCommandAccountRows > drops a quota snapshot when the identity stamp does not match the current account [0.46ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [91.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-reset-times",
+    "source": {
+      "file": "mutations.toml",
+      "line": 122
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n      \"remainingPercent\": 70,\n      \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n    {\n      \"key\": \"non-gemini\",\n      \"label\": \"Non-Gemini\",\n      \"remainingPercent\": 40,\n-     \"resetAt\": 0,\n+     \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 1\n+ Received  + 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.45ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [90.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1696,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1595,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.29ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 10 expect() calls\nRan 1 test across 1 file. [86.00ms]\n\nmutated command output: ^projectCommandAccountRows\\sreturns\\sprivacy-safe\\srows\\swith\\sordinal\\slabels,\\sboth\\squota\\sgroups,\\spercentages\\sand\\sreset\\stimes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n104 |       index: 0,\n105 |       label: 'Account 1',\n106 |       enabled: true,\n107 |       current: true,\n108 |     })\n109 |     expect(rows[0]?.quota).toEqual([\n                                 ^\nerror: expect(received).toEqual(expected)\n\n  [\n    {\n      \"key\": \"gemini\",\n      \"label\": \"Gemini\",\n      \"remainingPercent\": 70,\n      \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n    {\n      \"key\": \"non-gemini\",\n      \"label\": \"Non-Gemini\",\n      \"remainingPercent\": 40,\n-     \"resetAt\": 0,\n+     \"resetAt\": undefined,\n+     \"windows\": undefined,\n    },\n  ]\n\n- Expected  - 1\n+ Received  + 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:109:28)\n(fail) projectCommandAccountRows > returns privacy-safe rows with ordinal labels, both quota groups, percentages and reset times [0.45ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 9 expect() calls\nRan 1 test across 1 file. [90.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "command-projection-unstamped-legacy",
+    "source": {
+      "file": "mutations.toml",
+      "line": 72
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^projectCommandAccountRows\\srenders\\san\\sunstamped\\slegacy\\ssnapshot\\s\\(fail\\sopen\\s\u2014\\sno\\sstamp\\smeans\\sno\\smismatch\\)$"
+    ],
+    "green": [],
+    "failures": {
+      "^projectCommandAccountRows\\srenders\\san\\sunstamped\\slegacy\\ssnapshot\\s\\(fail\\sopen\\s\u2014\\sno\\sstamp\\smeans\\sno\\smismatch\\)$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n195 |     })\n196 | \n197 |     const rows = projectCommandAccountRows(storage)\n198 | \n199 |     expect(rows).toHaveLength(1)\n200 |     expect(rows[0]?.quota).toContainEqual({\n                                 ^\nerror: expect(received).toContainEqual(expected)\n\nExpected to contain: {\n  key: \"gemini\",\n  label: \"Gemini\",\n  remainingPercent: 50,\n  resetAt: undefined,\n}\nReceived: []\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:200:28)\n(fail) projectCommandAccountRows > renders an unstamped legacy snapshot (fail open \u2014 no stamp means no mismatch) [0.44ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [88.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1679,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1564,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^projectCommandAccountRows\\srenders\\san\\sunstamped\\slegacy\\ssnapshot\\s\\(fail\\sopen\\s\u2014\\sno\\sstamp\\smeans\\sno\\smismatch\\)$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n(pass) projectCommandAccountRows > renders an unstamped legacy snapshot (fail open \u2014 no stamp means no mismatch) [0.21ms]\n\n 1 pass\n 4 filtered out\n 0 fail\n 2 expect() calls\nRan 1 test across 1 file. [88.00ms]\n\nmutated command output: ^projectCommandAccountRows\\srenders\\san\\sunstamped\\slegacy\\ssnapshot\\s\\(fail\\sopen\\s\u2014\\sno\\sstamp\\smeans\\sno\\smismatch\\)$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/command-data.test.ts:\n195 |     })\n196 | \n197 |     const rows = projectCommandAccountRows(storage)\n198 | \n199 |     expect(rows).toHaveLength(1)\n200 |     expect(rows[0]?.quota).toContainEqual({\n                                 ^\nerror: expect(received).toContainEqual(expected)\n\nExpected to contain: {\n  key: \"gemini\",\n  label: \"Gemini\",\n  remainingPercent: 50,\n  resetAt: undefined,\n}\nReceived: []\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/command-data.test.ts:200:28)\n(fail) projectCommandAccountRows > renders an unstamped legacy snapshot (fail open \u2014 no stamp means no mismatch) [0.44ms]\n\n 0 pass\n 4 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [88.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "gemini-dump-project-redaction",
+    "source": {
+      "file": "mutations.toml",
+      "line": 182
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^gemini\\swire\\sdump\\sredacts\\sproject\\sIDs\\sfrom\\sthe\\sdumped\\srequest\\sbody$"
+    ],
+    "green": [],
+    "failures": {
+      "^gemini\\swire\\sdump\\sredacts\\sproject\\sIDs\\sfrom\\sthe\\sdumped\\srequest\\sbody$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/gemini-dump.test.ts:\n117 |       streaming: false,\n118 |     })\n119 | \n120 |     expect(context).not.toBeNull()\n121 |     const dumped = readFileSync(context!.files.request, 'utf8')\n122 |     expect(dumped).not.toContain('secret-proj-1234567890')\n                             ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"secret-proj-1234567890\"\nReceived: \"{\\\"projectId\\\":\\\"secret-proj-1234567890\\\",\\\"managedProjectId\\\":\\\"managed-secret-1234567890\\\",\\\"model\\\":\\\"gemini-3-pro\\\"}\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/gemini-dump.test.ts:122:24)\n(fail) gemini wire dump > redacts project IDs from the dumped request body [0.86ms]\n\n 0 pass\n 2 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [92.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1651,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1675,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^gemini\\swire\\sdump\\sredacts\\sproject\\sIDs\\sfrom\\sthe\\sdumped\\srequest\\sbody$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/gemini-dump.test.ts:\n(pass) gemini wire dump > redacts project IDs from the dumped request body [63.63ms]\n\n 1 pass\n 2 filtered out\n 0 fail\n 6 expect() calls\nRan 1 test across 1 file. [151.00ms]\n\nmutated command output: ^gemini\\swire\\sdump\\sredacts\\sproject\\sIDs\\sfrom\\sthe\\sdumped\\srequest\\sbody$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/gemini-dump.test.ts:\n117 |       streaming: false,\n118 |     })\n119 | \n120 |     expect(context).not.toBeNull()\n121 |     const dumped = readFileSync(context!.files.request, 'utf8')\n122 |     expect(dumped).not.toContain('secret-proj-1234567890')\n                             ^\nerror: expect(received).not.toContain(expected)\n\nExpected to not contain: \"secret-proj-1234567890\"\nReceived: \"{\\\"projectId\\\":\\\"secret-proj-1234567890\\\",\\\"managedProjectId\\\":\\\"managed-secret-1234567890\\\",\\\"model\\\":\\\"gemini-3-pro\\\"}\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/gemini-dump.test.ts:122:24)\n(fail) gemini wire dump > redacts project IDs from the dumped request body [0.86ms]\n\n 0 pass\n 2 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [92.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "local-quota-vault-dormancy",
+    "source": {
+      "file": "mutations.toml",
+      "line": 250
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^vault\\spoller\\sfences\\sand\\slifecycle\\sthe\\slocal\\spoller\\sremains\\sdormant\\sin\\svault\\smode$"
+    ],
+    "green": [],
+    "failures": {
+      "^vault\\spoller\\sfences\\sand\\slifecycle\\sthe\\slocal\\spoller\\sremains\\sdormant\\sin\\svault\\smode$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n296 |       intervalMs: 300_000,\n297 |       sidebarStateFile: f.stateFile,\n298 |       mayRun: async () => (await f.options.readAuthority()) === 'local',\n299 |       getAccountManager: () => {\n300 |         localFetches++\n301 |         throw new Error('local manager must not open')\n                        ^\nerror: local manager must not open\n      at getAccountManager (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:301:19)\n      at refreshQuota (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:401:26)\n      at refresh (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:392:39)\n      at runTick (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:378:53)\n      at async <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:311:64)\n(fail) vault poller fences and lifecycle > the local poller remains dormant in vault mode [2.30ms]\n\n 0 pass\n 20 filtered out\n 1 fail\nRan 1 test across 1 file. [107.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1639,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1596,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^vault\\spoller\\sfences\\sand\\slifecycle\\sthe\\slocal\\spoller\\sremains\\sdormant\\sin\\svault\\smode$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n(pass) vault poller fences and lifecycle > the local poller remains dormant in vault mode [0.84ms]\n\n 1 pass\n 20 filtered out\n 0 fail\n 2 expect() calls\nRan 1 test across 1 file. [110.00ms]\n\nmutated command output: ^vault\\spoller\\sfences\\sand\\slifecycle\\sthe\\slocal\\spoller\\sremains\\sdormant\\sin\\svault\\smode$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n296 |       intervalMs: 300_000,\n297 |       sidebarStateFile: f.stateFile,\n298 |       mayRun: async () => (await f.options.readAuthority()) === 'local',\n299 |       getAccountManager: () => {\n300 |         localFetches++\n301 |         throw new Error('local manager must not open')\n                        ^\nerror: local manager must not open\n      at getAccountManager (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:301:19)\n      at refreshQuota (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:401:26)\n      at refresh (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:392:39)\n      at runTick (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-quota-refresh.ts:378:53)\n      at async <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:311:64)\n(fail) vault poller fences and lifecycle > the local poller remains dormant in vault mode [2.30ms]\n\n 0 pass\n 20 filtered out\n 1 fail\nRan 1 test across 1 file. [107.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "offline-migration-independent-cursors",
+    "source": {
+      "file": "mutations.toml",
+      "line": 158
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^genuine\\spublic-store\\soffline\\smigration\\simports\\sfull\\srows,\\scredential\\sstamps,\\sfield\\spresence,\\sorder\\sand\\sindependent\\scursors\\sthen\\sverifies\\sactive\\sno-op$"
+    ],
+    "green": [],
+    "failures": {
+      "^genuine\\spublic-store\\soffline\\smigration\\simports\\sfull\\srows,\\scredential\\sstamps,\\sfield\\spresence,\\sorder\\sand\\sindependent\\scursors\\sthen\\sverifies\\sactive\\sno-op$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\n{\"publicConsumer\":\"/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/node_modules/.common-auth-public-consumer-mjKRq1\",\"name\":\"@cortexkit/common-auth\",\"version\":\"0.15.0\",\"archive\":{\"path\":\"tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz\",\"bytes\":258947,\"sha256\":\"c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2\",\"sri\":\"sha512-1zm7pO6iI7CdDc2FgAB2v6nFd8km3qWJxcCf76+Ib7rrRdl/fGeVI914MKzRi5K1+GasOQZ3MOLQ8b09N8KvOw==\"},\"files\":191,\"payloadBytes\":964546,\"members\":[{\"path\":\"package/dist/auth-menu/accounts.d.ts\",\"bytes\":5145,\"sha256\":\"581ce15f0fcb2c7ca091276bd8e365d1638ba9b30ea3c3e0246e5be48ff44dff\"},{\"path\":\"package/dist/auth-menu/accounts.js\",\"bytes\":15204,\"sha256\":\"6f85dc69b3bdabb8a868d5408df6030771937f33a5b2b6ec6716dfee153dd5c9\"},{\"path\":\"package/dist/auth-menu/ansi.d.ts\",\"bytes\":1275,\"sha256\":\"ff3d391b2f62521afc6cd457a7a08b877a7d380b4c5c7224bb03f9c6f3aa7783\"},{\"path\":\"package/dist/auth-menu/ansi.js\",\"bytes\":3475,\"sha256\":\"c751bb0239db4e32fcb636a8e9fe9b11e4602eed04858d4ae39ee79bf4f3cc3c\"},{\"path\":\"package/dist/auth-menu/confirm.d.ts\",\"bytes\":385,\"sha256\":\"c2d6fca7c21fad42777e36014bbd776eeb4b454410214a7db4bfbd9f80f99101\"},{\"path\":\"package/dist/auth-menu/confirm.js\",\"bytes\":746,\"sha256\":\"78e5d0a0d7c3ff86652b1388e5115486c34fc6198e262880956efc9ebdb55bfa\"},{\"path\":\"package/dist/auth-menu/doctor.d.ts\",\"bytes\":2012,\"sha256\":\"2c0394fa76652d166edcbc46c996a0a39d45b11057943470cfe3d4019e0b2e5d\"},{\"path\":\"package/dist/auth-menu/doctor.js\",\"bytes\":2982,\"sha256\":\"f36b95f7c1366f6fbadb3e157d0e6686171a6db062bca5ab6b4fbee0849658d8\"},{\"path\":\"package/dist/auth-menu/index.d.ts\",\"bytes\":1452,\"sha256\":\"eca90e9bb04eadcc00c33aa3ef9d01b5b77fefffcdba0624af2f32d03e45e3f1\"},{\"path\":\"package/dist/auth-menu/index.js\",\"bytes\":1007,\"sha256\":\"b0265ffabcaabf253d12b3735c985c647f1b8f86d2d94448f83e34d77f652ed4\"},{\"path\":\"package/dist/auth-menu/login.d.ts\",\"bytes\":2211,\"sha256\":\"eb6d85bdff6cc5d614d263ba2e972e535bc5a770cbe1d98b6265341ce1085340\"},{\"path\":\"package/dist/auth-menu/login.js\",\"bytes\":3698,\"sha256\":\"cced3c8bf07c9782f88b9b49d0ace79ff70c8b32919eba4856face9398a39eae\"},{\"path\":\"package/dist/auth-menu/menu.d.ts\",\"bytes\":2209,\"sha256\":\"c3c53c1fa7e965f7183d02fa49b1d8378e7c31ffef35f83776082251fe4c6151\"},{\"path\":\"package/dist/auth-menu/menu.js\",\"bytes\":2948,\"sha256\":\"acc8dea7a79533d01ff8332427d24e13b7c96210254864985f9a51e41406e9fc\"},{\"path\":\"package/dist/auth-menu/opencode-v1.d.ts\",\"bytes\":2487,\"sha256\":\"fa485357ccf2e2d53a39801714b97cb0851ebb85b62e635c0b5f0c7c58ea1f5b\"},{\"path\":\"package/dist/auth-menu/opencode-v1.js\",\"bytes\":2090,\"sha256\":\"d21c95a7acbcb9ea9abe15aaff8860272c98356a0143d957c52f58beb1f228de\"},{\"path\":\"package/dist/auth-menu/select.d.ts\",\"bytes\":792,\"sha256\":\"b8ab301b531177d7a32e36ae58fd6f37e5e1250ad5bedc89c7d5513a298b7bbc\"},{\"path\":\"package/dist/auth-menu/select.js\",\"bytes\":6431,\"sha256\":\"442bd3e3e8d288df217c24ad257b1498ef799f621c3a116b5509ad5c860c0272\"},{\"path\":\"package/dist/auth-menu/terminal.d.ts\",\"bytes\":1747,\"sha256\":\"484080f56f6d219e6cca0e1027925bbf8cc1a8de35d995c88d4e13ecb230fd9f\"},{\"path\":\"package/dist/auth-menu/terminal.js\",\"bytes\":594,\"sha256\":\"134d4950e10d5cd67fd28dba7af51f67e801e719d40b2824bf48e8dde55a1b7b\"},{\"path\":\"package/dist/cachekeep/index.d.ts\",\"bytes\":440,\"sha256\":\"1595bd653ca18cacf2246bdf49fbb496244f0b7b1bad1047edcb39f6d2bc9786\"},{\"path\":\"package/dist/cachekeep/index.js\",\"bytes\":131,\"sha256\":\"016e6ff377ecb65c20e643321b1a19eb853f4941639b6691d92e021335644ea2\"},{\"path\":\"package/dist/cachekeep/manager.d.ts\",\"bytes\":8907,\"sha256\":\"f932e348ecd734a688bad019ba163878afd03087cf9f74f3d70f9648b44b7690\"},{\"path\":\"package/dist/cachekeep/manager.js\",\"bytes\":17493,\"sha256\":\"0c24086a833635e39faef58f3b8a28034fd768192c1438305d6de4a0b4edd8ae\"},{\"path\":\"package/dist/cachekeep/window.d.ts\",\"bytes\":620,\"sha256\":\"2bb9f1825f342b25d02d132b1c300a449bfd13f3b6e90446132ad2036701b9e0\"},{\"path\":\"package/dist/cachekeep/window.js\",\"bytes\":1194,\"sha256\":\"872ebb4\n[\u2026 15191 bytes elided \u2026]\n.d.ts\",\"bytes\":1951,\"sha256\":\"8cb1d95cd8fa6bf92d923ba638213f74ad494451622b4870b1dae934512b203f\"},{\"path\":\"package/dist/store/identity.js\",\"bytes\":2923,\"sha256\":\"5f675917bbca5485a2f502ba14a8d31ab7d3d1e7077300ffb547a80e9a999a47\"},{\"path\":\"package/dist/store/index.d.ts\",\"bytes\":2061,\"sha256\":\"ea8c2f617489679e3360840a892523601a32c4f448f5ee930145a4f00ce3ba3b\"},{\"path\":\"package/dist/store/index.js\",\"bytes\":534,\"sha256\":\"ec9782b6e92e9fb2fe3b17b13d5dbbed0792c30cd0f04b84c1cdaa642f785db8\"},{\"path\":\"package/dist/store/mutate.d.ts\",\"bytes\":9006,\"sha256\":\"009fea657c03a49b37555aa3c445c8930132234f0a1f3e8808ded5c065293ead\"},{\"path\":\"package/dist/store/mutate.js\",\"bytes\":19981,\"sha256\":\"095842664fb1d805159902223b7765dd4a7349ad1a5bbb5e2c135c654739a434\"},{\"path\":\"package/dist/store/pool.d.ts\",\"bytes\":10698,\"sha256\":\"bc7952bff586abb98f426bfb34518686159819160b0210ead63b6b68f691ef55\"},{\"path\":\"package/dist/store/pool.js\",\"bytes\":5590,\"sha256\":\"f2a1ce55a2be5ca090e333700ae46ca7d14d1657153e6a5819a3bc348552fd0e\"},{\"path\":\"package/dist/store/provider-state.d.ts\",\"bytes\":7226,\"sha256\":\"5a34f11c74d1bbf6fcb384845085c0aacd9df28b8102141577690e9406475240\"},{\"path\":\"package/dist/store/provider-state.js\",\"bytes\":11543,\"sha256\":\"755ba874f216cb91e3df39a084b991034f529596d2e75cd1ccc1884623ed7b40\"},{\"path\":\"package/dist/store/publication.d.ts\",\"bytes\":1454,\"sha256\":\"2166d6a8d11dbc7c2a4e3edbae5a8ef86b01672f28e27a687ffe322ba4025eae\"},{\"path\":\"package/dist/store/publication.js\",\"bytes\":15814,\"sha256\":\"fbb1376afb0f770529a8ea0a64c6db68272d3937cf13ee8a5063181667fd0a35\"},{\"path\":\"package/dist/store/pull.d.ts\",\"bytes\":1626,\"sha256\":\"d37421210e6e339d3a4166933257588431ce2f83a0d23bc6d5da4deeca7dabb4\"},{\"path\":\"package/dist/store/pull.js\",\"bytes\":5470,\"sha256\":\"4db913a0d196ed634277e4f3569c275579038f948e4adf6eb4dbbae257a41c92\"},{\"path\":\"package/dist/store/refresh-lock.d.ts\",\"bytes\":2318,\"sha256\":\"04d05f036f5bd460cf29511957aa86ba39cd914db2bee2262d2a19e240ac7387\"},{\"path\":\"package/dist/store/refresh-lock.js\",\"bytes\":4471,\"sha256\":\"94b6397ae32b38329058d536c3e0e4d113b5730d14c56ae025ada91bb8919617\"},{\"path\":\"package/dist/store/refresh.d.ts\",\"bytes\":2996,\"sha256\":\"c0ac1dcfd2393ac0683f4f4503a0b732ff35d621768a9fe6c3c69e05e43aa35c\"},{\"path\":\"package/dist/store/refresh.js\",\"bytes\":10645,\"sha256\":\"698ad72c223ba36eda5005078e4303e726d9d9b8f3407c07b72ffa777466252c\"},{\"path\":\"package/dist/store/reserved.d.ts\",\"bytes\":243,\"sha256\":\"47ca71a2b3d163c8c636c4cc46f517428877e5df7f41e77e44399eb21416f529\"},{\"path\":\"package/dist/store/reserved.js\",\"bytes\":536,\"sha256\":\"0d7f5f728cda7347c8dc6511f22ecd0bf5eb3553ce4426f97531c9ce2e636aae\"},{\"path\":\"package/dist/store/rows.d.ts\",\"bytes\":15754,\"sha256\":\"4b3e06eeedfb46700409f6e1e6293e1f1b8c5574d2f18bd5006c404fd6d48c51\"},{\"path\":\"package/dist/store/rows.js\",\"bytes\":61491,\"sha256\":\"6daf7b972b423d7c73283efebbba9af9473c566dd54a050699561e8e14d0ea96\"},{\"path\":\"package/dist/store/runtime.d.ts\",\"bytes\":1949,\"sha256\":\"6838abdf1de68578c8403f76d3404a86e0d286c28a99ff32cb8bd84544a718cb\"},{\"path\":\"package/dist/store/runtime.js\",\"bytes\":2847,\"sha256\":\"ffe3647d4a6f8cb6644b4cf4a00298d9ad89e2483b4dd6efa7f70baa2038461a\"},{\"path\":\"package/dist/store/schema.d.ts\",\"bytes\":22168,\"sha256\":\"2099f309023c62e6ed8b82906a8b5c7eaa8d42e1a134908dc65bece83711de9f\"},{\"path\":\"package/dist/store/schema.js\",\"bytes\":31460,\"sha256\":\"349c1bac2b8417dd941a16148f49521ea8a9c1fefb5e3a6ee82bb461bd050312\"},{\"path\":\"package/dist/store/settings.d.ts\",\"bytes\":2979,\"sha256\":\"2be15ac325bcfed048f12e202eaf625a6eca3f85fc35f29dff5770a31d81b7c5\"},{\"path\":\"package/dist/store/settings.js\",\"bytes\":5176,\"sha256\":\"b96a54dfca4a59a592d6bfac82e388e9a4f4c158e4b01dc8864b4bc6becbc88c\"},{\"path\":\"package/dist/store/torn.d.ts\",\"bytes\":3691,\"sha256\":\"9627cac1b1a93891f74577f9bb6a4832e423b3302fdd18be0d191b51cb615a6a\"},{\"path\":\"package/dist/store/torn.js\",\"bytes\":14708,\"sha256\":\"d5a4338ef9795e4d638e221d40a25334909db74db6456e2823f5870f7c963854\"},{\"path\":\"package/dist/tui-build/build-tui.d.ts\",\"bytes\":876,\"sha256\":\"8788a2d748c4a98519cad1e14879b731d0324a8e04070ccf13b0fc73cfe3ddc1\"},{\"path\":\"package/dist/tui-build/build-tui.js\",\"bytes\":10702,\"sha256\":\"3071f7c4886e92ef6b39b1ff1dbc0b37798b7f5a5b2fad39084cb2061e6869c4\"},{\"path\":\"package/dist/tui-build/index.d.ts\",\"bytes\":253,\"sha256\":\"998d3434b2f49085092abaee3445a5610e47b0a4d0d06d5ef76b71eb6bdd9b02\"},{\"path\":\"package/dist/tui-build/index.js\",\"bytes\":159,\"sha256\":\"559b42a1cdf51c08439f4d46eba0d0ff61800e51ef5df7a549653c8a8c50f385\"},{\"path\":\"package/dist/tui-build/publish-list.d.ts\",\"bytes\":221,\"sha256\":\"ec0eab47cfad95ad8035fd50f98ab4c5353f5a96b720573847e490d7c6dab03f\"},{\"path\":\"package/dist/tui-build/publish-list.js\",\"bytes\":1098,\"sha256\":\"b5baeaf0195fccefa8b5227f1f89eee855445a68ff25d24f42938372ee769cde\"},{\"path\":\"package/dist/tui-build/walker.d.ts\",\"bytes\":341,\"sha256\":\"c930ce537d36c98cf7d0ddcebe4b7866c64b7947de3e397a3ec39434fe55be26\"},{\"path\":\"package/dist/tui-build/walker.js\",\"bytes\":6119,\"sha256\":\"b32677d5bc47df0bdce929742afcf6fd0e7a8eb3e64e5982d9777278cd54b1f8\"},{\"path\":\"package/dist/tui-prefs/index.d.ts\",\"bytes\":312,\"sha256\":\"e7e57412d22febf8e7eaecddbf7bc9a5c024a412fc086175b21cb80a7e70c85f\"},{\"path\":\"package/dist/tui-prefs/index.js\",\"bytes\":164,\"sha256\":\"3175bc82f7d35faa32d7d4f13097287d51f15e11871892510e4541e777ec8f5a\"},{\"path\":\"package/dist/tui-prefs/tui-preferences.d.ts\",\"bytes\":1206,\"sha256\":\"6db4a6ce6df10ac2bce82066212089c9ba1519c8c1c0671bd19bac2940d01340\"},{\"path\":\"package/dist/tui-prefs/tui-preferences.js\",\"bytes\":3186,\"sha256\":\"487f12596e563ef912291b3af6a6b1ad35627cf2618298d7e34ef88077052c3a\"},{\"path\":\"package/dist/tui-prefs/watcher.d.ts\",\"bytes\":1335,\"sha256\":\"c8eeb6f81ce6812b048024ceed10eeb17fb63962b54e0006200f1e62ea3ccb7f\"},{\"path\":\"package/dist/tui-prefs/watcher.js\",\"bytes\":6804,\"sha256\":\"4c1cc871356acab6cc0a7f291e816e442b9fd99d9a5a23639028be665ffe3305\"},{\"path\":\"package/dist/tui/index.d.ts\",\"bytes\":281,\"sha256\":\"9d4555b13b599cdef275f1501154d3802ac237a17ee06fafd34e05a183918921\"},{\"path\":\"package/dist/tui/index.js\",\"bytes\":950,\"sha256\":\"c9a1e381382128b64eea0b3b049beb1b210cb68e768ea04683662b8b1a73bbb1\"},{\"path\":\"package/dist/util/any-signal.d.ts\",\"bytes\":378,\"sha256\":\"7da2001a2df2771c062537fae64d6100d1193b2bb40a9544f9bed05394af4fc4\"},{\"path\":\"package/dist/util/any-signal.js\",\"bytes\":1508,\"sha256\":\"454adc21f90c42f5caa2c6b8374c1a7532623a1b954fe06a030afbc9248c10fe\"},{\"path\":\"package/LICENSE\",\"bytes\":1067,\"sha256\":\"bf737fd6a5d9da55873eb7ea481fd9e875bcfefc13ed42766a1964c6040c5581\"},{\"path\":\"package/package.json\",\"bytes\":4347,\"sha256\":\"1cd2f62ba0ac0465246ee6c2669cbf1294531bc555f80aac980b40184d704b33\"},{\"path\":\"package/README.md\",\"bytes\":2528,\"sha256\":\"957d55cceeaedd46ee5f74c36a9da51863b27cd0e2fe8a6120e0f1d60dd4d75f\"}]}\n{\"commit\":\"dc1683258658912bfc1fe40d99c6431343d4bd7b\",\"compiler\":\"typescript@6.0.3\",\"compilerOptions\":{\"target\":\"ESNext\",\"module\":\"ESNext\",\"verbatimModuleSyntax\":true,\"sourceMap\":true,\"rewriteRelativeImportExtensions\":true},\"originalEntrySha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\",\"runtimeClosure\":[{\"name\":\"account-storage\",\"blob\":\"619687373fa20fb40007bac0b07c5c4a0e16cf9e\",\"sourceSha256\":\"f210df44f53ae605fa29b05aaf03a63c83e2fd80d00a34ce15d6cc5e31f664ac\",\"outputBytes\":24425,\"outputSha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\"},{\"name\":\"atomic-write\",\"blob\":\"a2a36aa1a4a4ad60a2552cc2eb3087402ab34d85\",\"sourceSha256\":\"5871b3b6aaaaaddde765343c3c89c0d14e2a9126f0c3f35690aaf6b924a34f12\",\"outputBytes\":2602,\"outputSha256\":\"01f7149f5605693e5b8a4ef0d441ba8b7ab49f7282e5870915c4296cfd7fed08\"},{\"name\":\"file-lock\",\"blob\":\"04a707049d003136a52b1b505b82e03a575b7a4f\",\"sourceSha256\":\"d38318c4926545892057cdebb9ff4c0977752fc7cfbcbced379874ecb48ac9d6\",\"outputBytes\":17205,\"outputSha256\":\"b6dbc0e2de9db485141925460d50bff3ccdd297eccfd12c7c1105a54d73e2e23\"},{\"name\":\"logger\",\"blob\":\"4a420f25ee842ac7ab3586a046793cf76e3ce074\",\"sourceSha256\":\"499b0a5f60d6e78e7dd0bbfcf04c66696f9ba4242e23b9ffbcda70fa625b5b0c\",\"outputBytes\":2139,\"outputSha256\":\"207e7dcbbd54f18372735322154d5f2c8d2acfa78dc811bae29747899c3cb3d3\"}],\"sources\":[{\"path\":\"packages/core/src/account-storage.ts\",\"fixture\":\"legacy-account-storage.ts.txt\",\"blob\":\"619687373fa20fb40007bac0b07c5c4a0e16cf9e\",\"sha256\":\"f210df44f53ae605fa29b05aaf03a63c83e2fd80d00a34ce15d6cc5e31f664ac\"},{\"path\":\"packages/core/src/atomic-write.ts\",\"fixture\":\"legacy-atomic-write.ts.txt\",\"blob\":\"a2a36aa1a4a4ad60a2552cc2eb3087402ab34d85\",\"sha256\":\"5871b3b6aaaaaddde765343c3c89c0d14e2a9126f0c3f35690aaf6b924a34f12\"},{\"path\":\"packages/core/src/file-lock.ts\",\"fixture\":\"legacy-file-lock.ts.txt\",\"blob\":\"04a707049d003136a52b1b505b82e03a575b7a4f\",\"sha256\":\"d38318c4926545892057cdebb9ff4c0977752fc7cfbcbced379874ecb48ac9d6\"},{\"path\":\"packages/core/src/logger.ts\",\"fixture\":\"legacy-logger.ts.txt\",\"blob\":\"4a420f25ee842ac7ab3586a046793cf76e3ce074\",\"sha256\":\"499b0a5f60d6e78e7dd0bbfcf04c66696f9ba4242e23b9ffbcda70fa625b5b0c\"}],\"outputs\":[{\"path\":\"account-storage.js\",\"bytes\":24425,\"sha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\"},{\"path\":\"account-storage.js.map\",\"bytes\":15927,\"sha256\":\"549f30b40791fa682b24877d6c736c590684e005b223f746e09b1f090112af42\"},{\"path\":\"atomic-write.js\",\"bytes\":2602,\"sha256\":\"01f7149f5605693e5b8a4ef0d441ba8b7ab49f7282e5870915c4296cfd7fed08\"},{\"path\":\"atomic-write.js.map\",\"bytes\":1137,\"sha256\":\"66935a85f013ff06e8fa483ad7f6ffd95d2b544dd7326f67e28fb651aeabca15\"},{\"path\":\"file-lock.js\",\"bytes\":17205,\"sha256\":\"b6dbc0e2de9db485141925460d50bff3ccdd297eccfd12c7c1105a54d73e2e23\"},{\"path\":\"file-lock.js.map\",\"bytes\":11530,\"sha256\":\"c41f2f12b1e64ec4552df448c972690c52b3a979c67511f822ad54f51aa5cb8b\"},{\"path\":\"logger.js\",\"bytes\":2139,\"sha256\":\"207e7dcbbd54f18372735322154d5f2c8d2acfa78dc811bae29747899c3cb3d3\"},{\"path\":\"logger.js.map\",\"bytes\":1794,\"sha256\":\"5dcc04fd211d3c6cef05787a706d08f9ca4791961670476f20b3954070f2cd6c\"}]}\n\nbun test v1.4.2 (744846f84)\n\ntest/common-auth-010-store/migration-crash.test.ts:\n801 |       })\n802 |       const settings = await store.readSettings()\n803 |       expect(settings.status).toBe('ready')\n804 |       if (settings.status !== 'ready') throw new Error('settings absent')\n805 |       expect(settings.settings.antigravityManagement).toBeUndefined()\n806 |       expect(settings.settings.antigravityRouting).toMatchObject({\n                                                         ^\nerror: expect(received).toMatchObject(expected)\n\n  {\n-   \"activeIndex\": 7,\n+   \"activeIndex\": 0,\n    \"activeIndexByFamily\": {\n      \"claude\": 0,\n      \"future\": null,\n      \"gemini\": 7,\n    },\n    \"activeRow\": {\n      \"credentialEpoch\": 1,\n-     \"id\": \"9d307e03-6539-4e7a-ac71-1403cc1c4310\",\n+     \"id\": \"281a607c-0232-477b-b376-95df8e15dc55\",\n    },\n    \"activeRowByFamily\": {\n      \"claude\": {\n        \"credentialEpoch\": 1,\n        \"id\": \"281a607c-0232-477b-b376-95df8e15dc55\",\n      },\n      \"gemini\": {\n        \"credentialEpoch\": 1,\n        \"id\": \"9d307e03-6539-4e7a-ac71-1403cc1c4310\",\n      },\n    },\n    \"legacySourceFields\": {\n      \"future\": {\n        \"retained\": [\n          null,\n          false,\n        ],\n      },\n    },\n+   \"schemaVersion\": 1,\n  }\n\n- Expected  - 2\n+ Received  + 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-crash.test.ts:806:52)\n      at async <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-crash.test.ts:87:13)\n      at async withMigrationFixtures (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-child.ts:598:39)\n(fail) genuine public-store offline migration > imports full rows, credential stamps, field presence, order and independent cursors then verifies active no-op [123.42ms]\n\n 0 pass\n 94 filtered out\n 1 fail\n 26 expect() calls\nRan 1 test across 1 file. [500.00ms]\n{\"ownedCommandCleanup\":true,\"root\":\"/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/node_modules/.common-auth-public-consumer-mjKRq1\",\"leader\":{\"pid\":848,\"start\":\"81697705\",\"pgid\":848,\"sid\":848},\"signals\":[],\"primary\":\"Error: test command exited with code 1\",\"cleanupFailure\":null}\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 2317,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 2379,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "49085092abaee3445a5610e47b0a4d0d06d5ef76b71eb6bdd9b02\"},{\"path\":\"package/dist/tui-build/index.js\",\"bytes\":159,\"sha256\":\"559b42a1cdf51c08439f4d46eba0d0ff61800e51ef5df7a549653c8a8c50f385\"},{\"path\":\"package/dist/tui-build/publish-list.d.ts\",\"bytes\":221,\"sha256\":\"ec0eab47cfad95ad8035fd50f98ab4c5353f5a96b720573847e490d7c6dab03f\"},{\"path\":\"package/dist/tui-build/publish-list.js\",\"bytes\":1098,\"sha256\":\"b5baeaf0195fccefa8b5227f1f89eee855445a68ff25d24f42938372ee769cde\"},{\"path\":\"package/dist/tui-build/walker.d.ts\",\"bytes\":341,\"sha256\":\"c930ce537d36c98cf7d0ddcebe4b7866c64b7947de3e397a3ec39434fe55be26\"},{\"path\":\"package/dist/tui-build/walker.js\",\"bytes\":6119,\"sha256\":\"b32677d5bc47df0bdce929742afcf6fd0e7a8eb3e64e5982d9777278cd54b1f8\"},{\"path\":\"package/dist/tui-prefs/index.d.ts\",\"bytes\":312,\"sha256\":\"e7e57412d22febf8e7eaecddbf7bc9a5c024a412fc086175b21cb80a7e70c85f\"},{\"path\":\"package/dist/tui-prefs/index.js\",\"bytes\":164,\"sha256\":\"3175bc82f7d35faa32d7d4f13097287d51f15e11871892510e4541e777ec8f5a\"},{\"path\":\"package/dist/tui-prefs/tui-preferences.d.ts\",\"bytes\":1206,\"sha256\":\"6db4a6ce6df10ac2bce82066212089c9ba1519c8c1c0671bd19bac2940d01340\"},{\"path\":\"package/dist/tui-prefs/tui-preferences.js\",\"bytes\":3186,\"sha256\":\"487f12596e563ef912291b3af6a6b1ad35627cf2618298d7e34ef88077052c3a\"},{\"path\":\"package/dist/tui-prefs/watcher.d.ts\",\"bytes\":1335,\"sha256\":\"c8eeb6f81ce6812b048024ceed10eeb17fb63962b54e0006200f1e62ea3ccb7f\"},{\"path\":\"package/dist/tui-prefs/watcher.js\",\"bytes\":6804,\"sha256\":\"4c1cc871356acab6cc0a7f291e816e442b9fd99d9a5a23639028be665ffe3305\"},{\"path\":\"package/dist/tui/index.d.ts\",\"bytes\":281,\"sha256\":\"9d4555b13b599cdef275f1501154d3802ac237a17ee06fafd34e05a183918921\"},{\"path\":\"package/dist/tui/index.js\",\"bytes\":950,\"sha256\":\"c9a1e381382128b64eea0b3b049beb1b210cb68e768ea04683662b8b1a73bbb1\"},{\"path\":\"package/dist/util/any-signal.d.ts\",\"bytes\":378,\"sha256\":\"7da2001a2df2771c062537fae64d6100d1193b2bb40a9544f9bed05394af4fc4\"},{\"path\":\"package/dist/util/any-signal.js\",\"bytes\":1508,\"sha256\":\"454adc21f90c42f5caa2c6b8374c1a7532623a1b954fe06a030afbc9248c10fe\"},{\"path\":\"package/LICENSE\",\"bytes\":1067,\"sha256\":\"bf737fd6a5d9da55873eb7ea481fd9e875bcfefc13ed42766a1964c6040c5581\"},{\"path\":\"package/package.json\",\"bytes\":4347,\"sha256\":\"1cd2f62ba0ac0465246ee6c2669cbf1294531bc555f80aac980b40184d704b33\"},{\"path\":\"package/README.md\",\"bytes\":2528,\"sha256\":\"957d55cceeaedd46ee5f74c36a9da51863b27cd0e2fe8a6120e0f1d60dd4d75f\"}]}\n{\"commit\":\"dc1683258658912bfc1fe40d99c6431343d4bd7b\",\"compiler\":\"typescript@6.0.3\",\"compilerOptions\":{\"target\":\"ESNext\",\"module\":\"ESNext\",\"verbatimModuleSyntax\":true,\"sourceMap\":true,\"rewriteRelativeImportExtensions\":true},\"originalEntrySha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\",\"runtimeClosure\":[{\"name\":\"account-storage\",\"blob\":\"619687373fa20fb40007bac0b07c5c4a0e16cf9e\",\"sourceSha256\":\"f210df44f53ae605fa29b05aaf03a63c83e2fd80d00a34ce15d6cc5e31f664ac\",\"outputBytes\":24425,\"outputSha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\"},{\"name\":\"atomic-write\",\"blob\":\"a2a36aa1a4a4ad60a2552cc2eb3087402ab34d85\",\"sourceSha256\":\"5871b3b6aaaaaddde765343c3c89c0d14e2a9126f0c3f35690aaf6b924a34f12\",\"outputBytes\":2602,\"outputSha256\":\"01f7149f5605693e5b8a4ef0d441ba8b7ab49f7282e5870915c4296cfd7fed08\"},{\"name\":\"file-lock\",\"blob\":\"04a707049d003136a52b1b505b82e03a575b7a4f\",\"sourceSha256\":\"d38318c4926545892057cdebb9ff4c0977752fc7cfbcbced379874ecb48ac9d6\",\"outputBytes\":17205,\"outputSha256\":\"b6dbc0e2de9db485141925460d50bff3ccdd297eccfd12c7c1105a54d73e2e23\"},{\"name\":\"logger\",\"blob\":\"4a420f25ee842ac7ab3586a046793cf76e3ce074\",\"sourceSha256\":\"499b0a5f60d6e78e7dd0bbfcf04c66696f9ba4242e23b9ffbcda70fa625b5b0c\",\"outputBytes\":2139,\"outputSha256\":\"207e7dcbbd54f18372735322154d5f2c8d2acfa78dc811bae29747899c3cb3d3\"}],\"sources\":[{\"path\":\"packages/core/src/account-storage.ts\",\"fixture\":\"legacy-account-storage.ts.txt\",\"blob\":\"619687373fa20fb40007bac0b07c5c4a0e16cf9e\",\"sha256\":\"f210df44f53ae605fa29b05aaf03a63c83e2fd80d00a34ce15d6cc5e31f664ac\"},{\"path\":\"packages/core/src/atomic-write.ts\",\"fixture\":\"legacy-atomic-write.ts.txt\",\"blob\":\"a2a36aa1a4a4ad60a2552cc2eb3087402ab34d85\",\"sha256\":\"5871b3b6aaaaaddde765343c3c89c0d14e2a9126f0c3f35690aaf6b924a34f12\"},{\"path\":\"packages/core/src/file-lock.ts\",\"fixture\":\"legacy-file-lock.ts.txt\",\"blob\":\"04a707049d003136a52b1b505b82e03a575b7a4f\",\"sha256\":\"d38318c4926545892057cdebb9ff4c0977752fc7cfbcbced379874ecb48ac9d6\"},{\"path\":\"packages/core/src/logger.ts\",\"fixture\":\"legacy-logger.ts.txt\",\"blob\":\"4a420f25ee842ac7ab3586a046793cf76e3ce074\",\"sha256\":\"499b0a5f60d6e78e7dd0bbfcf04c66696f9ba4242e23b9ffbcda70fa625b5b0c\"}],\"outputs\":[{\"path\":\"account-storage.js\",\"bytes\":24425,\"sha256\":\"5346976e87486ca3496881d5f9e16cc71039a205c39aea39228965fc2dc767c1\"},{\"path\":\"account-storage.js.map\",\"bytes\":15927,\"sha256\":\"549f30b40791fa682b24877d6c736c590684e005b223f746e09b1f090112af42\"},{\"path\":\"atomic-write.js\",\"bytes\":2602,\"sha256\":\"01f7149f5605693e5b8a4ef0d441ba8b7ab49f7282e5870915c4296cfd7fed08\"},{\"path\":\"atomic-write.js.map\",\"bytes\":1137,\"sha256\":\"66935a85f013ff06e8fa483ad7f6ffd95d2b544dd7326f67e28fb651aeabca15\"},{\"path\":\"file-lock.js\",\"bytes\":17205,\"sha256\":\"b6dbc0e2de9db485141925460d50bff3ccdd297eccfd12c7c1105a54d73e2e23\"},{\"path\":\"file-lock.js.map\",\"bytes\":11530,\"sha256\":\"c41f2f12b1e64ec4552df448c972690c52b3a979c67511f822ad54f51aa5cb8b\"},{\"path\":\"logger.js\",\"bytes\":2139,\"sha256\":\"207e7dcbbd54f18372735322154d5f2c8d2acfa78dc811bae29747899c3cb3d3\"},{\"path\":\"logger.js.map\",\"bytes\":1794,\"sha256\":\"5dcc04fd211d3c6cef05787a706d08f9ca4791961670476f20b3954070f2cd6c\"}]}\n\nbun test v1.4.2 (744846f84)\n\ntest/common-auth-010-store/migration-crash.test.ts:\n801 |       })\n802 |       const settings = await store.readSettings()\n803 |       expect(settings.status).toBe('ready')\n804 |       if (settings.status !== 'ready') throw new Error('settings absent')\n805 |       expect(settings.settings.antigravityManagement).toBeUndefined()\n806 |       expect(settings.settings.antigravityRouting).toMatchObject({\n                                                         ^\nerror: expect(received).toMatchObject(expected)\n\n  {\n-   \"activeIndex\": 7,\n+   \"activeIndex\": 0,\n    \"activeIndexByFamily\": {\n      \"claude\": 0,\n      \"future\": null,\n      \"gemini\": 7,\n    },\n    \"activeRow\": {\n      \"credentialEpoch\": 1,\n-     \"id\": \"9d307e03-6539-4e7a-ac71-1403cc1c4310\",\n+     \"id\": \"281a607c-0232-477b-b376-95df8e15dc55\",\n    },\n    \"activeRowByFamily\": {\n      \"claude\": {\n        \"credentialEpoch\": 1,\n        \"id\": \"281a607c-0232-477b-b376-95df8e15dc55\",\n      },\n      \"gemini\": {\n        \"credentialEpoch\": 1,\n        \"id\": \"9d307e03-6539-4e7a-ac71-1403cc1c4310\",\n      },\n    },\n    \"legacySourceFields\": {\n      \"future\": {\n        \"retained\": [\n          null,\n          false,\n        ],\n      },\n    },\n+   \"schemaVersion\": 1,\n  }\n\n- Expected  - 2\n+ Received  + 3\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-crash.test.ts:806:52)\n      at async <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-crash.test.ts:87:13)\n      at async withMigrationFixtures (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/test/common-auth-010-store/migration-child.ts:598:39)\n(fail) genuine public-store offline migration > imports full rows, credential stamps, field presence, order and independent cursors then verifies active no-op [123.42ms]\n\n 0 pass\n 94 filtered out\n 1 fail\n 26 expect() calls\nRan 1 test across 1 file. [500.00ms]\n{\"ownedCommandCleanup\":true,\"root\":\"/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/node_modules/.common-auth-public-consumer-mjKRq1\",\"leader\":{\"pid\":848,\"start\":\"81697705\",\"pgid\":848,\"sid\":848},\"signals\":[],\"primary\":\"Error: test command exited with code 1\",\"cleanupFailure\":null}\n",
+    "reason": null
+  },
+  {
+    "id": "opencode-retired-claude-admission",
+    "source": {
+      "file": "mutations.toml",
+      "line": 214
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^retired\\sClaude\\sadmission\\srefuses\\suser\\sselections\\sbefore\\sselection,\\srefresh,\\swarmup\\sor\\sphysical\\ssend$"
+    ],
+    "green": [],
+    "failures": {
+      "^retired\\sClaude\\sadmission\\srefuses\\suser\\sselections\\sbefore\\sselection,\\srefresh,\\swarmup\\sor\\sphysical\\ssend$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/shared/request-services.test.ts:\n2890 |         'gemini-claude-sonnet-4-6-thinking',\n2891 |       ]) {\n2892 |         const response = await executor.execute(modelUrl(model), CHAT_INIT(), {\n2893 |           kind: 'primary',\n2894 |         })\n2895 |         expect(response.status).toBe(412)\n                                       ^\nerror: expect(received).toBe(expected)\n\nExpected: 412\nReceived: 200\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/shared/request-services.test.ts:2895:33)\n(fail) retired Claude admission > refuses user selections before selection, refresh, warmup or physical send [11.25ms]\n\n 0 pass\n 63 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [146.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1751,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1637,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^retired\\sClaude\\sadmission\\srefuses\\suser\\sselections\\sbefore\\sselection,\\srefresh,\\swarmup\\sor\\sphysical\\ssend$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/shared/request-services.test.ts:\n(pass) retired Claude admission > refuses user selections before selection, refresh, warmup or physical send [6.92ms]\n\n 1 pass\n 63 filtered out\n 0 fail\n 12 expect() calls\nRan 1 test across 1 file. [158.00ms]\n\nmutated command output: ^retired\\sClaude\\sadmission\\srefuses\\suser\\sselections\\sbefore\\sselection,\\srefresh,\\swarmup\\sor\\sphysical\\ssend$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/shared/request-services.test.ts:\n2890 |         'gemini-claude-sonnet-4-6-thinking',\n2891 |       ]) {\n2892 |         const response = await executor.execute(modelUrl(model), CHAT_INIT(), {\n2893 |           kind: 'primary',\n2894 |         })\n2895 |         expect(response.status).toBe(412)\n                                       ^\nerror: expect(received).toBe(expected)\n\nExpected: 412\nReceived: 200\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/shared/request-services.test.ts:2895:33)\n(fail) retired Claude admission > refuses user selections before selection, refresh, warmup or physical send [11.25ms]\n\n 0 pass\n 63 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [146.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "pi-local-retired-claude-admission",
+    "source": {
+      "file": "mutations.toml",
+      "line": 226
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^retired\\sClaude\\srequests\\srefuses\\slocal\\srequests\\sbefore\\sproject\\sdiscovery\\sor\\sphysical\\stransport$"
+    ],
+    "green": [],
+    "failures": {
+      "^retired\\sClaude\\srequests\\srefuses\\slocal\\srequests\\sbefore\\sproject\\sdiscovery\\sor\\sphysical\\stransport$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1696 |         userContext(),\n1697 |         { apiKey: 'test-token', sessionId: 'retired-local' },\n1698 |       ),\n1699 |     )\n1700 |     expect(observed.result.stopReason).toBe('error')\n1701 |     expect(observed.result.errorMessage).toBe(\n                                                ^\nerror: expect(received).toBe(expected)\n\nExpected: \"This Antigravity model is no longer offered. Choose another model.\"\nReceived: \"undefined is not an object (evaluating 'response.ok')\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1701:42)\n(fail) retired Claude requests > refuses local requests before project discovery or physical transport [3.50ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [290.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1899,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1864,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^retired\\sClaude\\srequests\\srefuses\\slocal\\srequests\\sbefore\\sproject\\sdiscovery\\sor\\sphysical\\stransport$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n(pass) retired Claude requests > refuses local requests before project discovery or physical transport [1.39ms]\n\n 1 pass\n 67 filtered out\n 0 fail\n 4 expect() calls\nRan 1 test across 1 file. [348.00ms]\n\nmutated command output: ^retired\\sClaude\\srequests\\srefuses\\slocal\\srequests\\sbefore\\sproject\\sdiscovery\\sor\\sphysical\\stransport$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1696 |         userContext(),\n1697 |         { apiKey: 'test-token', sessionId: 'retired-local' },\n1698 |       ),\n1699 |     )\n1700 |     expect(observed.result.stopReason).toBe('error')\n1701 |     expect(observed.result.errorMessage).toBe(\n                                                ^\nerror: expect(received).toBe(expected)\n\nExpected: \"This Antigravity model is no longer offered. Choose another model.\"\nReceived: \"undefined is not an object (evaluating 'response.ok')\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1701:42)\n(fail) retired Claude requests > refuses local requests before project discovery or physical transport [3.50ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [290.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "pi-vault-placeholder-recognition",
+    "source": {
+      "file": "mutations.toml",
+      "line": 170
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^vault\\snative-slot\\sadmission\\suses\\sonly\\sthe\\sserved\\svault\\scredential\\swhen\\sPi\\sresolves\\sthe\\sexact\\splaceholder$"
+    ],
+    "green": [],
+    "failures": {
+      "^vault\\snative-slot\\sadmission\\suses\\sonly\\sthe\\sserved\\svault\\scredential\\swhen\\sPi\\sresolves\\sthe\\sexact\\splaceholder$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1673 |     const result = await stream(\n1674 |       fakeModel(),\n1675 |       { messages: [] },\n1676 |       { apiKey: 'antigravity-vault-custody' },\n1677 |     ).result()\n1678 |     expect(result.stopReason).toBe('stop')\n                                     ^\nerror: expect(received).toBe(expected)\n\nExpected: \"stop\"\nReceived: \"error\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1678:31)\n(fail) vault native-slot admission > uses only the served vault credential when Pi resolves the exact placeholder [1.46ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [291.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1836,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1794,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^vault\\snative-slot\\sadmission\\suses\\sonly\\sthe\\sserved\\svault\\scredential\\swhen\\sPi\\sresolves\\sthe\\sexact\\splaceholder$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n(pass) vault native-slot admission > uses only the served vault credential when Pi resolves the exact placeholder [2.99ms]\n\n 1 pass\n 67 filtered out\n 0 fail\n 5 expect() calls\nRan 1 test across 1 file. [276.00ms]\n\nmutated command output: ^vault\\snative-slot\\sadmission\\suses\\sonly\\sthe\\sserved\\svault\\scredential\\swhen\\sPi\\sresolves\\sthe\\sexact\\splaceholder$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1673 |     const result = await stream(\n1674 |       fakeModel(),\n1675 |       { messages: [] },\n1676 |       { apiKey: 'antigravity-vault-custody' },\n1677 |     ).result()\n1678 |     expect(result.stopReason).toBe('stop')\n                                     ^\nerror: expect(received).toBe(expected)\n\nExpected: \"stop\"\nReceived: \"error\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1678:31)\n(fail) vault native-slot admission > uses only the served vault credential when Pi resolves the exact placeholder [1.46ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [291.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "pi-vault-retired-claude-admission",
+    "source": {
+      "file": "mutations.toml",
+      "line": 238
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^retired\\sClaude\\srequests\\srefuses\\svault\\srequests\\sbefore\\sobtaining\\sa\\scredential$"
+    ],
+    "green": [],
+    "failures": {
+      "^retired\\sClaude\\srequests\\srefuses\\svault\\srequests\\sbefore\\sobtaining\\sa\\scredential$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1719 |         userContext(),\n1720 |         { apiKey: 'synthetic-placeholder', sessionId: 'retired-vault' },\n1721 |       ),\n1722 |     )\n1723 |     expect(observed.result.stopReason).toBe('error')\n1724 |     expect(observed.result.errorMessage).toBe(\n                                                ^\nerror: expect(received).toBe(expected)\n\nExpected: \"This Antigravity model is no longer offered. Choose another model.\"\nReceived: \"Unexpected vault credential acquisition\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1724:42)\n(fail) retired Claude requests > refuses vault requests before obtaining a credential [2.29ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [294.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1937,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1812,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^retired\\sClaude\\srequests\\srefuses\\svault\\srequests\\sbefore\\sobtaining\\sa\\scredential$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n(pass) retired Claude requests > refuses vault requests before obtaining a credential [1.62ms]\n\n 1 pass\n 67 filtered out\n 0 fail\n 5 expect() calls\nRan 1 test across 1 file. [277.00ms]\n\nmutated command output: ^retired\\sClaude\\srequests\\srefuses\\svault\\srequests\\sbefore\\sobtaining\\sa\\scredential$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/pi/src/stream.test.ts:\n1719 |         userContext(),\n1720 |         { apiKey: 'synthetic-placeholder', sessionId: 'retired-vault' },\n1721 |       ),\n1722 |     )\n1723 |     expect(observed.result.stopReason).toBe('error')\n1724 |     expect(observed.result.errorMessage).toBe(\n                                                ^\nerror: expect(received).toBe(expected)\n\nExpected: \"This Antigravity model is no longer offered. Choose another model.\"\nReceived: \"Unexpected vault credential acquisition\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/pi/src/stream.test.ts:1724:42)\n(fail) retired Claude requests > refuses vault requests before obtaining a credential [2.29ms]\n\n 0 pass\n 67 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [294.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "tool-schema-allof-compatible-branches",
+    "source": {
+      "file": "mutations.toml",
+      "line": 312
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\smerges\\szod-style\\sintersections\\swithout\\slosing\\slater\\srequired\\sproperties$"
+    ],
+    "green": [],
+    "failures": {
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\smerges\\szod-style\\sintersections\\swithout\\slosing\\slater\\srequired\\sproperties$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2908 |                 required: ['b'],\n2909 |               },\n2910 |             ],\n2911 |           },\n2912 |         })\n2913 |         expect(schema.properties.value).toEqual({\n                                               ^\nerror: expect(received).toEqual(expected)\n\n  {\n+   \"description\": \"allOf: using the first branch; other intersection constraints omitted.\",\n    \"properties\": {\n      \"a\": {\n        \"type\": \"STRING\",\n      },\n-     \"b\": {\n-       \"type\": \"INTEGER\",\n-     },\n    },\n    \"required\": [\n      \"a\",\n-     \"b\",\n    ],\n    \"title\": \"First\",\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 4\n+ Received  + 1\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2913:41)\n(fail) tool schema wire normalization > Gemini > merges zod-style intersections without losing later required properties [2.97ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [121.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1798,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1642,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^tool\\sschema\\swire\\snormalization\\sGemini\\smerges\\szod-style\\sintersections\\swithout\\slosing\\slater\\srequired\\sproperties$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) tool schema wire normalization > Gemini > merges zod-style intersections without losing later required properties [2.63ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 1 expect() calls\nRan 1 test across 1 file. [118.00ms]\n\nmutated command output: ^tool\\sschema\\swire\\snormalization\\sGemini\\smerges\\szod-style\\sintersections\\swithout\\slosing\\slater\\srequired\\sproperties$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2908 |                 required: ['b'],\n2909 |               },\n2910 |             ],\n2911 |           },\n2912 |         })\n2913 |         expect(schema.properties.value).toEqual({\n                                               ^\nerror: expect(received).toEqual(expected)\n\n  {\n+   \"description\": \"allOf: using the first branch; other intersection constraints omitted.\",\n    \"properties\": {\n      \"a\": {\n        \"type\": \"STRING\",\n      },\n-     \"b\": {\n-       \"type\": \"INTEGER\",\n-     },\n    },\n    \"required\": [\n      \"a\",\n-     \"b\",\n    ],\n    \"title\": \"First\",\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 4\n+ Received  + 1\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2913:41)\n(fail) tool schema wire normalization > Gemini > merges zod-style intersections without losing later required properties [2.97ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [121.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "tool-schema-claude-validated-option",
+    "source": {
+      "file": "mutations.toml",
+      "line": 324
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\spreserves\\sWebFetch\\sformat\\schoices\\sand\\sthe\\sproperty\\snamed\\sformat$",
+      "^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\sretains\\sscalar\\sVALIDATED\\sconstraint\\shints\\sand\\sunion\\sflattening$"
+    ],
+    "green": [],
+    "failures": {
+      "^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\spreserves\\sWebFetch\\sformat\\schoices\\sand\\sthe\\sproperty\\snamed\\sformat$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3170 |             },\n3171 |           },\n3172 |         ],\n3173 |       },\n3174 |     ])\n3175 |     expect(body.tools[0].functionDeclarations[0].parameters).toEqual({\n                                                                    ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"properties\": {\n      \"format\": {\n-       \"enum\": [\n-         \"text\",\n-         \"markdown\",\n-         \"html\",\n+       \"anyOf\": [\n+         {\n+           \"enum\": [\n+             \"text\",\n+           ],\n+         },\n+         {\n+           \"enum\": [\n+             \"markdown\",\n+           ],\n+         },\n+         {\n+           \"enum\": [\n+             \"html\",\n+           ],\n+         },\n        ],\n-       \"type\": \"STRING\",\n      },\n    },\n    \"required\": [\n      \"format\",\n    ],\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 5\n+ Received  + 16\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3175:62)\n(fail) historical tool schema wire fixes > Claude preserves WebFetch format choices and the property named format [4.14ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [125.00ms]\n",
+      "^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\sretains\\sscalar\\sVALIDATED\\sconstraint\\shints\\sand\\sunion\\sflattening$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3210 |             },\n3211 |           },\n3212 |         ],\n3213 |       },\n3214 |     ])\n3215 |     expect(body.tools[0].functionDeclarations[0].parameters).toEqual({\n                                                                    ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"properties\": {\n      \"choice\": {\n-       \"description\": \"Accepts: string | number\",\n-       \"type\": \"STRING\",\n+       \"anyOf\": [\n+         {\n+           \"type\": \"STRING\",\n+         },\n+         {\n+           \"type\": \"NUMBER\",\n+         },\n+       ],\n      },\n      \"list\": {\n-       \"description\": \"minItems: 1, maxItems: 2\",\n        \"items\": {\n          \"type\": \"STRING\",\n        },\n+       \"maxItems\": 2,\n+       \"minItems\": 1,\n        \"type\": \"ARRAY\",\n      },\n      \"text\": {\n-       \"description\": \"minLength: 1, maxLength: 10, pattern: ^x, format: date, default: x\",\n+       \"default\": \"x\",\n+       \"format\": \"date\",\n+       \"maxLength\": 10,\n+       \"minLength\": 1,\n+       \"pattern\": \"^x\",\n        \"type\": \"STRING\",\n      },\n    },\n+   \"title\": \"Not a validated field\",\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 4\n+ Received  + 16\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3215:62)\n(fail) historical tool schema wire fixes > Claude retains scalar VALIDATED constraint hints and union flattening [3.66ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [123.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 3452,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 3355,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\spreserves\\sWebFetch\\sformat\\schoices\\sand\\sthe\\sproperty\\snamed\\sformat$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) historical tool schema wire fixes > Claude preserves WebFetch format choices and the property named format [3.60ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 1 expect() calls\nRan 1 test across 1 file. [119.00ms]\n\nbaseline output: ^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\sretains\\sscalar\\sVALIDATED\\sconstraint\\shints\\sand\\sunion\\sflattening$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) historical tool schema wire fixes > Claude retains scalar VALIDATED constraint hints and union flattening [3.53ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 1 expect() calls\nRan 1 test across 1 file. [122.00ms]\n\nmutated command output: ^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\spreserves\\sWebFetch\\sformat\\schoices\\sand\\sthe\\sproperty\\snamed\\sformat$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3170 |             },\n3171 |           },\n3172 |         ],\n3173 |       },\n3174 |     ])\n3175 |     expect(body.tools[0].functionDeclarations[0].parameters).toEqual({\n                                                                    ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"properties\": {\n      \"format\": {\n-       \"enum\": [\n-         \"text\",\n-         \"markdown\",\n-         \"html\",\n+       \"anyOf\": [\n+         {\n+           \"enum\": [\n+             \"text\",\n+           ],\n+         },\n+         {\n+           \"enum\": [\n+             \"markdown\",\n+           ],\n+         },\n+         {\n+           \"enum\": [\n+             \"html\",\n+           ],\n+         },\n        ],\n-       \"type\": \"STRING\",\n      },\n    },\n    \"required\": [\n      \"format\",\n    ],\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 5\n+ Received  + 16\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3175:62)\n(fail) historical tool schema wire fixes > Claude preserves WebFetch format choices and the property named format [4.14ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [125.00ms]\n\nmutated command output: ^historical\\stool\\sschema\\swire\\sfixes\\sClaude\\sretains\\sscalar\\sVALIDATED\\sconstraint\\shints\\sand\\sunion\\sflattening$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3210 |             },\n3211 |           },\n3212 |         ],\n3213 |       },\n3214 |     ])\n3215 |     expect(body.tools[0].functionDeclarations[0].parameters).toEqual({\n                                                                    ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"properties\": {\n      \"choice\": {\n-       \"description\": \"Accepts: string | number\",\n-       \"type\": \"STRING\",\n+       \"anyOf\": [\n+         {\n+           \"type\": \"STRING\",\n+         },\n+         {\n+           \"type\": \"NUMBER\",\n+         },\n+       ],\n      },\n      \"list\": {\n-       \"description\": \"minItems: 1, maxItems: 2\",\n        \"items\": {\n          \"type\": \"STRING\",\n        },\n+       \"maxItems\": 2,\n+       \"minItems\": 1,\n        \"type\": \"ARRAY\",\n      },\n      \"text\": {\n-       \"description\": \"minLength: 1, maxLength: 10, pattern: ^x, format: date, default: x\",\n+       \"default\": \"x\",\n+       \"format\": \"date\",\n+       \"maxLength\": 10,\n+       \"minLength\": 1,\n+       \"pattern\": \"^x\",\n        \"type\": \"STRING\",\n      },\n    },\n+   \"title\": \"Not a validated field\",\n    \"type\": \"OBJECT\",\n  }\n\n- Expected  - 4\n+ Received  + 16\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3215:62)\n(fail) historical tool schema wire fixes > Claude retains scalar VALIDATED constraint hints and union flattening [3.66ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [123.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "tool-schema-exclusive-integer-bounds",
+    "source": {
+      "file": "mutations.toml",
+      "line": 299
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\shandles\\sexclusive\\sbounds\\sand\\sunsupported\\snumeric\\sconstraints$"
+    ],
+    "green": [],
+    "failures": {
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\shandles\\sexclusive\\sbounds\\sand\\sunsupported\\snumeric\\sconstraints$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3033 |               'minimum: 0, exclusiveMinimum: 0, maximum: 20, exclusiveMaximum: 10, multipleOf: 2',\n3034 |           })\n3035 |           expect(props.amount.description).toContain('exclusiveMinimum: true')\n3036 |           expect(props.amount.minimum).toBeUndefined()\n3037 |         } else {\n3038 |           expect(props.count).toEqual({\n                                     ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"description\": \"multipleOf: 2\",\n-   \"maximum\": 9,\n-   \"minimum\": 1,\n+   \"maximum\": 10,\n+   \"minimum\": 0,\n    \"type\": \"INTEGER\",\n  }\n\n- Expected  - 2\n+ Received  + 2\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3038:31)\n(fail) tool schema wire normalization > Gemini > handles exclusive bounds and unsupported numeric constraints [2.96ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [119.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1654,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1718,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^tool\\sschema\\swire\\snormalization\\sGemini\\shandles\\sexclusive\\sbounds\\sand\\sunsupported\\snumeric\\sconstraints$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) tool schema wire normalization > Gemini > handles exclusive bounds and unsupported numeric constraints [2.95ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 3 expect() calls\nRan 1 test across 1 file. [118.00ms]\n\nmutated command output: ^tool\\sschema\\swire\\snormalization\\sGemini\\shandles\\sexclusive\\sbounds\\sand\\sunsupported\\snumeric\\sconstraints$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n3033 |               'minimum: 0, exclusiveMinimum: 0, maximum: 20, exclusiveMaximum: 10, multipleOf: 2',\n3034 |           })\n3035 |           expect(props.amount.description).toContain('exclusiveMinimum: true')\n3036 |           expect(props.amount.minimum).toBeUndefined()\n3037 |         } else {\n3038 |           expect(props.count).toEqual({\n                                     ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"description\": \"multipleOf: 2\",\n-   \"maximum\": 9,\n-   \"minimum\": 1,\n+   \"maximum\": 10,\n+   \"minimum\": 0,\n    \"type\": \"INTEGER\",\n  }\n\n- Expected  - 2\n+ Received  + 2\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:3038:31)\n(fail) tool schema wire normalization > Gemini > handles exclusive bounds and unsupported numeric constraints [2.96ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [119.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "tool-schema-string-only-enum",
+    "source": {
+      "file": "mutations.toml",
+      "line": 275
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\srestricts\\senums\\sto\\sstrings\\swithout\\schanging\\svalue\\stypes$"
+    ],
+    "green": [],
+    "failures": {
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\srestricts\\senums\\sto\\sstrings\\swithout\\schanging\\svalue\\stypes$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2952 |         expect(props.count).toEqual({\n2953 |           type: 'INTEGER',\n2954 |           description: 'Must be 3.',\n2955 |         })\n2956 |         expect(props.label).toEqual({ type: 'STRING', enum: ['x'] })\n2957 |         expect(props.choices).toEqual({\n                                     ^\nerror: expect(received).toEqual(expected)\n\n  {\n-   \"description\": \"Allowed values: 1, 2.\",\n+   \"enum\": [\n+     1,\n+     2,\n+   ],\n    \"type\": \"INTEGER\",\n  }\n\n- Expected  - 1\n+ Received  + 4\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2957:31)\n(fail) tool schema wire normalization > Gemini > restricts enums to strings without changing value types [2.95ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 5 expect() calls\nRan 1 test across 1 file. [117.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1650,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1662,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^tool\\sschema\\swire\\snormalization\\sGemini\\srestricts\\senums\\sto\\sstrings\\swithout\\schanging\\svalue\\stypes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) tool schema wire normalization > Gemini > restricts enums to strings without changing value types [2.74ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 6 expect() calls\nRan 1 test across 1 file. [119.00ms]\n\nmutated command output: ^tool\\sschema\\swire\\snormalization\\sGemini\\srestricts\\senums\\sto\\sstrings\\swithout\\schanging\\svalue\\stypes$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2952 |         expect(props.count).toEqual({\n2953 |           type: 'INTEGER',\n2954 |           description: 'Must be 3.',\n2955 |         })\n2956 |         expect(props.label).toEqual({ type: 'STRING', enum: ['x'] })\n2957 |         expect(props.choices).toEqual({\n                                     ^\nerror: expect(received).toEqual(expected)\n\n  {\n-   \"description\": \"Allowed values: 1, 2.\",\n+   \"enum\": [\n+     1,\n+     2,\n+   ],\n    \"type\": \"INTEGER\",\n  }\n\n- Expected  - 1\n+ Received  + 4\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2957:31)\n(fail) tool schema wire normalization > Gemini > restricts enums to strings without changing value types [2.95ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 5 expect() calls\nRan 1 test across 1 file. [117.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "tool-schema-unknown-keyword-drop",
+    "source": {
+      "file": "mutations.toml",
+      "line": 287
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\sdrops\\sunknown\\skeywords\\sat\\severy\\sschema\\sdepth$"
+    ],
+    "green": [],
+    "failures": {
+      "^tool\\sschema\\swire\\snormalization\\sGemini\\sdrops\\sunknown\\skeywords\\sat\\severy\\sschema\\sdepth$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2984 |                 },\n2985 |               },\n2986 |             },\n2987 |           },\n2988 |         })\n2989 |         expect(schema.properties.thinking).toEqual({\n                                                  ^\nerror: expect(received).toEqual(expected)\n\n  {\n+   \"examples\": [\n+     {},\n+   ],\n    \"properties\": {\n      \"value\": {\n+       \"$schema\": \"ignored\",\n+       \"additionalProperties\": false,\n        \"items\": {\n+         \"examples\": [\n+           \"x\",\n+         ],\n+         \"readOnly\": true,\n          \"type\": \"STRING\",\n+         \"vendorExtension\": \"bad\",\n        },\n        \"type\": \"ARRAY\",\n      },\n    },\n+   \"readOnly\": true,\n    \"type\": \"OBJECT\",\n+   \"vendorExtension\": \"bad\",\n  }\n\n- Expected  - 0\n+ Received  + 12\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2989:44)\n(fail) tool schema wire normalization > Gemini > drops unknown keywords at every schema depth [3.05ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [123.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1663,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1656,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^tool\\sschema\\swire\\snormalization\\sGemini\\sdrops\\sunknown\\skeywords\\sat\\severy\\sschema\\sdepth$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n(pass) tool schema wire normalization > Gemini > drops unknown keywords at every schema depth [2.58ms]\n\n 1 pass\n 173 filtered out\n 0 fail\n 2 expect() calls\nRan 1 test across 1 file. [117.00ms]\n\nmutated command output: ^tool\\sschema\\swire\\snormalization\\sGemini\\sdrops\\sunknown\\skeywords\\sat\\severy\\sschema\\sdepth$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/request.test.ts:\n2984 |                 },\n2985 |               },\n2986 |             },\n2987 |           },\n2988 |         })\n2989 |         expect(schema.properties.thinking).toEqual({\n                                                  ^\nerror: expect(received).toEqual(expected)\n\n  {\n+   \"examples\": [\n+     {},\n+   ],\n    \"properties\": {\n      \"value\": {\n+       \"$schema\": \"ignored\",\n+       \"additionalProperties\": false,\n        \"items\": {\n+         \"examples\": [\n+           \"x\",\n+         ],\n+         \"readOnly\": true,\n          \"type\": \"STRING\",\n+         \"vendorExtension\": \"bad\",\n        },\n        \"type\": \"ARRAY\",\n      },\n    },\n+   \"readOnly\": true,\n    \"type\": \"OBJECT\",\n+   \"vendorExtension\": \"bad\",\n  }\n\n- Expected  - 0\n+ Received  + 12\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/request.test.ts:2989:44)\n(fail) tool schema wire normalization > Gemini > drops unknown keywords at every schema depth [3.05ms]\n\n 0 pass\n 173 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [123.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "unmigrated-pool-refusal",
+    "source": {
+      "file": "mutations.toml",
+      "line": 146
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^openAccountStore\\sanswers\\smigration-required\\sfor\\san\\sexisting\\spool\\sfile\\swithout\\sa\\sstore,\\snaming\\sthe\\soffline\\scommand$"
+    ],
+    "green": [],
+    "failures": {
+      "^openAccountStore\\sanswers\\smigration-required\\sfor\\san\\sexisting\\spool\\sfile\\swithout\\sa\\sstore,\\snaming\\sthe\\soffline\\scommand$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/storage.test.ts:\n791 |   it('answers migration-required for an existing pool file without a store, naming the offline command', async () => {\n792 |     await saveAccountsReplace({ version: 4, accounts: [], activeIndex: 0 })\n793 |     const before = await readdir(configDir)\n794 |     const { built, options: open } = options()\n795 |     const opening = await openAccountStore(open)\n796 |     expect(opening.status).toBe('migration-required')\n                                 ^\nerror: expect(received).toBe(expected)\n\nExpected: \"migration-required\"\nReceived: \"initialization-required\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/storage.test.ts:796:28)\n(fail) openAccountStore > answers migration-required for an existing pool file without a store, naming the offline command [3.64ms]\n\n 0 pass\n 33 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [106.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1672,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1680,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^openAccountStore\\sanswers\\smigration-required\\sfor\\san\\sexisting\\spool\\sfile\\swithout\\sa\\sstore,\\snaming\\sthe\\soffline\\scommand$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/storage.test.ts:\n(pass) openAccountStore > answers migration-required for an existing pool file without a store, naming the offline command [4.31ms]\n\n 1 pass\n 33 filtered out\n 0 fail\n 4 expect() calls\nRan 1 test across 1 file. [110.00ms]\n\nmutated command output: ^openAccountStore\\sanswers\\smigration-required\\sfor\\san\\sexisting\\spool\\sfile\\swithout\\sa\\sstore,\\snaming\\sthe\\soffline\\scommand$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/storage.test.ts:\n791 |   it('answers migration-required for an existing pool file without a store, naming the offline command', async () => {\n792 |     await saveAccountsReplace({ version: 4, accounts: [], activeIndex: 0 })\n793 |     const before = await readdir(configDir)\n794 |     const { built, options: open } = options()\n795 |     const opening = await openAccountStore(open)\n796 |     expect(opening.status).toBe('migration-required')\n                                 ^\nerror: expect(received).toBe(expected)\n\nExpected: \"migration-required\"\nReceived: \"initialization-required\"\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/storage.test.ts:796:28)\n(fail) openAccountStore > answers migration-required for an existing pool file without a store, naming the offline command [3.64ms]\n\n 0 pass\n 33 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [106.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "v1-unmigrated-loader-refusal",
+    "source": {
+      "file": "mutations.toml",
+      "line": 194
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^createAuthLoader\\skeeps\\san\\sunmigrated\\slocal\\starget\\sunavailable\\swith\\sdefault\\sproducers,\\spreserves\\spassthrough\\sand\\scancellation,\\sand\\sdelegates\\sfresh\\svault\\sauthority$"
+    ],
+    "green": [],
+    "failures": {
+      "^createAuthLoader\\skeeps\\san\\sunmigrated\\slocal\\starget\\sunavailable\\swith\\sdefault\\sproducers,\\spreserves\\spassthrough\\sand\\scancellation,\\sand\\sdelegates\\sfresh\\svault\\sauthority$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/auth-loader.test.ts:\n542 |       try {\n543 |         await client.tui.showToast({\n544 |           body: { message, variant: 'error', duration: 30_000 },\n545 |         })\n546 |       } catch {}\n547 |       throw new Error(message)\n                      ^\nerror: The Antigravity account store cannot be opened\n      at runLoader (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/auth-loader.ts:547:17)\n(fail) createAuthLoader > keeps an unmigrated local target unavailable with default producers, preserves passthrough and cancellation, and delegates fresh vault authority [14.69ms]\n\n 0 pass\n 23 filtered out\n 1 fail\nRan 1 test across 1 file. [135.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1669,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1745,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^createAuthLoader\\skeeps\\san\\sunmigrated\\slocal\\starget\\sunavailable\\swith\\sdefault\\sproducers,\\spreserves\\spassthrough\\sand\\scancellation,\\sand\\sdelegates\\sfresh\\svault\\sauthority$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/auth-loader.test.ts:\n(pass) createAuthLoader > keeps an unmigrated local target unavailable with default producers, preserves passthrough and cancellation, and delegates fresh vault authority [15.58ms]\n\n 1 pass\n 23 filtered out\n 0 fail\n 22 expect() calls\nRan 1 test across 1 file. [140.00ms]\n\nmutated command output: ^createAuthLoader\\skeeps\\san\\sunmigrated\\slocal\\starget\\sunavailable\\swith\\sdefault\\sproducers,\\spreserves\\spassthrough\\sand\\scancellation,\\sand\\sdelegates\\sfresh\\svault\\sauthority$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/auth-loader.test.ts:\n542 |       try {\n543 |         await client.tui.showToast({\n544 |           body: { message, variant: 'error', duration: 30_000 },\n545 |         })\n546 |       } catch {}\n547 |       throw new Error(message)\n                      ^\nerror: The Antigravity account store cannot be opened\n      at runLoader (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/auth-loader.ts:547:17)\n(fail) createAuthLoader > keeps an unmigrated local target unavailable with default producers, preserves passthrough and cancellation, and delegates fresh vault authority [14.69ms]\n\n 0 pass\n 23 filtered out\n 1 fail\nRan 1 test across 1 file. [135.00ms]\n",
+    "reason": null
+  },
+  {
+    "id": "vault-quota-durable-freshness",
+    "source": {
+      "file": "mutations.toml",
+      "line": 262
+    },
+    "outcome": "CAUGHT",
+    "timed_out_phase": null,
+    "red": [
+      "^vault\\spoller\\sfences\\sand\\slifecycle\\sfrequent\\ssidebar\\spublications\\sdo\\snot\\spostpone\\sold\\sdurable\\sreadings$"
+    ],
+    "green": [],
+    "failures": {
+      "^vault\\spoller\\sfences\\sand\\slifecycle\\sfrequent\\ssidebar\\spublications\\sdo\\snot\\spostpone\\sold\\sdurable\\sreadings$": "$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n378 |           { checkedAt: f.now, accounts: [] },\n379 |           { stateFile: f.stateFile },\n380 |         )\n381 |       }\n382 |       await f.poller.tick()\n383 |       expect(f.physical).toBe(4)\n                               ^\nerror: expect(received).toBe(expected)\n\nExpected: 4\nReceived: 0\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:383:26)\n(fail) vault poller fences and lifecycle > frequent sidebar publications do not postpone old durable readings [4.20ms]\n\n 0 pass\n 20 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [112.00ms]\n"
+    },
+    "baseline_failures": {},
+    "collateral": {
+      "count": 0,
+      "targets": []
+    },
+    "breadth_observed": false,
+    "build_ms": 0,
+    "test_ms": 1663,
+    "baseline_build_ms": 0,
+    "baseline_test_ms": 1697,
+    "baseline_red": {},
+    "prebuild_ms": 0,
+    "prebuild_tail": "",
+    "baseline_prebuild_ms": 0,
+    "baseline_prebuild_tail": "",
+    "restore_prebuild_ms": 0,
+    "restore_prebuild_tail": "",
+    "build_tail": "",
+    "test_tail": "\nbaseline output: ^vault\\spoller\\sfences\\sand\\slifecycle\\sfrequent\\ssidebar\\spublications\\sdo\\snot\\spostpone\\sold\\sdurable\\sreadings$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n(pass) vault poller fences and lifecycle > frequent sidebar publications do not postpone old durable readings [6.13ms]\n\n 1 pass\n 20 filtered out\n 0 fail\n 3 expect() calls\nRan 1 test across 1 file. [107.00ms]\n\nmutated command output: ^vault\\spoller\\sfences\\sand\\slifecycle\\sfrequent\\ssidebar\\spublications\\sdo\\snot\\spostpone\\sold\\sdurable\\sreadings$\n$ rm -rf dist && tsc -p tsconfig.build.json && bun scripts/copy-common-auth-embedded.mjs\nCopied 131 embedded common-auth files\nbun test v1.4.2 (744846f84)\n\npackages/opencode/src/plugin/background-vault-quota-refresh.test.ts:\n378 |           { checkedAt: f.now, accounts: [] },\n379 |           { stateFile: f.stateFile },\n380 |         )\n381 |       }\n382 |       await f.poller.tick()\n383 |       expect(f.physical).toBe(4)\n                               ^\nerror: expect(received).toBe(expected)\n\nExpected: 4\nReceived: 0\n\n      at <anonymous> (/Users/ufukaltinok/.local/share/cortexkit/alfonso/worktrees/05295e001750d9e5/bg_e031541205e823f0/packages/opencode/src/plugin/background-vault-quota-refresh.test.ts:383:26)\n(fail) vault poller fences and lifecycle > frequent sidebar publications do not postpone old durable readings [4.20ms]\n\n 0 pass\n 20 filtered out\n 1 fail\n 1 expect() calls\nRan 1 test across 1 file. [112.00ms]\n",
+    "reason": null
+  }
+]

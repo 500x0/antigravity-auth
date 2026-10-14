@@ -248,10 +248,11 @@ export function expectedCandidateGraph(
       Object.hasOwn(peers, '@opencode/plugin')
     )
       throw new Error('Unexpected historical product graph row')
-    // Both consumers install the same fresh core tarball. Expect the source
-    // product's version, core pin, Windows private-files runtime dependency and
-    // optional OpenCode 2 peer. The fresh core supplies private-files to both
-    // consumers, so every installed package and other declaration stays fixed.
+    // Compare the historical OpenCode plugin install with the newly packed plugin.
+    // Both installs use the newly packed core, which supplies private-files and
+    // the vault client's store dependency to the historical baseline too. Only
+    // the plugin's version, core dependency pin, private-files dependency and
+    // optional OpenCode 2 peer may differ; all installed package rows stay fixed.
     return [
       row[0],
       row[1],
