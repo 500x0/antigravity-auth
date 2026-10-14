@@ -17,8 +17,8 @@ export const producerVersion = '0.16.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: 'e7513fdc5fed846cbef09e432eb0ce76443dbc2793a8189954f1d3a1271bd34e',
-  sri: 'sha512-gUWZj4rxOk5Kxt884lFPikCPmCr13iA9p9b0Uwjxn6RCG689J1Y9NzZJfqhlcxFRIFwGUWa2kcyluDVQZ9WCbg==',
+  sha256: '0093e55bc1dbc6a0fc7872214038fa5bff0ec8c41c92f26eda3b3ffb07c531c2',
+  sri: 'sha512-x24AwgDQqWVGaKwgtxc1uG01wmiEKBaw1LT0ig+GBQpfImt4g3k0GvFIMcL2sI/q4byf4YZXusg7SPQUsnKtVw==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -713,8 +713,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/command.js',
-    9015,
-    '536f3b289bb4f9f9ca775d83ecb10e1cd66f3acd3a716294eccab8f784c797da',
+    9253,
+    '53dec60b59e8edbcd3a68d476b79edadce4a04b7a4cc22077bc2783e44bde64f',
   ],
   [
     'setup/config-write.js',

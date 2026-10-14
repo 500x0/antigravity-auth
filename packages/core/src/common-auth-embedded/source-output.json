@@ -38,14 +38,14 @@
     }
   },
   "input": "tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz",
-  "tarballSha256": "e7513fdc5fed846cbef09e432eb0ce76443dbc2793a8189954f1d3a1271bd34e",
-  "sri": "sha512-gUWZj4rxOk5Kxt884lFPikCPmCr13iA9p9b0Uwjxn6RCG689J1Y9NzZJfqhlcxFRIFwGUWa2kcyluDVQZ9WCbg==",
+  "tarballSha256": "0093e55bc1dbc6a0fc7872214038fa5bff0ec8c41c92f26eda3b3ffb07c531c2",
+  "sri": "sha512-x24AwgDQqWVGaKwgtxc1uG01wmiEKBaw1LT0ig+GBQpfImt4g3k0GvFIMcL2sI/q4byf4YZXusg7SPQUsnKtVw==",
   "canonicalFiles": 133,
   "canonicalBytes": 747481,
   "generator": {
     "path": "packages/opencode/scripts/embed-common-auth.ts",
     "version": 3,
-    "sha256": "9aeadcfe3ebd2621e9b82f6340e3282880cd227b7a1cd83faea9d313ac3377cd"
+    "sha256": "ea3b07287e2f0baf0a8b2b68ee6bb90638896a5376bb0d7a9414e0f3e9b26d23"
   },
   "files": [
     {
