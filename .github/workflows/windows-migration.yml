@@ -1,4 +1,4 @@
-name: Windows offline account migration
+name: Windows account migration and vault
 on:
   workflow_call:
     inputs:
@@ -14,6 +14,59 @@ on:
 permissions:
   contents: read
 jobs:
+  vault:
+    name: Vault enrollment and served request (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install frozen dependencies and build the product
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun install --cwd tools/common-auth-build --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run --cwd packages/core build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run --cwd packages/opencode build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run --cwd packages/opencode esbuild ../../test/windows-vault/product-entry.mjs --bundle --platform=node --format=esm --external:@cortexkit/antigravity-auth-core --outfile=dist/windows-vault-product.mjs
+          exit $LASTEXITCODE
+      - name: Enroll, check the token DACL, and serve one vault request
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:USERPROFILE "agy-vault-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $evidence = Join-Path $env:RUNNER_TEMP 'agy-vault-evidence'
+          "AGY_VAULT_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AGY_VAULT_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node --experimental-import-meta-resolve test/windows-vault/verify.mjs $root $evidence
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-vault-${{ matrix.os }}
+          path: ${{ env.AGY_VAULT_EVIDENCE }}
+          if-no-files-found: error
+      - name: Remove the synthetic vault profile
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:AGY_VAULT_ROOT -and (Test-Path $env:AGY_VAULT_ROOT)) {
+            Remove-Item -Recurse -Force $env:AGY_VAULT_ROOT
+          }
   migration:
     strategy:
       fail-fast: false
