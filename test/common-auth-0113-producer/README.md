@@ -1,22 +1,22 @@
-# Unpublished common-auth 0.15.0 candidate producer
+# Published common-auth 0.15.0 producer
 
 The preparation was retargeted in place; directory names retain the original
 source fence. Earlier receipts and failed setup records remain historical.
 
-These acceptance sources cover the byte-verified unpublished 0.15.0 candidate.
+These acceptance sources cover the byte-verified published 0.15.0 archive.
 They do not authorize vault access, enrollment or network acquisition. Historical
 source-only and failed startup records remain in research; current executable
 results are recorded separately rather than relabeling those records as passes.
 
-`publication.json` freezes the candidate's public roots and 158
-payload identities (853,069 bytes). `closure.json` records every static import,
+`publication.json` freezes the release's public roots and 158
+payload identities (859,103 bytes). `closure.json` records every static import,
 re-export and literal dynamic import of those payloads, including type imports. Omitted
 files in its `imports` object have no such edges. Relative references from
 declarations resolve to `.d.ts`, not to runtime `.js` counterparts. Routing and
 quota runtime/declaration roots are selected for shared request/manager adapters.
 Public commands and auth-menu are selected for server/Pi single-menu composition.
 The Pi credential-slot helper is selected for server-side composition only.
-Its five reachable files remain selected. The 0.15.0 candidate additionally reaches
+Its five reachable files remain selected. The 0.15.0 release additionally reaches
 `fs/private-files.js` and its declarations. Its backend dynamically imports
 `@cortexkit/private-files` only when Windows private operations are requested;
 the package stays external in renderer and server/CLI output. The internal

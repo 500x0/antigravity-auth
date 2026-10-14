@@ -1,23 +1,26 @@
-# common-auth 0.15.0 safe-parent candidate verification
+# common-auth 0.15.0 published archive and candidate verification
 
-## Current fifth candidate
+## Current published 0.15.0
 
-The reviewer supplied the replacement built from [common-auth commit `f936c532`](https://github.com/cortexkit/common-auth/commit/f936c532). The archive SHA-256 and the uncompressed tar SHA-256 were both remeasured before the archive was used.
+The embedded input is the published registry archive built from [common-auth commit `f936c532`](https://github.com/cortexkit/common-auth/commit/f936c532). Its size, SHA-256, SHA-1, SRI and uncompressed tar SHA-256 were remeasured before use; the registry metadata confirms the gitHead. The uncompressed tar bytes are identical to the fifth candidate previously embedded at Antigravity commit `2b37bdd4` and tested in the historical section below, so only the gzip wrapper and archive-level provenance change.
 
-- Archive: `tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz`, 260,448 bytes
-- Archive SHA-256: `38c2873c8ed904ed77abc20dacf108136b8fe9d91099270ae84d895f94163e77`
+- Archive: `tools/common-auth-build/inputs/cortexkit-common-auth-0.15.0.tgz`, 260,445 bytes
+- Archive SHA-256: `a23db89b43bedba8d371cd9d45e5f35306040cda3f425efb49fbce5610aa9c6b`
+- npm SHA-1: `fe2c79d5c82f652ab1ec420700c6f4ca1e760e39`
 - Uncompressed tar SHA-256: `a4f5593843e0ed22c325477fe37eae47329de09119f022d6d83e907dc66cd372`
-- SRI: `sha512-5kmX26fdYnep/kvRvGr6t1irL0r5DySOonG9AoE7DIZEHD5ZmlUwEvL6VUgPb409ZSQBH9GUPk4kO3nCTkko/A==`
+- SRI: `sha512-1EQVggxbrijCtfdyv4z60eSl0dmZRGO6i1q2m8w20VxwdowWkUV0Y/7kErhp1/2ZNvmDZK65RICMiTcokidxiw==`
 - OpenCode embedded publication files: 158 files, 859,103 bytes
 - Core embedded publication files: 131 files, 730,840 bytes
 - Full admitted publication: 191 members, 971,546 payload bytes
-- Private compiler lock SHA-256: `cf4052bf75b65b75ed7921456b9e39cfb9d8f8828191655a6e881a847ebde036`
+- Private compiler lock SHA-256: `7d2386e841f05b2a46be255bdbd49ceab90bf955b5119561206b2af0006a7cef`
 
 The compiler lock was refreshed offline with lifecycle scripts disabled. Bun retained the previous archive checksum when only the bytes at the same local dependency path were replaced. Temporarily changing that dependency path forced Bun to read the new archive and record its checksum; the canonical path was then restored. Only the archive integrity entry changed in the compiler lock; unrelated compiler resolutions and the exact private-files `0.2.1` runtime pins remain intact. Both embedded trees and provenance were regenerated only by `bun packages/opencode/scripts/embed-common-auth.ts` and `bun packages/core/scripts/embed-common-auth.ts`.
 
-The fifth candidate restores common-auth 0.14.2's POSIX filesystem behavior: it does not ask private-files to validate the containing directory's ancestors. Windows private-file behavior remains the candidate owner's unchanged implementation, pending Windows CI. The isolated runtime-dependency staging remains because private-files is still a declared dependency and the fixtures should mirror a real install. No renderer proof, behavioral assertion, fixture requirement or mutation row was weakened.
+The only changed files under the two embedded trees are `packages/core/src/common-auth-embedded/source-output.json` and `packages/opencode/src/common-auth-embedded/source-output.json`. Comparing every tracked file against `2b37bdd4` confirms that all 131 core payload files, all 158 OpenCode payload files and both license notices remain byte-identical. The provenance changes are the released status, archive SHA-256, SRI and generator SHA-256; the generator hash changes because its archive pins changed.
 
-### Fifth-candidate Linux gates
+The published payload retains the fifth candidate's restoration of common-auth 0.14.2's POSIX filesystem behavior: it does not ask private-files to validate the containing directory's ancestors. Windows private-file behavior remains the producer's unchanged implementation, pending Windows CI. The isolated runtime-dependency staging remains because private-files is still a declared dependency and the fixtures should mirror a real install. Compared with `2b37bdd4`, behavioral assertions, fixture requirements, dynamic-import checks for renderer output and the deliberate-break catalogue in `mutations.toml` are unchanged; only the archive identity and release-status expectations were updated. The gate results below remain historical candidate results, not a claim that the published-byte gates have passed.
+
+### Historical fifth-candidate Linux gates
 
 Tools: Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, Biome 2.5.3, ckdev-mutate 0.12.0. Every requested gate ran on Linux, with core built first. Fresh `bun install --frozen-lockfile --ignore-scripts --force` runs at the repository root and in `tools/common-auth-build` replaced dependencies preinstalled for older archives before testing this one. Runner dependency preparation and pack/install smoke used network; the committed lock refresh itself was offline.
 

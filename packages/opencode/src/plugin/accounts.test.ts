@@ -3142,13 +3142,13 @@ describe('loadAccountManagerFromRepository', () => {
 // in the core package, loaded with `loadCommonAuthStoreModules`, in a private
 // config directory. Before loading them, the tests compare each module file's
 // size and SHA-256 with the release record in `source-output.json` for the
-// unpublished common-auth 0.15.0 candidate archive. A mismatch fails the tests.
+// published common-auth 0.15.0 archive. A mismatch fails the tests.
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.15.0',
   tarballSha256:
-    '38c2873c8ed904ed77abc20dacf108136b8fe9d91099270ae84d895f94163e77',
+    'a23db89b43bedba8d371cd9d45e5f35306040cda3f425efb49fbce5610aa9c6b',
 } as const
 
 async function embeddedFilesBelow(
@@ -3169,7 +3169,7 @@ let genuine: Promise<CommonAuthStoreModules> | undefined
 /**
  * Loads the embedded store and fs modules only after each file's size and
  * SHA-256 match the expected values in `source-output.json`, the release
- * record for the unpublished common-auth 0.15.0 candidate archive.
+ * record for the published common-auth 0.15.0 archive.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -3193,12 +3193,12 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'candidate' ||
+      receipt.artifactStatus !== 'released' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
       throw new Error(
-        `source-output.json does not record the unpublished candidate common-auth ${RELEASED_COMMON_AUTH.version} archive`,
+        `source-output.json does not record the published common-auth ${RELEASED_COMMON_AUTH.version} archive`,
       )
     }
     const recorded = receipt.files.filter((file) =>

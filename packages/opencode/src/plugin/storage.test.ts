@@ -821,7 +821,7 @@ describe('openAccountStore', () => {
 // migration during rollback. The entries are the released
 // common-auth copy embedded in the core package, loaded through its typed
 // `loadCommonAuthStoreModules`. Before loading, the embedding receipt
-// (`source-output.json`) must name the unpublished common-auth 0.15.0 candidate archive, and every
+// (`source-output.json`) must name the published common-auth 0.15.0 archive, and every
 // store and fs file must match the size and SHA-256 it records, with no
 // unrecorded file; anything else fails these tests instead of skipping them.
 // ---------------------------------------------------------------------------
@@ -830,7 +830,7 @@ const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.15.0',
   tarballSha256:
-    '38c2873c8ed904ed77abc20dacf108136b8fe9d91099270ae84d895f94163e77',
+    'a23db89b43bedba8d371cd9d45e5f35306040cda3f425efb49fbce5610aa9c6b',
 } as const
 
 async function embeddedFilesBelow(
@@ -871,7 +871,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'candidate' ||
+      receipt.artifactStatus !== 'released' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {

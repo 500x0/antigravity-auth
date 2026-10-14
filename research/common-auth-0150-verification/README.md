@@ -1,8 +1,9 @@
-# Unpublished common-auth 0.15.0 candidate verification
+# Historical common-auth 0.15.0 candidate verification
 
-This branch verifies the supplied candidate; it does not publish or adopt registry
-bytes. Any later adoption must independently compare the published artifact with
-this candidate.
+This record describes an earlier supplied candidate, not the currently embedded
+archive. The embedded input is now the published 0.15.0; its identity and comparison
+with the final candidate are recorded in
+[`common-auth-0150-r3-verification`](../common-auth-0150-r3-verification/README.md).
 
 ## Artifact identity
 
