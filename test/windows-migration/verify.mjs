@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, open, readdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   assertPublishedAccountStoreGeneration,
@@ -16,6 +16,15 @@ assert.equal(process.platform, 'win32')
 const root = resolve(process.argv[2])
 const consumer = resolve(process.argv[3])
 const candidate = resolve(process.argv[4])
+const scenario = process.argv[5]
+assert.ok(['safe', 'unsafe'].includes(scenario))
+const expectedParent = resolve(
+  scenario === 'safe' ? process.env.USERPROFILE : process.env.RUNNER_TEMP,
+)
+const rootRelative = relative(expectedParent, root)
+assert.ok(
+  rootRelative && !rootRelative.startsWith('..') && !isAbsolute(rootRelative),
+)
 await mkdir(root, { recursive: true })
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const syncTest = join(root, 'sync-test.txt')
@@ -138,7 +147,7 @@ async function files(directory) {
       found.push({ path, sha256: digest(await readFile(path)) })
     else throw new Error('Unexpected non-regular migration artifact')
   }
-  return found
+  return found.sort((a, b) => a.path.localeCompare(b.path))
 }
 const baselineCli = join(
   consumer,
@@ -165,6 +174,45 @@ assert.equal(oldBackup.sha256, digest(original))
 await writeFile(join(root, 'leftover.json'), JSON.stringify(before, null, 2))
 
 const fixed = await migrate('fixed-candidate', candidate)
+if (scenario === 'unsafe') {
+  assert.equal(fixed.status, 1)
+  const refusal = fixed.stderr.match(
+    /^Private file refused at safe-parent: ([^\r\n]+) \(writable-by-others\)\. ([^\r\n]+)\r?\n$/,
+  )
+  assert.ok(refusal, fixed.stderr)
+  assert.equal(
+    refusal[2],
+    'Use a safe parent directory. Repair only a named secret file in safe ancestry whose owner the published policy trusts, without changing its owner or any existing directory. Previously exposed credentials may need rotation. Windows requires the private-files native prebuild and an ACL-persisting local filesystem such as NTFS.',
+  )
+  assert.equal(digest(await readFile(legacy)), digest(original))
+  assert.equal(existsSync(`${legacy}.store.pointer.json`), false)
+  const after = await files(profile)
+  assert.deepEqual(after, before)
+  assert.equal(digest(await readFile(oldBackup.path)), oldBackup.sha256)
+  await writeFile(
+    join(root, 'result.json'),
+    JSON.stringify(
+      {
+        node: process.version,
+        scenario,
+        baselineSource: 'f39bc1ba7201d5ac52d69b3f970d9905829d55f9',
+        candidateCliHash: digest(await readFile(candidate)),
+        refusal: 'writable-by-others',
+        legacyPoolUnchanged: true,
+        noPointer: true,
+        accountFilesUnchanged: true,
+        oldBackupPreserved: true,
+        before,
+        after,
+        attempts,
+      },
+      null,
+      2,
+    ),
+  )
+  console.log('WINDOWS_MIGRATION_UNSAFE_PARENT_REFUSAL_OK')
+  process.exit(0)
+}
 assert.equal(fixed.status, 0)
 assert.match(
   fixed.stdout,
@@ -235,6 +283,7 @@ await writeFile(
   JSON.stringify(
     {
       node: process.version,
+      scenario,
       baselineSource: 'f39bc1ba7201d5ac52d69b3f970d9905829d55f9',
       candidateCoreHash: digest(
         await readFile(resolve('packages/core/dist/account-migration.js')),

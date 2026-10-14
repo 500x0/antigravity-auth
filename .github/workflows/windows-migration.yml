@@ -55,34 +55,44 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node -e "const fs=require('fs'); for(const file of ['registry-opencode.json','registry-core.json']) {const data=JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,'')); if(data.version!=='3.0.0'||data.gitHead!=='f39bc1ba7201d5ac52d69b3f970d9905829d55f9')throw Error('Released baseline identity mismatch');}"
           exit $LASTEXITCODE
-      - name: Verify migration over the exact released failure leftovers
+      - name: Verify safe migration and unsafe refusal over the released leftovers
         shell: pwsh
         run: |
-          node test/windows-migration/verify.mjs "$env:RUNNER_TEMP/agy-migration-evidence" "$env:RUNNER_TEMP/agy-migration-baseline" packages/opencode/dist/windows-migration-cli.mjs
-          exit $LASTEXITCODE
-      # Diagnostic for this verification branch: record who may write to the test
-      # profile's directories, and to a real profile config directory, so the
-      # private-parent rule can be checked against the runner's actual ACLs.
-      - name: Record directory ACLs
-        if: always()
-        shell: pwsh
-        run: |
-          $paths = @(
-            $env:RUNNER_TEMP,
-            (Join-Path $env:RUNNER_TEMP 'agy-migration-evidence'),
-            (Join-Path $env:RUNNER_TEMP 'agy-migration-evidence/profile/config/opencode'),
-            $env:USERPROFILE,
-            (Join-Path $env:USERPROFILE '.config')
-          )
-          foreach ($path in $paths) {
-            Write-Output "== $path"
-            if (Test-Path $path) { icacls $path } else { Write-Output 'absent' }
-          }
+          $safe = Join-Path $env:USERPROFILE 'agy-migration-evidence-safe'
+          $unsafe = Join-Path $env:RUNNER_TEMP 'agy-migration-evidence-unsafe'
+          "AGY_SAFE_ROOT=$safe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AGY_UNSAFE_ROOT=$unsafe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node test/windows-migration/verify.mjs $safe "$env:RUNNER_TEMP/agy-migration-baseline" packages/opencode/dist/windows-migration-cli.mjs safe
+          $safeExit = $LASTEXITCODE
+          node test/windows-migration/verify.mjs $unsafe "$env:RUNNER_TEMP/agy-migration-baseline" packages/opencode/dist/windows-migration-cli.mjs unsafe
+          $unsafeExit = $LASTEXITCODE
+          if ($safeExit -ne 0) { exit $safeExit }
+          exit $unsafeExit
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-migration-${{ matrix.os }}
-          path: |
-            ${{ runner.temp }}/agy-migration-evidence
-            ${{ runner.temp }}/agy-migration-baseline/registry-*.json
+          name: windows-migration-safe-${{ matrix.os }}
+          path: ${{ env.AGY_SAFE_ROOT }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-migration-unsafe-${{ matrix.os }}
+          path: ${{ env.AGY_UNSAFE_ROOT }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-migration-baseline-${{ matrix.os }}
+          path: ${{ runner.temp }}/agy-migration-baseline/registry-*.json
+          if-no-files-found: error
+      - name: Clean up both synthetic profiles after artifact upload
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($root in @($env:AGY_SAFE_ROOT, $env:AGY_UNSAFE_ROOT)) {
+            if ($root) {
+              $profile = Join-Path $root 'profile'
+              if (Test-Path $profile) { Remove-Item -Recurse -Force $profile }
+            }
+          }

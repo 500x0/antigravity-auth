@@ -24,6 +24,71 @@ The separate fixture commit stages the installed `@cortexkit/private-files` runt
 
 Non-vacuity control: after staging the live fixture changes in the index and confirming an empty working-tree diff, `stagePrivateFilesDependency` was temporarily replaced with a no-op marked `NON-VACUITY BREAK`. The working diff showed one file, three insertions and 16 deletions. Only `stages the real private-files backend for isolated public consumers on every platform` failed (`ERR_MODULE_NOT_FOUND: Cannot find package '@cortexkit/private-files'`); `admits the complete genuine publication and records every member payload` passed. Two tests ran, one pass and one failure. Restoring the file from the index and touching it returned the working-tree diff to empty; the restored 11-test suite passed.
 
+## Final fourth-candidate Linux verification
+
+All requested commands were run on the Linux runner, with core built first. Tools were Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, Biome 2.5.3 and ckdev-mutate 0.12.0. Fresh locked root/compiler installs with scripts disabled prevented stale runner installations from being mistaken for the current archive. The source and lock updates themselves were made offline in this worktree; network was needed for runner dependency preparation and pack/install smoke consumers.
+
+| Gate | Result |
+| --- | --- |
+| `bun run --cwd packages/core build` | Passed; 131 embedded files copied |
+| `bun run typecheck` | Passed; workspace/script checks plus 78 embedded strict declaration roots |
+| `bun run build` | Passed; core, OpenCode and Pi; both raw/runtime TUI roots |
+| `bun run test` | **Failed**: 3,097 passed, 273 failed; 3,370 tests across 173 files, 15,549 assertions |
+| `bun run test:e2e` | Passed: 79 tests, 529 assertions |
+| `bun run --cwd packages/opencode smoke:tui` with network | Passed: four fresh packs, eight product and four baseline consumers; Linux packed backend resolution checks included |
+| `bun run format:check` | Passed: 452 files |
+| `bun run lint` | Passed: 452 files |
+| `ckdev-mutate check` | Passed: catalogue anchors and exact test names verified |
+| `ckdev-mutate run --all` | **Failed**: 22 controls caught; the cursor control could not reach mutation because its unmutated baseline failed |
+| `node --check test/windows-migration/verify.mjs` | Passed: one script parsed |
+| `node --check test/windows-migration/sync-hook.mjs` | Passed: one script parsed |
+| Workflow YAML | Parsed with locked YAML 2.9.0; layout checks passed |
+
+The full unit failures are grouped conservatively; passing build/pack gates do not turn this into a green unit suite:
+
+- **262 failures explicitly report the runner's unsafe `node_modules` ancestry.** They now resolve private-files, then refuse `safe-parent` with `reason: "wrong-owner"`, `code: "ERR_PRIVATE_FILES_SECURITY"`. The job runs as uid 999/gid 986; the runner mounts `node_modules` and `packages/core/node_modules` as uid/gid 1000 with mode 0775. This is a real policy refusal, not a missing fixture dependency. Ownership/permissions were not changed to bypass it.
+- **Two Docker-dependent failures:** `embed.clean_input` and `build.repo_hygiene`; Docker is absent on the runner.
+- **One offline-cache failure:** `build.private_toolchain`; the owned unit-test command resets HOME and drops caller cache overrides, leaving that fixture's required offline cache empty.
+- **One RPC child timeout:** `S-RPC complete contracts on the current unit-test runtime`, `spawnSync .../bun ETIMEDOUT` at the existing 45-second limit. The fourth candidate no longer has the third candidate's static-import loader failure. The timeout's deeper cause is not established by this run.
+- **Seven indirect assertion failures, not conclusively attributed:** concurrent fresh migration had zero completed results; unfinished-generation binding returned `initialization-required` rather than `pending`; the real Pi registry returned no native credential; four Pi selected-credential boundary tests observed zero admissions rather than one. Their names and expected values were preserved. An owner-matched runner rerun is needed before assigning these indirect effects to candidate behavior.
+
+All eight graph tests passed in the full run, including the unchanged renderer/server dynamic-import requirements. No gate was skipped or assertion relaxed. The 273 remaining unit failures and the mutation baseline error are limitations of this delivery's verification, not claimed successes.
+
+### Unmutated independent-cursor baseline trace
+
+The exact command from the unchanged mutation row was rerun without applying any mutation:
+
+```sh
+bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate test/common-auth-010-store/migration-crash.test.ts -t '^genuine\spublic-store\soffline\smigration\simports\sfull\srows,\scredential\sstamps,\sfield\spresence,\sorder\sand\sindependent\scursors\sthen\sverifies\sactive\sno-op$'
+```
+
+It still fails with the fourth candidate **before the cursor assertion**:
+
+```text
+PrivateFileError: Private file refused at safe-parent: <worktree>/node_modules (wrong-owner).
+reason: "wrong-owner"
+code: "ERR_PRIVATE_FILES_SECURITY"
+public-consumer/node_modules/@cortexkit/common-auth/dist/fs/private-files.js:78:19
+  -> verifySafeDirectory -> ensurePrivateDirectory
+  -> refresh-file-lock.js:179:15 (tryAcquire)
+  -> refresh-file-lock.js:536:26 (acquireRefreshFileLock)
+  -> with-lock.js:24:28
+  -> packages/core/src/account-migration.ts:2558:20
+  -> test/common-auth-010-store/migration-crash.test.ts:736:65
+(fail) genuine public-store offline migration > imports full rows, credential stamps, field presence, order and independent cursors then verifies active no-op
+0 pass, 94 filtered out, 1 fail; Ran 1 test across 1 file.
+```
+
+The initial third-candidate failure was missing dependency staging. After our fixture repair, both the third and fourth candidates reach the real backend and encounter the runner ownership refusal. The mutation baseline is therefore blocked by runner ancestry, not an observed independent-cursor regression. Neither the test nor its mutation catalogue row was changed.
+
+## Windows layout and pending CI
+
+Both `windows-latest` and `windows-2022` run the same two scenarios. The positive profile is in a dedicated `agy-migration-evidence-safe/profile` beneath the real `%USERPROFILE%`. The negative profile is in `agy-migration-evidence-unsafe/profile` beneath `RUNNER_TEMP`. Each scenario must first reproduce the released 3.0.0 CLI's EPERM/fsync leftover, with original pool and abandoned backup bytes intact.
+
+The positive case retains active-generation receipt checks, full account-field equivalence, backup preservation and same-pointer replay. The negative case requires exit 1, the exact `safe-parent` / `writable-by-others` refusal and complete advisory text from the candidate's CLI error handler, unchanged legacy bytes, no pointer, and an identical before/after inventory of every profile file's hash. That text is pinned from the candidate implementation; Windows execution has not yet confirmed it. Separate safe/unsafe artifacts prevent same-named evidence files from colliding, and both synthetic profiles are cleaned after upload even when a case fails. The ACL diagnostic step was removed; the `verify/**` push trigger remains.
+
+Windows CI is pending the parent's push. No Windows migration, refusal, ACL or replay pass is claimed.
+
 ## Historical third-candidate identity
 
 The input is the candidate built from [common-auth commit `dbd4a3ff`](https://github.com/cortexkit/common-auth/commit/dbd4a3ff), not a published-release claim.
