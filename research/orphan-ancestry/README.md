@@ -199,3 +199,27 @@ assumption: direct `bun test` has raw argv0 `bun`, whereas the wrapper launches
 with its absolute executable path. The assertion now uses `process.argv0` and
 also requires `test` in the command line. Repeating the mutant then produced
 exactly the single intended failure above. No mutant remains in the tree.
+
+Passing-test inventory for the two final controls:
+
+- `phase clock reports a synchronous child wait from an independent wrapper`
+  passed with diagnostics omitted, and failed only with premature waiter kill.
+- `includes unmatched candidate proc diagnostics when refusing ancestry through init`
+  passed with premature waiter kill, and failed only with diagnostics omitted.
+
+Every test below passed under **both** controls:
+
+- `phase clock reports the exact overdue await once and stays silent before its deadline`
+- `phase clock never reports successful tests, even when their command later fails`
+- `phase clock preserves the innermost failed await and the original rejection`
+- `phase clock reports a killed command before the test deadline without inventing an exit`
+- `phase clock diagnostics do not mask a build error when the journal cannot be written`
+- `copied build scripts join the installed phase clock without importing its helper`
+- `admits a separately grouped child only through fresh parent/birth ancestry`
+- `refuses an unseen same-session orphan rather than retrospectively adopting it`
+- `refuses a parent born after the candidate child`
+- `refuses a reused captured ancestor before admitting its candidate child`
+- `retains captured descendants after parent and leader exit`
+- `rechecks ancestry birth identities before recording a new descendant`
+- `refuses changed recorded PGID or SID before dispatching a signal`
+- `requires capture before signaling and treats an owned ESRCH as benign`
