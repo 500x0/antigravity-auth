@@ -26,6 +26,10 @@ export async function withLock(target, options, fn) {
             name: options.name,
             ttlMs: options.ttlMs,
             renew: options.renew ?? false,
+            ...(options.onStep ? { onStep: options.onStep } : {}),
+            ...(options.onRenewalTimer
+                ? { onRenewalTimer: options.onRenewalTimer }
+                : {}),
         });
         if (lock) {
             try {

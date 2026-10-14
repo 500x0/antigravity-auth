@@ -30,6 +30,10 @@ export interface LockEnvironment {
         name: string;
         path: string;
     }, step: LockStep) => void | Promise<void>;
+    onRenewalTimer?: (lock: {
+        name: string;
+        path: string;
+    }, event: 'scheduled' | 'cancelled') => void;
 }
 export interface HeldLock {
     readonly name: string;

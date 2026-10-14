@@ -1,14 +1,14 @@
 {
   "version": "0.15.0",
   "artifactStatus": "candidate",
-  "archiveBytes": 258947,
-  "sha256": "c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2",
-  "sri": "sha512-1zm7pO6iI7CdDc2FgAB2v6nFd8km3qWJxcCf76+Ib7rrRdl/fGeVI914MKzRi5K1+GasOQZ3MOLQ8b09N8KvOw==",
-  "manifestSha256": "1cd2f62ba0ac0465246ee6c2669cbf1294531bc555f80aac980b40184d704b33",
+  "archiveBytes": 258873,
+  "sha256": "a3305f894bae4fd2ced7aca744be18ceb8d58b5676d9b02f39c4f17ca01bc10c",
+  "sri": "sha512-fP/xsHnuJLPIPBOxMGnF5zXRC3vHZdSWSaF9P+OAvfJGv1AzIet11vz/haqNMjJ4Vr3yh72DggRXmFTOwGMHbg==",
+  "manifestSha256": "05536366c3c1501de6901c09a1238a9a7ce7a20081e4407e21bc827f39028b7a",
   "inventorySha256": "48a2d5fcf470626fc3855bc255f925c5bf2eb5062f1a594023eccef07391a9cf",
   "licenseSha256": "bf737fd6a5d9da55873eb7ea481fd9e875bcfefc13ed42766a1964c6040c5581",
   "canonicalFiles": 158,
-  "canonicalBytes": 853069,
+  "canonicalBytes": 853846,
   "publicRoots": {
     "./rpc": {
       "types": "./dist/rpc/index.d.ts",
@@ -186,13 +186,13 @@
     ],
     [
       "claustrum/enrollment.d.ts",
-      7453,
-      "855f7cd2a52665c4a699bd9b8a06e50a807a21012e7ef031146aaeb0599d71e4"
+      7368,
+      "4b1587559e7174b4867d1f6a37ef62d99119330c9bb59bb1d655bdaad56c1994"
     ],
     [
       "claustrum/enrollment.js",
-      32869,
-      "32bb053d5a67af166075e1933aee262952075734eba8c4833d32166669a8af59"
+      29308,
+      "ab45f3e85fda94f522588a850fc3da173346bfd10cb12250ace0e8e256ff1ce8"
     ],
     [
       "claustrum/errors.d.ts",
@@ -311,8 +311,8 @@
     ],
     [
       "fs/atomic-write.js",
-      3450,
-      "80779a8078e673ef68deaa7fdee3a0e1322078521a1f4156c0a595814c374044"
+      3463,
+      "1b9a3dfe3a2c6cb28fc7c8d3b5e6018b57728c2468b96c74a4b7eb1b956321e7"
     ],
     [
       "fs/index.d.ts",
@@ -336,33 +336,33 @@
     ],
     [
       "fs/private-files.d.ts",
-      2847,
-      "9804ac8cda8879e837c73cf352471158135fd84220e40d83ffecbaede9e15542"
+      3050,
+      "428e886e14ca2cf3acc524a1fb65643c0d943785f835a232d558dfbcdc84f09c"
     ],
     [
       "fs/private-files.js",
-      10922,
-      "7ba58b4c929bb400cd950f9fec7f231c15c6af1fa8c2816477f61f4605a237d4"
+      11633,
+      "5315258d2a5ce8d44f6d2a9e07ce8f5dc1deaea1e5f1fdc2d1b59aae3d321c33"
     ],
     [
       "fs/refresh-file-lock.d.ts",
-      1701,
-      "55473d70c407f4521eb285c2f44b1398391fc56326914c0e51bf7fbea2518781"
+      1765,
+      "72996a1247d498a34ac157d23c34ef03bcbdb68c79e8751be4874885aed7e843"
     ],
     [
       "fs/refresh-file-lock.js",
-      25716,
-      "0aa9b7f4a2fbc7ed432c45a3b6690fada35f4730fd945271601f117f7ebaf12f"
+      28882,
+      "83990c8bc7f814013beaa4af8e8b4ad91e92f37f40cc2e86eb417f1842835e4a"
     ],
     [
       "fs/with-lock.d.ts",
-      934,
-      "a505c744baef71ad72a62c806db60ab052f97687a7e28d11e69411f969848a37"
+      1153,
+      "a0509ca4ee64b392b69c7a8555c7b33c0c223a8e58aec48848c3216350f1ba0c"
     ],
     [
       "fs/with-lock.js",
-      1507,
-      "284251aa245860f2ca64cfbdae0bfbbceed77f33950650cf5eafa1a6ed896387"
+      1697,
+      "35b4ed6dec77ffcb7850e655a35957da15c14a0fa27b6f3d1d634e243de43456"
     ],
     [
       "logger/capture-sink.d.ts",
@@ -381,8 +381,8 @@
     ],
     [
       "logger/engine.js",
-      12564,
-      "4223831f44a641f6171eafa45bc052ce1591a05f220f615e8072e1340782ef8a"
+      12811,
+      "0a4e0046fbf2e19a0a9086632ebd7ca4614835b29a615d1406765a2422c38cc6"
     ],
     [
       "logger/index.d.ts",
@@ -476,13 +476,13 @@
     ],
     [
       "pi-slot/slot.d.ts",
-      2404,
-      "cfece8a6c09409e19cdd4069ac74e71890fb169b9c28fb696f6ac508066eeecb"
+      2370,
+      "2256c24a16aaf85fb4b00c6b23147fcea9e0cdc7dffddebf46b009308bfdd1bf"
     ],
     [
       "pi-slot/slot.js",
-      15301,
-      "77ed5882c836c68dda7d7223b0ba03efdc107fbbf94d4229c3ce051c3bac399f"
+      14597,
+      "26a5e042df80c8333f2bbaa68cbe0f48464daf6ed17413558263edc36a62509b"
     ],
     [
       "quota/codec.d.ts",
@@ -631,8 +631,8 @@
     ],
     [
       "rpc/port-file.js",
-      8738,
-      "941c6d4804ce576520b69b1409b2c808e7c5f344a424262b047d8a72563b1faa"
+      8573,
+      "03c8d3c3591a9b2a645b410d998e06c24e4d7306c3cfd53c25c103f4117cac1c"
     ],
     [
       "rpc/rpc-client.d.ts",
@@ -726,13 +726,13 @@
     ],
     [
       "store/pool.d.ts",
-      10698,
-      "bc7952bff586abb98f426bfb34518686159819160b0210ead63b6b68f691ef55"
+      10754,
+      "901b2881e94f067c6b454002f1e3922b75f248f2a25ef7548c399cafd9611159"
     ],
     [
       "store/pool.js",
-      5590,
-      "f2a1ce55a2be5ca090e333700ae46ca7d14d1657153e6a5819a3bc348552fd0e"
+      5713,
+      "678cca0578ac32eb1d9e45408614c6a7b56a6dcb94672a961c8c13bca55171fd"
     ],
     [
       "store/provider-state.d.ts",
@@ -766,13 +766,13 @@
     ],
     [
       "store/refresh-lock.d.ts",
-      2318,
-      "04d05f036f5bd460cf29511957aa86ba39cd914db2bee2262d2a19e240ac7387"
+      2442,
+      "5b4230fad8b94abc23d9b4a9c72cf21d7c961ac6359561a4da28e1e807bcb0ca"
     ],
     [
       "store/refresh-lock.js",
-      4471,
-      "94b6397ae32b38329058d536c3e0e4d113b5730d14c56ae025ada91bb8919617"
+      4681,
+      "035a03e02a0690ec51d92df0b61e2ae6abb7b8d6a141112640f8d649eb583949"
     ],
     [
       "store/refresh.d.ts",

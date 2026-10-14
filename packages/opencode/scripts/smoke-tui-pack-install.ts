@@ -260,7 +260,7 @@ export function expectedCandidateGraph(
       orderedMap({
         ...dependencies,
         [coreName]: candidateMetadata.corePin,
-        '@cortexkit/private-files': '0.1.0',
+        '@cortexkit/private-files': '0.2.1',
       }),
       orderedMap({ ...peers, '@opencode/plugin': '>=2.0.22' }),
     ]
@@ -397,6 +397,22 @@ export function consumerWitness(ui: boolean, contract: TuiContract): string {
   return `consumer.installed_resolution: 5 checks${ui ? `; consumer.ui045: ${UI_CHECKS[contract]} ${contract} checks` : ''}`
 }
 
+/** Resolve and exercise the POSIX backend from each installed server package, not the workspace. */
+export function privateFilesProbe(): string {
+  return `if (process.platform === 'linux') {
+const productEntry = import.meta.resolve(${JSON.stringify(productName)});
+const coreEntry = import.meta.resolve(${JSON.stringify(coreName)}, productEntry);
+for (const entry of [coreEntry, productEntry]) {
+  const backendUrl = import.meta.resolve('@cortexkit/private-files', entry);
+  const backendPath = fileURLToPath(backendUrl);
+  assert.ok(backendPath.startsWith(realpathSync('./node_modules') + sep));
+  const backend = await import(backendUrl);
+  assert.equal((await backend.verifySafeParent(process.env.HOME)).ok, true);
+}
+console.log('Linux packed core/opencode private-files: 4 checks');
+}`
+}
+
 export function installResolution(
   manager: 'npm' | 'bun',
   cutoff: Date,
@@ -477,11 +493,24 @@ async function install(
   // XDG_CONFIG_HOME and XDG_STATE_HOME; never resolve repository packages or use real user state.
   await writeFile(
     join(root, 'node-probe.mjs'),
-    `import assert from 'node:assert/strict'; import { pathToFileURL } from 'node:url';
+    `import assert from 'node:assert/strict'; import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs'; import { sep } from 'node:path';
 assert.equal(import.meta.resolve(${JSON.stringify(productName)}), pathToFileURL(${JSON.stringify(join(installed, 'dist/index.js'))}).href);
-assert.equal(typeof (await import(${JSON.stringify(productName)})).GoogleOAuthPlugin, 'function'); console.log('Node installed imports: 2 checks');`,
+assert.equal(typeof (await import(${JSON.stringify(productName)})).GoogleOAuthPlugin, 'function'); console.log('Node installed imports: 2 checks');
+${contract === 'candidate' ? privateFilesProbe() : ''}`,
   )
-  run('node', [join(root, 'node-probe.mjs')], root, env)
+  const nodeOutput = run(
+    'node',
+    ['--experimental-import-meta-resolve', join(root, 'node-probe.mjs')],
+    root,
+    env,
+  )
+  if (
+    contract === 'candidate' &&
+    process.platform === 'linux' &&
+    !nodeOutput.includes('Linux packed core/opencode private-files: 4 checks')
+  )
+    throw new Error('consumer.private_files: absent Linux runtime witness')
   const cli = run('node', [join(installed, 'dist/cli.js'), '--help'], root, env)
   if (!cli.includes('antigravity-auth'))
     throw new Error('consumer.cli_lean: CLI help witness absent')

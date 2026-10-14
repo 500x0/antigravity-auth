@@ -60,6 +60,9 @@ export function openPoolStore(options) {
             now: options.now ?? Date.now,
             ...(options.onLockEvent ? { onLockEvent: options.onLockEvent } : {}),
             ...(options.onLockStep ? { onLockStep: options.onLockStep } : {}),
+            ...(options.onRenewalTimer
+                ? { onRenewalTimer: options.onRenewalTimer }
+                : {}),
         },
         removedIds: memory.removedIds,
         requireCredentialStamps: options.requireCredentialStamps === true,

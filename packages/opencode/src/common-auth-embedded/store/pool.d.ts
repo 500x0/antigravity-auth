@@ -66,6 +66,7 @@ export interface OpenPoolStoreOptions {
     hold?: (point: HoldPoint, rowId: string) => void | Promise<void>;
     onLockEvent?: LockEnvironment['onLockEvent'];
     onLockStep?: LockEnvironment['onLockStep'];
+    onRenewalTimer?: LockEnvironment['onRenewalTimer'];
 }
 export type PoolLoad = {
     status: 'ready';

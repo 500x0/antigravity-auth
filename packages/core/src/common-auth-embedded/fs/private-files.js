@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 export const windowsPrivateFiles = process.platform === 'win32';
 const migrationNotices = new Set();
@@ -14,7 +14,7 @@ function ioCode(detail) {
     }
     return detail?.code ?? 'ERR_PRIVATE_FILE';
 }
-// Import only on Windows; the package owns native loading and architecture selection.
+// The package loads native code only on Windows and owns both platforms' parent policy.
 let backend;
 /** Tests inject a backend here; production always imports the private-files package. */
 export function setPrivateFilesBackendForTest(api) {
@@ -38,7 +38,7 @@ export class PrivateFileError extends Error {
     orphanPath;
     constructor(path, stage, cause) {
         const detail = cause;
-        super(`Private file refused at ${stage}: ${path}. Use a dedicated private directory; migrate only current-user-owned objects in safe ancestry. Previously exposed credentials may need rotation. Windows requires the private-files native prebuild and an ACL-persisting local filesystem such as NTFS.`, { cause });
+        super(`Private file refused at ${stage}: ${path} (${detail?.reason ?? detail?.code ?? 'io-error'}). Use a safe parent directory. Repair only a named secret file in safe ancestry whose owner the published policy trusts, without changing its owner or any existing directory. Previously exposed credentials may need rotation. Windows requires the private-files native prebuild and an ACL-persisting local filesystem such as NTFS.`, { cause });
         this.path = path;
         this.stage = stage;
         this.name = 'PrivateFileError';
@@ -57,13 +57,27 @@ export async function privateOperation(path, stage, operation) {
         throw new PrivateFileError(path, stage, cause);
     }
 }
-/**
- * With `migrate`, replace an owned object's DACL with owner-only permissions.
- * Callers must limit this to their dedicated private files/directories, never
- * shared parents; the backend still refuses foreign ownership or unsafe ancestry.
- */
+/** Existing containing directories use the shared entry-integrity policy, not secret-file permissions. */
+export async function verifySafeDirectory(path, options) {
+    path = resolve(path);
+    await privateOperation(path, 'safe-parent', async () => {
+        const result = await (await loadBackend()).verifySafeParent(path, options);
+        if (result.ok === false) {
+            // Preserve an absent parent's ENOENT so callers can create it privately.
+            if (result.reason === 'io-error' || result.reason === 'wrong-kind')
+                await lstat(path);
+            throw new PrivateFileError(result.level ?? result.path, 'safe-parent', {
+                ...result,
+                code: 'ERR_PRIVATE_FILES_SECURITY',
+            });
+        }
+    });
+}
+/** Repair only the specific owned secret file supplied by a caller, never an existing directory tree. */
 export async function verifyPrivate(path, kind, migrate = false) {
     path = resolve(path);
+    if (kind === 'directory')
+        return verifySafeDirectory(path);
     await privateOperation(path, 'verify', async () => {
         const api = await loadBackend();
         const result = await api.verifyOwnerOnly(path);
@@ -82,6 +96,7 @@ export async function verifyPrivate(path, kind, migrate = false) {
                     api.NULL_DACL,
                     api.EMPTY_DACL,
                 ].includes(reason)) {
+                await verifySafeDirectory(dirname(path));
                 await api.securePrivatePath(path, kind);
                 repaired = true;
             }
@@ -101,36 +116,30 @@ export async function verifyPrivate(path, kind, migrate = false) {
     });
 }
 /** Create missing components privately; inspect existing ancestors without modifying them. */
-export async function ensurePrivateDirectory(path, migrate = false) {
+export async function ensurePrivateDirectory(path, _migrate = false, options) {
     path = resolve(path);
     await privateOperation(path, 'directory', async () => {
         const api = await loadBackend();
         try {
+            await lstat(path);
+            return await verifySafeDirectory(path, options);
+        }
+        catch (error) {
+            if (ioCode(error) !== 'ENOENT')
+                throw error;
+        }
+        const parent = dirname(path);
+        if (parent === path)
+            throw Object.assign(new Error('Missing root'), { code: 'ENOENT' });
+        await ensurePrivateDirectory(parent, false, options);
+        try {
             await api.createOwnerOnly(path, { kind: 'dir' });
         }
         catch (error) {
-            const code = ioCode(error);
-            if (code === 'EEXIST') {
-                await verifyPrivate(path, 'directory', migrate);
-                return;
-            }
-            if (code !== 'ENOENT')
+            if (ioCode(error) !== 'EEXIST')
                 throw error;
-            const parent = dirname(path);
-            if (parent === path)
-                throw error;
-            // A missing parent is created, not recursively chmodded. Existing shared
-            // parents are never repaired as a side effect of creating a child.
-            await ensurePrivateDirectory(parent);
-            try {
-                await api.createOwnerOnly(path, { kind: 'dir' });
-            }
-            catch (retryError) {
-                if (ioCode(retryError) !== 'EEXIST')
-                    throw retryError;
-            }
         }
-        await verifyPrivate(path, 'directory', migrate);
+        await verifySafeDirectory(path, options);
     });
 }
 export async function readPrivateText(path, migrate = false) {
@@ -143,18 +152,20 @@ export async function readPrivateBuffer(path, migrate = false) {
         return readFile(path);
     path = resolve(path);
     if (migrate) {
-        await verifyPrivate(dirname(path), 'directory');
+        await verifySafeDirectory(dirname(path));
         await verifyPrivate(path, 'file', true);
     }
     return privateOperation(path, 'read', async () => (await loadBackend()).readOwnerOnly(path));
 }
 export async function createPrivateBytes(path, bytes) {
+    await verifySafeDirectory(dirname(resolve(path)));
     await privateOperation(path, 'create', async () => {
         // The backend verifies the creation handle while empty, before consuming bytes.
         await (await loadBackend()).createPrivateFile(resolve(path), bytes);
     });
 }
 export async function createPrivateDirectoryExclusive(path) {
+    await verifySafeDirectory(dirname(resolve(path)));
     await privateOperation(path, 'directory-create', async () => {
         await (await loadBackend()).createOwnerOnly(resolve(path), { kind: 'dir' });
     });

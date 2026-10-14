@@ -450,7 +450,7 @@ const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.15.0',
   tarballSha256:
-    'c60024a6da913239cd0e1e36fce921c03e695358be92573a3f6c1d89d51b2dc2',
+    'a3305f894bae4fd2ced7aca744be18ceb8d58b5676d9b02f39c4f17ca01bc10c',
 } as const
 
 async function embeddedFilesBelow(

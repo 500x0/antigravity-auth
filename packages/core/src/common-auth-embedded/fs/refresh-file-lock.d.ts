@@ -29,5 +29,5 @@ export declare function acquireRefreshFileLock(options: {
     onContended?: () => void;
     /** Synchronous, never awaited; throws and returned promise/thenable rejections are isolated. */
     onRenewalTimer?: (event: 'scheduled' | 'cancelled') => void;
-    onStep?: (step: 'stale-marker-stat' | 'stale-marker-claimed' | 'stale-lock-observed' | 'stale-lock-confirmed' | 'stale-lock-removed' | 'stale-lock-recreated' | 'eviction-marker-acquired' | 'renewal-owner-confirmed' | 'renewal-marker-unavailable' | 'renewal-write-fenced' | 'renewal-write-ready' | 'relinquish-read' | 'renewal-finished' | 'release-owner-confirmed') => void | Promise<void>;
+    onStep?: (step: 'stale-marker-stat' | 'stale-marker-claimed' | 'stale-lock-observed' | 'lock-read-ready' | 'lock-missing' | 'stale-lock-confirmed' | 'stale-lock-removed' | 'stale-lock-recreated' | 'eviction-marker-acquired' | 'renewal-owner-confirmed' | 'renewal-marker-unavailable' | 'renewal-write-fenced' | 'renewal-write-ready' | 'renewal-write-finished' | 'relinquish-read' | 'renewal-finished' | 'release-owner-confirmed') => void | Promise<void>;
 }): Promise<RefreshFileLock | null>;

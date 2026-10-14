@@ -214,12 +214,14 @@
       "node:fs/promises",
       "node:path"
     ],
+    "fs/with-lock.d.ts": ["./refresh-file-lock.js"],
     "fs/with-lock.js": ["./refresh-file-lock.js"],
     "logger/capture-sink.d.ts": ["./engine.js"],
     "logger/engine.d.ts": ["./capture-sink.js", "./redact.js"],
     "logger/engine.js": [
       "../fs/private-files.js",
       "./redact.js",
+      "@cortexkit/private-files",
       "node:fs",
       "node:fs/promises",
       "node:path"

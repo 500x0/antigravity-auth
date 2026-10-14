@@ -1,3 +1,4 @@
+import { acquireRefreshFileLock } from './refresh-file-lock.js';
 export declare function lockPathFor(target: string, name: string): string;
 export declare class LockContentionError extends Error {
     readonly details: {
@@ -27,6 +28,8 @@ export interface LockOptions {
     ttlMs: number;
     timeoutMs: number;
     renew?: boolean;
+    onStep?: Parameters<typeof acquireRefreshFileLock>[0]['onStep'];
+    onRenewalTimer?: Parameters<typeof acquireRefreshFileLock>[0]['onRenewalTimer'];
 }
 export declare function withLock<T>(target: string, options: LockOptions, fn: (lock: {
     assertOwned(): Promise<void>;

@@ -28,7 +28,7 @@ export const PACKAGE_ROOT = resolve(
 const REPO_ROOT = resolve(PACKAGE_ROOT, '../..')
 const TOOL_ROOT = join(REPO_ROOT, 'tools/common-auth-build')
 const LOCK_HASH =
-  'a800738e8be32885081d70de5155d7b14d97995f81f305b9a6d5830f61fa23fb'
+  '40b9a131320fd7d7f6e02631008957f99bd16b2a42c9cf1f2e889482224e3a44'
 export const BUNDLE_EXTERNALS = ['zod', '@cortexkit/private-files']
 export interface Graph {
   files: string[]

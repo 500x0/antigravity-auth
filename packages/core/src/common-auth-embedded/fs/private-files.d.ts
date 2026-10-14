@@ -1,4 +1,5 @@
 import { rename } from 'node:fs/promises';
+import type { PosixOwnerOnlyPathAsyncOptions } from '@cortexkit/private-files';
 export declare const windowsPrivateFiles: boolean;
 type Backend = typeof import('@cortexkit/private-files');
 type Kind = 'file' | 'directory';
@@ -19,14 +20,12 @@ export declare class PrivateFileError extends Error {
     constructor(path: string, stage: string, cause: unknown);
 }
 export declare function privateOperation<T>(path: string, stage: string, operation: () => Promise<T>): Promise<T>;
-/**
- * With `migrate`, replace an owned object's DACL with owner-only permissions.
- * Callers must limit this to their dedicated private files/directories, never
- * shared parents; the backend still refuses foreign ownership or unsafe ancestry.
- */
+/** Existing containing directories use the shared entry-integrity policy, not secret-file permissions. */
+export declare function verifySafeDirectory(path: string, options?: PosixOwnerOnlyPathAsyncOptions): Promise<void>;
+/** Repair only the specific owned secret file supplied by a caller, never an existing directory tree. */
 export declare function verifyPrivate(path: string, kind: Kind, migrate?: boolean): Promise<void>;
 /** Create missing components privately; inspect existing ancestors without modifying them. */
-export declare function ensurePrivateDirectory(path: string, migrate?: boolean): Promise<void>;
+export declare function ensurePrivateDirectory(path: string, _migrate?: boolean, options?: PosixOwnerOnlyPathAsyncOptions): Promise<void>;
 export declare function readPrivateText(path: string, migrate?: boolean): Promise<string>;
 export declare function readPrivateBuffer(path: string, migrate?: boolean): Promise<Buffer>;
 export declare function createPrivateBytes(path: string, bytes: string): Promise<void>;
