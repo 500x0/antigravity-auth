@@ -402,7 +402,8 @@ export function createOpenCodeVaultCustody(
   ): Promise<EnrollmentStatus> => {
     if (closed) throw new OpenCodeVaultCustodyError('Vault custody is disposed')
     const claustrum = await loadClaustrum()
-    await ensureVaultDir(paths.dir)
+    // Enrollment creates missing directories with native owner-only ACLs on Windows.
+    // Precreating one with mkdir/chmod would leave an inherited DACL the token writer refuses.
     const client = await (options.connectEnrollment
       ? options.connectEnrollment()
       : claustrum.connectClaustrumEnrollmentClient({

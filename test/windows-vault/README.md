@@ -69,3 +69,50 @@ and executor wiring on POSIX after the same product build and test-entry bundle.
 installed Claustrum client's own dependency tree. The portable receipt explicitly
 skips DACL qualification and is **not** Windows proof. Only successful runs of
 both real Windows jobs qualify the Windows path.
+
+## Approval-stage source diagnosis
+
+Rebuilding the unmodified `102c970c` vault entry with the workflow's esbuild
+options reproduces line `8678`: `await this.#writeTokenFile(...)`. Adding
+`--sourcemap` maps `8678:13` to
+`packages/core/dist/common-auth-embedded/claustrum/enrollment.js:663:17`.
+That is after the approved poll and the common-auth safe-parent checks, before
+the token writer returns or approved ceremony metadata is published.
+
+The call path is `requestAccess` → `connectStep` →
+`ClaustrumEnrollmentManager.reconcile` → claustrum-client 0.9.0
+`writeEnrollmentTokenFile`. The client validates the token, creates missing
+parents, calls `checkPrivatePath(parent)` and then creates the private temporary
+token, syncs it and renames it. Its parent check uses the store's asynchronous
+Windows `verifyPrivatePath(parent, 'directory')`: the completed directory must
+be owner-only, not merely safe against replacement. Its refusal is a plain
+`Error` with no `code`, with the message template:
+
+```text
+enrollment token folder <path> is not private: Windows private-path verification refused: <native message>
+```
+
+OpenCode previously called `ensureVaultDir` before starting enrollment. That
+used Node `mkdir`/`chmod` with POSIX mode bits, which do not install an owner-only
+Windows DACL. Common-auth treats an existing directory as an ancestor to inspect,
+not repair; its safe-parent check can accept trusted SYSTEM/Administrators grants
+that the client's owner-only parent check rejects. Leaving missing enrollment
+directory creation to the enrollment manager lets its private-files backend
+create the directory with the native owner-only DACL instead. The Linux
+regression checks that OpenCode does not precreate that directory and then runs
+proposal and approval through the real enrollment manager and token writer.
+
+The test creates `agy-vault-…/profile/config/opencode` below the runner's original
+`USERPROFILE`, then rewrites its home variables to the synthetic profile. The
+token is in `antigravity-auth-vault/opencode-enrollment.json` beside the local
+account file. Node's `join`/`resolve` supply native separators throughout. Those
+test-created ancestors inherit Windows ACLs; POSIX mode arguments alone do not
+make them owner-only. An original profile granting only SYSTEM, Administrators
+and the runner user can meet the safe-parent rule without meeting the stricter
+private-directory rule. Common-auth uses asynchronous `verifySafeParent` here;
+`verifySafeParentSync` refusing Windows as unsupported is not on this call path.
+
+This identifies an OpenCode directory-creation defect compatible with the
+reported frame, not an observed Windows exception. The exact native refusal,
+effective runner ancestry and token DACL after the fix still require both
+Windows jobs. No dependency's parent-folder policy is weakened or bypassed.

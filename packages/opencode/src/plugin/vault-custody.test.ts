@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -159,6 +160,25 @@ describe('openCodeVaultPaths and the mode file', () => {
 })
 
 describe('createOpenCodeVaultCustody', () => {
+  it('leaves missing enrollment directory creation to the vault library', async () => {
+    const service = fakeEnrollmentService()
+    const { dir } = openCodeVaultPaths(accountFile)
+    let firstConnection = true
+    const { custody } = custodyWith(async () => undefined, service, {
+      connectEnrollment: async () => {
+        if (firstConnection) {
+          firstConnection = false
+          expect(existsSync(dir)).toBe(false)
+        }
+        return service.connect()
+      },
+    })
+    expect((await custody.requestAccess()).state).toBe('pending')
+    expect(existsSync(dir)).toBe(true)
+    service.approveNext()
+    expect((await custody.requestAccess()).state).toBe('approved')
+  })
+
   it('enrolls through the vault library and switches to custody only once approved', async () => {
     const { custody, service } = custodyWith(async () => undefined)
     await expect(custody.useVault()).rejects.toThrow('not enrolled')
