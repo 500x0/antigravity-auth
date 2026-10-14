@@ -20,6 +20,8 @@ export declare class PrivateFileError extends Error {
     constructor(path: string, stage: string, cause: unknown);
 }
 export declare function privateOperation<T>(path: string, stage: string, operation: () => Promise<T>): Promise<T>;
+/** Tests only: policy options used by safe-parent checks that pass none. */
+export declare function setSafeParentOptionsForTest(options?: PosixOwnerOnlyPathAsyncOptions): void;
 /** Existing containing directories use the shared entry-integrity policy, not secret-file permissions. */
 export declare function verifySafeDirectory(path: string, options?: PosixOwnerOnlyPathAsyncOptions): Promise<void>;
 /** Repair only the specific owned secret file supplied by a caller, never an existing directory tree. */

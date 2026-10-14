@@ -1,7 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, renameSync, statSync, } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { verifySafeParentSync } from '@cortexkit/private-files';
 import { createPrivateBytes, ensurePrivateDirectory, privateOperation, replaceWindowsFile, verifyPrivate, windowsPrivateFiles, } from '../fs/private-files.js';
 import { createRedactor } from './redact.js';
 const ORDER = {
@@ -218,9 +217,6 @@ function createEngine(options) {
             });
         }
         try {
-            const parent = verifySafeParentSync(dirname(resolve(file)));
-            if (!parent.ok)
-                throw new Error(`Log parent refused: ${parent.level ?? parent.path} (${parent.reason})`);
             rotateIfNeeded(file);
             if (existsSync(file))
                 chmodPrivate(file);

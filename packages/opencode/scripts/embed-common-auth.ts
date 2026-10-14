@@ -17,8 +17,8 @@ export const producerVersion = '0.15.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: 'a3305f894bae4fd2ced7aca744be18ceb8d58b5676d9b02f39c4f17ca01bc10c',
-  sri: 'sha512-fP/xsHnuJLPIPBOxMGnF5zXRC3vHZdSWSaF9P+OAvfJGv1AzIet11vz/haqNMjJ4Vr3yh72DggRXmFTOwGMHbg==',
+  sha256: 'dd43bb66bf9f68ea7a489f27878576607fa3b07d5c39967b275f9b482d69625d',
+  sri: 'sha512-SheMZ22vSkP4KM62yvyhEwLc285rOitONDElFXYuwQjhi6dLA2xWSxwLzN0d3tq7L/GGqCLmIwZI9GVz+DSN2Q==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -214,8 +214,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'claustrum/enrollment.js',
-    29308,
-    'ab45f3e85fda94f522588a850fc3da173346bfd10cb12250ace0e8e256ff1ce8',
+    29354,
+    '96bcc5eba7156576e9dc79b5a8330793f22e4d486876063d273f0791c474a655',
   ],
   [
     'claustrum/errors.d.ts',
@@ -359,13 +359,13 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'fs/private-files.d.ts',
-    3050,
-    '428e886e14ca2cf3acc524a1fb65643c0d943785f835a232d558dfbcdc84f09c',
+    3228,
+    '1882d869cfebb3cebc8b9db47fb15083f8300c51c26c71666e898377fcd9a1ba',
   ],
   [
     'fs/private-files.js',
-    11633,
-    '5315258d2a5ce8d44f6d2a9e07ce8f5dc1deaea1e5f1fdc2d1b59aae3d321c33',
+    12096,
+    '4eb096480cf2475965193d2f03c04d29510c1a64687ed52ce1430677ce13378a',
   ],
   [
     'fs/refresh-file-lock.d.ts',
@@ -404,8 +404,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'logger/engine.js',
-    12811,
-    '0a4e0046fbf2e19a0a9086632ebd7ca4614835b29a615d1406765a2422c38cc6',
+    12539,
+    '03d858547caa2e6f0e9c36759f11f442dfd6c11a20a6714eae35dea832f1444f',
   ],
   [
     'logger/index.d.ts',

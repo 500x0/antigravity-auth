@@ -1,6 +1,30 @@
 # common-auth 0.15.0 safe-parent candidate verification
 
-## Candidate identity
+## Current fourth candidate
+
+The reviewer supplied a replacement built from [common-auth commit `4532c485`](https://github.com/cortexkit/common-auth/commit/4532c485). Both archive hashes were remeasured before use.
+
+- Archive bytes: 259,051
+- Archive SHA-256: `dd43bb66bf9f68ea7a489f27878576607fa3b07d5c39967b275f9b482d69625d`
+- Uncompressed tar SHA-256: `a99a749251dc1f976ad38e2b0464e8589b81db494bbc4f839fa7a6d88ef2c3a4`
+- SRI: `sha512-SheMZ22vSkP4KM62yvyhEwLc285rOitONDElFXYuwQjhi6dLA2xWSxwLzN0d3tq7L/GGqCLmIwZI9GVz+DSN2Q==`
+- OpenCode embedded publication files: 158 files, 854,261 bytes
+- Core embedded publication files: 131 files, 726,163 bytes
+- Full admitted publication: 191 members, 965,823 payload bytes
+- Private compiler lock SHA-256: `98de92764326deb0013afbdceac411cd5e0d0b45d4f538ca65afd284eade4f44`
+- Runtime private-files remains exactly `0.2.1`; no unrelated compiler dependency changed.
+
+The compiler archive was re-resolved offline with lifecycle scripts disabled, using a temporary local archive path to invalidate Bun's old same-path integrity record, then restoring the canonical input path. Both embedded trees and provenance were regenerated only by `bun packages/opencode/scripts/embed-common-auth.ts` and `bun packages/core/scripts/embed-common-auth.ts`.
+
+The fourth candidate removes the static logger import. The unchanged `graph.renderer_private_files_external_dynamic_import` and `graph.server_cli` tests, which require the backend to remain external and dynamically imported in built output, now pass on Linux, along with six other graph tests: eight passes, zero failures, 141 assertions. The exact producer closure suite also passes: eight tests, 1,329 assertions. Typecheck passes with TypeScript 6.0.3. No renderer, generator transformation, or graph assertion was weakened. The third-candidate defect and its original evidence below are historical, not a finding against the current archive.
+
+## Our fixture repair
+
+The separate fixture commit stages the installed `@cortexkit/private-files` runtime package, which checks that other ordinary users cannot modify containing directories, in both the top-level admitted public consumer and each nested migration consumer, on all platforms. Publication bytes and prior assertions are untouched. All 11 consumer-admission tests pass (35 assertions), including Node resolution of the real linked backend and rejection of an incorrect link.
+
+Non-vacuity control: after staging the live fixture changes in the index and confirming an empty working-tree diff, `stagePrivateFilesDependency` was temporarily replaced with a no-op marked `NON-VACUITY BREAK`. The working diff showed one file, three insertions and 16 deletions. Only `stages the real private-files backend for isolated public consumers on every platform` failed (`ERR_MODULE_NOT_FOUND: Cannot find package '@cortexkit/private-files'`); `admits the complete genuine publication and records every member payload` passed. Two tests ran, one pass and one failure. Restoring the file from the index and touching it returned the working-tree diff to empty; the restored 11-test suite passed.
+
+## Historical third-candidate identity
 
 The input is the candidate built from [common-auth commit `dbd4a3ff`](https://github.com/cortexkit/common-auth/commit/dbd4a3ff), not a published-release claim.
 
@@ -16,7 +40,7 @@ The input is the candidate built from [common-auth commit `dbd4a3ff`](https://gi
 
 Both embedded trees and their provenance were regenerated through their owning embedding scripts. The private compiler lock was refreshed offline with lifecycle scripts disabled; unrelated compiler transitive resolutions were retained. `test/common-auth-0113-producer/closure.json` records the exact imports reachable from the published entry points. It now includes the candidate's new declaration edge from `fs/with-lock.d.ts` and its static logger dependency. The separate `graph.renderer_private_files_external_dynamic_import` and `graph.server_cli` tests still require backend imports to be external dynamic calls; their assertions were not changed.
 
-## Candidate finding: a static private-files edge reaches the OpenCode 1 renderer
+## Historical third-candidate finding: a static private-files edge reaches the OpenCode 1 renderer
 
 The candidate publishes this runtime import at `package/dist/logger/engine.js:4`, preserved at `packages/{core,opencode}/src/common-auth-embedded/logger/engine.js:4`:
 
@@ -59,7 +83,7 @@ Ran 8 tests across 1 file. [3.95s]
 
 `graph.source`, `graph.raw`, `graph.runtime`, `graph.tui_client_narrow`, `graph.ga_roots`, and `graph.ga_policy_refusals` passed in that run. The owner must fix the published candidate to restore dynamic-only renderer use. The task reviewer explicitly authorized delivering the candidate and Windows layout while preserving these failing proofs; no renderer or generator transformation was authorized or applied.
 
-## Linux gates and runner limitations
+## Historical third-candidate Linux gates and runner limitations
 
 Tools: Bun 1.4.2, Node v24.21.0, TypeScript 6.0.3, ckdev-mutate 0.12.0.
 

@@ -221,7 +221,6 @@
     "logger/engine.js": [
       "../fs/private-files.js",
       "./redact.js",
-      "@cortexkit/private-files",
       "node:fs",
       "node:fs/promises",
       "node:path"

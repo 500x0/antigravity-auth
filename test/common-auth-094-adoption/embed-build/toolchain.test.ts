@@ -47,7 +47,7 @@ test('build.private_toolchain', async () => {
   const before = digest(await readFile(join(target, 'bun.lock')))
   // Check the lockfile digest before installation to verify all transitive dependency integrity values separately from the install.
   expect(before).toBe(
-    '40b9a131320fd7d7f6e02631008957f99bd16b2a42c9cf1f2e889482224e3a44',
+    '98de92764326deb0013afbdceac411cd5e0d0b45d4f538ca65afd284eade4f44',
   )
   const installed = run(target, [
     'install',
