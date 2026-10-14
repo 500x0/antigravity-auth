@@ -228,8 +228,12 @@ it('unmigrated production composition retains inherited and explicit-aborted can
 describe('createAntigravityPlugin (plugin entry surface)', () => {
   let tempProjectDir: string
   let fetchSpy: ReturnType<typeof spyOn>
+  let plugin:
+    | Awaited<ReturnType<ReturnType<typeof createAntigravityPlugin>>>
+    | undefined
 
   beforeEach(() => {
+    plugin = undefined
     tempProjectDir = mkdtempSync(join(tmpdir(), 'plugin-entry-test-'))
 
     // initAntigravityVersion performs a non-blocking fetch on first install.
@@ -244,7 +248,10 @@ describe('createAntigravityPlugin (plugin entry surface)', () => {
     )
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Stop producers and drain sidebar writes before the next test changes
+    // environment-based paths, or an old publication can write the next fixture.
+    await plugin?.dispose?.()
     fetchSpy.mockRestore()
     mock.restore()
     rmSync(tempProjectDir, { recursive: true, force: true })
@@ -254,7 +261,7 @@ describe('createAntigravityPlugin (plugin entry surface)', () => {
     const client = createMinimalClient()
     const ctx = createPluginInput(client, tempProjectDir)
 
-    const plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
+    plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
 
     expect(typeof plugin.dispose).toBe('function')
     expect(typeof plugin.config).toBe('function')
@@ -285,7 +292,7 @@ describe('createAntigravityPlugin (plugin entry surface)', () => {
   it('config hook registers the antigravity model catalog, whitelist, and the /antigravity command without deleting existing entries', async () => {
     const client = createMinimalClient()
     const ctx = createPluginInput(client, tempProjectDir)
-    const plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
+    plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
 
     // Pre-populate the opencode config with a stub provider + command so
     // the plugin must merge rather than overwrite.
@@ -350,7 +357,7 @@ describe('createAntigravityPlugin (plugin entry surface)', () => {
   it('command.execute.before leaves other commands, the retired gemini-dump included, to the host', async () => {
     const client = createMinimalClient()
     const ctx = createPluginInput(client, tempProjectDir)
-    const plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
+    plugin = await createAntigravityPlugin(ANTIGRAVITY_PROVIDER_ID)(ctx)
 
     // Non-matching command is a no-op — must return without throwing.
     await expect(
