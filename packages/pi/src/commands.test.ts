@@ -27,27 +27,29 @@ import { PiVaultSetup } from './vault-setup.ts'
 
 const TOKEN = 'd'.repeat(64)
 
-/** The vault's scoped API answering from a script; one Antigravity account. */
+/** The vault's scoped API answering from a script; one Antigravity account unless `emptyRoster`. */
 function loopbackVault(): ClaustrumScopedClient {
   return {
     listScoped: async () => ({
       view: 'view-1',
-      rows: [
-        {
-          id: 'cred-a',
-          categories: ['antigravity-native'],
-          credentialType: 'oauth',
-          serves: [],
-          providerIds: [],
-          refreshAdapter: 'antigravity',
-          state: 'active',
-          recordVersion: 1,
-          operations: ['read'],
-          createdAtMs: null,
-          accountId: 'account-a',
-          email: 'a@example.com',
-        },
-      ],
+      rows: emptyRoster
+        ? []
+        : [
+            {
+              id: 'cred-a',
+              categories: ['antigravity-native'],
+              credentialType: 'oauth',
+              serves: [],
+              providerIds: [],
+              refreshAdapter: 'antigravity',
+              state: 'active',
+              recordVersion: 1,
+              operations: ['read'],
+              createdAtMs: null,
+              accountId: 'account-a',
+              email: 'a@example.com',
+            },
+          ],
     }),
     getScoped: async () => {
       throw new Error('the menu never fetches a credential')
@@ -72,12 +74,15 @@ function enrollmentEndpoint() {
 
 let dir: string
 let hostSlot: unknown
+/** True when the vault grants this host no Antigravity accounts. */
+let emptyRoster: boolean
 
 beforeEach(async () => {
   dir = await mkdtemp(
     join(process.platform === 'win32' ? tmpdir() : '/tmp', 'pi-menu-'),
   )
   hostSlot = undefined
+  emptyRoster = false
 })
 
 afterEach(async () => {
@@ -304,6 +309,33 @@ describe('Pi /antigravity menu', () => {
     expect(text).not.toContain('cred-a')
     expect(text).not.toContain('a@example.com')
     expect(text).not.toContain('account-a')
+  })
+
+  it('names the missing read grant when the approved vault serves Pi no accounts', async () => {
+    emptyRoster = true
+    const grant = [
+      'Enrollment is approved, but the vault serves antigravity-auth-pi no Antigravity accounts.',
+      'The vault operator grants read access with: ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read',
+    ]
+    const { menu } = await openPiMenu()
+    const requested = await apply(menu, 'vault', 'request-access')
+    expect(requested).toMatchObject({
+      ok: true,
+      text: ['Enrollment: approved as antigravity-auth-pi', ...grant].join(
+        '\n',
+      ),
+    })
+
+    const payload = await menu.open(invocation)
+    expect(section(payload, 'accounts').lines).toEqual([
+      'Pi serves Antigravity from the vault, one account at a time. Choose, decline or accept accounts in the Vault section.',
+      ...grant,
+    ])
+    expect(section(payload, 'routing').lines).toEqual([
+      'The vault serves Pi no accounts, so requests are refused. There is no account rotation.',
+      ...grant,
+    ])
+    expect(section(payload, 'vault').lines.slice(-2)).toEqual(grant)
   })
 
   it('selects vault custody while leaving Pi’s native login unchanged', async () => {

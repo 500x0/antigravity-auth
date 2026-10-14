@@ -364,6 +364,57 @@ function describeEnrollment(status: ClaustrumEnrollmentStatus): string {
   }
 }
 
+// The vault operator approves and grants with Claustrum's `ck` command,
+// outside Pi. Approval alone serves nothing: the enrollment also needs read
+// access to the vault's Antigravity accounts.
+
+/** The operator's command that grants Pi's enrollment read access to Antigravity accounts. */
+export const PI_VAULT_GRANT_COMMAND = `ck auth grant --principal enrolled:${PI_ANTIGRAVITY_ENROLLMENT_NAME} --selector-kind category --selector antigravity-native --operation read`
+
+/** What to do while Pi's request waits in the vault; names the request when Pi knows its ID. */
+function piPendingEnrollmentGuidance(requestId?: string): string[] {
+  return [
+    'Next, the vault operator runs these outside Pi:',
+    requestId === undefined
+      ? '1. Find the request ID with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>'
+      : `1. Approve the request: ck auth enroll approve --request-id ${requestId}`,
+    `2. Grant read access: ${PI_VAULT_GRANT_COMMAND}`,
+    'Both are needed: an approval without the grant serves Pi no accounts.',
+    '3. Pi switches to the vault once it sees the approval; Request vault access checks again.',
+  ]
+}
+
+/**
+ * Why a new request was refused with `pending_exists`, and the way out. The
+ * vault holds one pending request per name; an earlier one, for example from
+ * an enrollment forgotten in Pi, blocks a new one until it expires or the
+ * operator denies it.
+ */
+function piPendingExistsGuidance(): string[] {
+  return [
+    `An earlier request for ${PI_ANTIGRAVITY_ENROLLMENT_NAME} is still pending in the vault, possibly from an enrollment forgotten here.`,
+    'It expires 15 minutes after it was made; request vault access again after that.',
+    'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+  ]
+}
+
+/** Shown when Pi is approved but the vault lists no Antigravity accounts for it. */
+export function piNoVaultAccountsGuidance(): string[] {
+  return [
+    `Enrollment is approved, but the vault serves ${PI_ANTIGRAVITY_ENROLLMENT_NAME} no Antigravity accounts.`,
+    `The vault operator grants read access with: ${PI_VAULT_GRANT_COMMAND}`,
+  ]
+}
+
+/** The next steps for an enrollment state that needs the user or the operator to act. */
+function enrollmentGuidance(status: ClaustrumEnrollmentStatus): string[] {
+  if (status.state === 'pending')
+    return piPendingEnrollmentGuidance(status.requestId)
+  if (status.state === 'blocked' && status.code === 'pending_exists')
+    return piPendingExistsGuidance()
+  return []
+}
+
 function describeHostSlot(slot: HostSlotContent): string {
   switch (slot) {
     case 'login':
@@ -396,6 +447,7 @@ export function formatPiVaultSetupStatus(status: PiVaultSetupStatus): string[] {
     lines.push(
       'Conflict: local mode has no login to serve. Run /login or switch to the vault.',
     )
+  lines.push(...enrollmentGuidance(status.enrollment))
   return lines
 }
 
@@ -453,11 +505,16 @@ function refused(error: unknown): ActionOutcome {
   throw error
 }
 
-/** Poll the enrollment until it leaves `pending`/`busy` or the wait ends. */
+/**
+ * Poll the enrollment until it leaves `pending`/`busy` or the wait ends.
+ * Returns undefined when Pi's local request disappears while waiting (it was
+ * forgotten elsewhere): polling on would propose a fresh request, which the
+ * vault refuses with `pending_exists` while the old one is still pending.
+ */
 async function waitForApproval(
   setup: PiVaultSetup,
   wait: PiVaultWaitOptions = {},
-): Promise<ClaustrumEnrollmentStatus> {
+): Promise<ClaustrumEnrollmentStatus | undefined> {
   const sleep =
     wait.sleep ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
@@ -467,6 +524,8 @@ async function waitForApproval(
   while (status.state === 'pending' || status.state === 'busy') {
     if (Date.now() >= deadline) return status
     await sleep(interval)
+    if ((await setup.sourceStatus()).enrollment.state === 'idle')
+      return undefined
     status = await setup.connectStep()
   }
   return status
@@ -482,6 +541,34 @@ async function waitForApproval(
 export function createPiVaultSection(
   options: PiVaultSectionOptions,
 ): PluginExtraSection {
+  // One approval watch at a time, so a second Request vault access while
+  // the first is still waiting does not report the operator's decision twice.
+  let watching = false
+
+  /** Lines for an approved enrollment whose vault roster is empty; empty when unknown. */
+  const approvedRosterGuidance = async (): Promise<string[]> => {
+    const port = options.accounts?.()
+    if (!port) return []
+    try {
+      return (await port.list()).length === 0 ? piNoVaultAccountsGuidance() : []
+    } catch {
+      // The Vault section reports an unreachable roster when it is opened;
+      // an action result says nothing it cannot confirm.
+      return []
+    }
+  }
+
+  /** An enrollment step's result: its state, then what to do next. */
+  const stepText = async (
+    step: ClaustrumEnrollmentStatus,
+    suffix = '',
+  ): Promise<string> =>
+    [
+      `Enrollment: ${describeEnrollment(step)}${suffix}`,
+      ...enrollmentGuidance(step),
+      ...(step.state === 'approved' ? await approvedRosterGuidance() : []),
+    ].join('\n')
+
   return {
     id: 'vault',
     title: 'Vault',
@@ -545,6 +632,11 @@ export function createPiVaultSection(
                   ],
             })
           }
+          if (listed.length === 0) lines.push(...piNoVaultAccountsGuidance())
+          else if (status.mode !== 'custody')
+            lines.push(
+              'Next: choose Serve Pi from the vault to serve Pi from these accounts.',
+            )
         } catch (error) {
           lines.push(`Vault accounts unavailable: ${errorText(error)}`)
         }
@@ -561,26 +653,36 @@ export function createPiVaultSection(
             if (step.state !== 'pending' && step.state !== 'busy')
               return {
                 ok: step.state === 'approved',
-                text: `Enrollment: ${describeEnrollment(step)}`,
+                text: await stepText(step),
               }
             // The approval happens outside Pi; keep polling and report to
             // the session that asked.
-            void waitForApproval(setup, options.wait)
-              .then((final) => {
-                invocation.notify(
-                  `Enrollment: ${describeEnrollment(final)}`,
-                  final.state === 'approved' ? 'info' : 'warning',
-                )
-              })
-              .catch((error: unknown) => {
-                invocation.notify(
-                  `Requesting vault access failed: ${errorText(error)}`,
-                  'error',
-                )
-              })
+            if (!watching) {
+              watching = true
+              void waitForApproval(setup, options.wait)
+                .then(async (final) => {
+                  if (final === undefined) return
+                  invocation.notify(
+                    await stepText(final),
+                    final.state === 'approved' ? 'info' : 'warning',
+                  )
+                })
+                .catch((error: unknown) => {
+                  invocation.notify(
+                    `Requesting vault access failed: ${errorText(error)}`,
+                    'error',
+                  )
+                })
+                .finally(() => {
+                  watching = false
+                })
+            }
             return {
               ok: true,
-              text: `Enrollment: ${describeEnrollment(step)}. You are told here when the operator decides.`,
+              text: await stepText(
+                step,
+                '. You are told here when the operator decides.',
+              ),
             }
           },
         })
@@ -611,7 +713,15 @@ export function createPiVaultSection(
             return 'Pi now serves Antigravity from its own login. Run /login if it has none.'
           },
         })
-      if (status.enrollment.state !== 'idle')
+      // No Forget while a request is pending: the vault has no way to withdraw
+      // it, so forgetting would delete the only secret that can still collect
+      // the approval and leave the request blocking a new one. It returns once
+      // the operator approves or denies the request.
+      if (status.enrollment.state === 'pending')
+        lines.push(
+          `Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id ${status.enrollment.requestId ?? '<id>'}; then choose Request vault access here.`,
+        )
+      else if (status.enrollment.state !== 'idle')
         actions.push({
           id: 'forget',
           label: 'Forget vault enrollment',

@@ -396,3 +396,144 @@ it('observes source transitions with the existing consumer while local credentia
     await custody.dispose()
   }
 })
+
+describe('Vault section enrollment guidance', () => {
+  const GRANT =
+    'ck auth grant --principal enrolled:antigravity-auth-opencode --selector-kind category --selector antigravity-native --operation read'
+  const pendingSteps = (approve: string) => [
+    'Next, the vault operator runs these outside OpenCode:',
+    approve,
+    `2. Grant read access: ${GRANT}`,
+    'Both are needed: an approval without the grant serves this host no accounts.',
+    '3. Then choose Check vault approval here; once approved, accounts come from the vault.',
+  ]
+  const PENDING_EXISTS = [
+    'An earlier request for antigravity-auth-opencode is still pending in the vault, possibly from an earlier, abandoned request on this host.',
+    'It expires 15 minutes after it was made; request vault access again after that.',
+    'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+  ]
+  const NO_ACCOUNTS = [
+    'Vault access is approved, but the vault serves antigravity-auth-opencode no Antigravity accounts.',
+    `The vault operator grants read access with: ${GRANT}`,
+  ]
+  const invocation = { notify: () => undefined }
+
+  async function runAction(
+    custody: ReturnType<typeof custodyWith>['custody'],
+    id: string,
+  ) {
+    const content = await custody.menuSection().build(invocation)
+    const found = content.actions?.find((entry) => entry.id === id)
+    if (!found) throw new Error(`no action ${id}`)
+    return found.run({ values: {}, invocation })
+  }
+
+  it('gives the operator steps with the request ID while pending and offers no disconnect', async () => {
+    const { custody } = custodyWith(async () => undefined)
+    expect(await runAction(custody, 'request-access')).toBe(
+      [
+        'Vault access: waiting for operator approval',
+        ...pendingSteps(
+          '1. Approve the request: ck auth enroll approve --request-id request-1',
+        ),
+      ].join('\n'),
+    )
+    const content = await custody.menuSection().build(invocation)
+    expect(content.lines).toEqual([
+      'Mode: this computer',
+      'Vault access: waiting for operator approval',
+      'OpenCode Google sign-in: empty',
+      ...pendingSteps(
+        '1. Approve the request: ck auth enroll approve --request-id request-1',
+      ),
+    ])
+    // Disconnecting would delete the only secret that can collect this
+    // request's approval, while the vault keeps the request pending.
+    expect(content.actions?.map((entry) => [entry.id, entry.label])).toEqual([
+      ['request-access', 'Check vault approval'],
+      ['use-vault', 'Serve accounts from the vault'],
+    ])
+  })
+
+  it('explains a pending_exists refusal once, with the wait and the operator remedy', async () => {
+    const claustrum = await loadCommonAuthClaustrum()
+    const { custody } = custodyWith(async () => undefined, undefined, {
+      connectEnrollment: async () => ({
+        enrollPropose: async () => {
+          throw new claustrum.ClaustrumCredentialError(
+            'pending_exists',
+            'permanent',
+            'gone',
+          )
+        },
+        enrollPoll: async () => ({ status: 'pending' as const }),
+        close() {},
+      }),
+    })
+    expect(await runAction(custody, 'request-access')).toBe(
+      ['Vault access: blocked (pending_exists)', ...PENDING_EXISTS].join('\n'),
+    )
+    expect((await custody.menuSection().build(invocation)).lines).toEqual([
+      'Mode: this computer',
+      'Vault access: blocked (pending_exists)',
+      'OpenCode Google sign-in: empty',
+      ...PENDING_EXISTS,
+    ])
+  })
+
+  it('names the missing read grant when the approved vault serves no accounts', async () => {
+    const service = fakeEnrollmentService()
+    service.approveNext()
+    const { custody } = custodyWith(async () => undefined, service, {
+      connect: async () => ({
+        listScoped: async () => ({ view: 'view-1', rows: [] }),
+        getScoped: async () => {
+          throw new Error('the menu never fetches a credential')
+        },
+        reportAuthFailureScoped: async () => {},
+        close: () => {},
+      }),
+    })
+    try {
+      await custody.requestAccess()
+      await (await custody.custodySource()).refresh()
+      expect((await custody.menuSection().build(invocation)).lines).toEqual([
+        'Mode: vault',
+        'Vault access: approved as antigravity-auth-opencode',
+        ...NO_ACCOUNTS,
+      ])
+      expect(await runAction(custody, 'request-access')).toBe(
+        [
+          'Vault access: approved as antigravity-auth-opencode',
+          ...NO_ACCOUNTS,
+        ].join('\n'),
+      )
+    } finally {
+      await custody.dispose()
+    }
+  })
+
+  it('points an approved host still on local accounts at Serve accounts from the vault', async () => {
+    const service = fakeEnrollmentService()
+    service.approveNext()
+    const { custody } = custodyWith(async () => undefined, service)
+    await custody.requestAccess()
+    // Approval switches OpenCode's authority to the vault at once, so a local
+    // mode beside an approval is forced here through the status the menu
+    // section builds from.
+    const actual = custody.status.bind(custody)
+    custody.status = async () => ({
+      ...(await actual()),
+      mode: 'local',
+      hostSlot: 'empty',
+    })
+    const content = await custody.menuSection().build(invocation)
+    expect(content.lines).toEqual([
+      'Mode: this computer',
+      'Vault access: approved as antigravity-auth-opencode',
+      'OpenCode Google sign-in: empty',
+      'Next: choose Serve accounts from the vault to use the accounts the vault serves this host.',
+    ])
+    expect(content.actions?.map((entry) => entry.id)).toContain('use-vault')
+  })
+})
