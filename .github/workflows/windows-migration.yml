@@ -60,6 +60,24 @@ jobs:
         run: |
           node test/windows-migration/verify.mjs "$env:RUNNER_TEMP/agy-migration-evidence" "$env:RUNNER_TEMP/agy-migration-baseline" packages/opencode/dist/windows-migration-cli.mjs
           exit $LASTEXITCODE
+      # Diagnostic for this verification branch: record who may write to the test
+      # profile's directories, and to a real profile config directory, so the
+      # private-parent rule can be checked against the runner's actual ACLs.
+      - name: Record directory ACLs
+        if: always()
+        shell: pwsh
+        run: |
+          $paths = @(
+            $env:RUNNER_TEMP,
+            (Join-Path $env:RUNNER_TEMP 'agy-migration-evidence'),
+            (Join-Path $env:RUNNER_TEMP 'agy-migration-evidence/profile/config/opencode'),
+            $env:USERPROFILE,
+            (Join-Path $env:USERPROFILE '.config')
+          )
+          foreach ($path in $paths) {
+            Write-Output "== $path"
+            if (Test-Path $path) { icacls $path } else { Write-Output 'absent' }
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
