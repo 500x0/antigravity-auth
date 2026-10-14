@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
@@ -25,6 +26,7 @@ export async function startMenuVaultFixture(root: string) {
   const errors: string[] = []
   const calls: string[] = []
   let approved = false
+  let requestSecretHash: unknown
   const respond = (
     socket: Socket,
     header: FrameHeader,
@@ -54,12 +56,23 @@ export async function startMenuVaultFixture(root: string) {
     if (
       method === 'auth.enroll_propose' &&
       params.proposed_name === OPENCODE_VAULT_ENROLLMENT_NAME
-    )
+    ) {
+      requestSecretHash = params.request_secret_hash
       return { result: { request_id: 'synthetic-menu-request' } }
+    }
     if (
       method === 'auth.enroll_poll' &&
       params.request_id === 'synthetic-menu-request'
-    )
+    ) {
+      if (
+        typeof params.request_secret !== 'string' ||
+        createHash('sha256')
+          .update(Buffer.from(params.request_secret, 'hex'))
+          .digest('hex') !== requestSecretHash
+      ) {
+        errors.push('Enrollment poll did not prove the request secret')
+        return { error: { code: 'invalid_request_secret', class: 'permanent' } }
+      }
       return {
         result: {
           status: approved ? 'approved' : 'pending',
@@ -68,6 +81,7 @@ export async function startMenuVaultFixture(root: string) {
           token_generation: 1,
         },
       }
+    }
     if (
       method === 'credential.list_scoped' &&
       params.enrollment_token === token
@@ -89,6 +103,23 @@ export async function startMenuVaultFixture(root: string) {
               account_id: 'synthetic-vault-account',
             },
           ],
+        },
+      }
+    if (
+      method === 'credential.get_scoped' &&
+      params.enrollment_token === token &&
+      params.credential_id === 'synthetic-vault-credential'
+    )
+      return {
+        result: {
+          payload: Array.from(
+            new TextEncoder().encode('synthetic-vault-access'),
+          ),
+          credential_id: 'synthetic-vault-credential',
+          project_id: 'synthetic-vault-project',
+          account_id: 'synthetic-vault-account',
+          record_version: 1,
+          expires_at_ms: Date.now() + 3_600_000,
         },
       }
     errors.push(`Unexpected vault method: ${method}`)

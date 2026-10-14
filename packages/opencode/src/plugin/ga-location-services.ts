@@ -1015,6 +1015,7 @@ export interface GaLocationCustody
     OpenCodeVaultCustody,
     'readMode' | 'menuSection' | 'dispose' | 'readState'
   > {
+  startObservation?(): Promise<void>
   custodySource(): Promise<GaVaultCustodySource>
 }
 
@@ -2032,6 +2033,7 @@ export function createGaLocationServicesFactory(
           (await authority()) === 'local' &&
           (!previousMayRun || (await previousMayRun())),
       }
+      await custody?.startObservation?.()
     } catch (error) {
       await custody?.dispose().catch(() => {})
       throw error
@@ -2405,7 +2407,8 @@ export interface GaVaultHost {
  * the system clock, the repository-backed request pipeline and the
  * collaborators above. Every activation gets its own repository, account
  * slot and pipeline. With `vault`, a location can also serve the vault's
- * accounts: its mode file decides, and the menu's Vault section switches.
+ * accounts: each operation re-reads the enrollment files. An approved host
+ * uses the vault; an unenrolled host uses its local store.
  */
 export function createGaLocationServicesForHost(
   vault?: GaVaultHost,

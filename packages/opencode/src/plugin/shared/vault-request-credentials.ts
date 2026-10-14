@@ -576,18 +576,43 @@ export function createVaultAccountPool(
     return firstRead
   }
 
+  const waitForFirstRoster = async (): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      // Discovery belongs to the source and may be shared with its observer.
+      // Bound the caller's wait without canceling that shared roster discovery.
+      await Promise.race([
+        readOnce(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'The vault roster is not available yet. Check vault access and try the request again.',
+                ),
+              ),
+            2_000,
+          )
+          timer.unref?.()
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   return {
     selector,
     credentials,
     state,
     async sync() {
       const pending = firstRead
-      await readOnce()
+      await waitForFirstRoster()
       // The first read just installed the rows; later calls re-sync.
       if (pending !== null) await replace()
     },
     async refresh() {
-      await readOnce()
+      await waitForFirstRoster()
       await source.refresh()
       await replace()
     },
