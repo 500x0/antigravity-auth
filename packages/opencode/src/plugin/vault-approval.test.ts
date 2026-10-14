@@ -9,14 +9,19 @@ import {
 import { join } from 'node:path'
 import * as core from '@cortexkit/antigravity-auth-core'
 import {
+  AccountManager,
   type AccountRepositoryRead,
   createAccountRepositoryFactory,
   initializeFreshAccountStore,
   loadCommonAuthStoreModules,
   readAccountStoreAdmission,
 } from '@cortexkit/antigravity-auth-core'
+
 import type { GaLocationServices, GaRawSender } from '../ga/server/index.ts'
+import * as notifications from '../rpc/notifications.ts'
+import type { CommandApplyResult } from '../rpc/protocol.ts'
 import { createRpcClient } from '../rpc/rpc-client.ts'
+import * as rpcServer from '../rpc/rpc-server.ts'
 import { startMenuVaultFixture } from './__fixtures__/vault-menu-daemon.test.ts'
 import { createGaLocationServicesForHost } from './ga-location-services.ts'
 import { createAntigravityPlugin } from './index.ts'
@@ -35,6 +40,48 @@ const BODY = JSON.stringify({
 async function fixture() {
   const root = realpathSync(mkdtempSync('/tmp/opencode-live-approval-'))
   const daemon = await startMenuVaultFixture(root)
+  const usagePersisted = Promise.withResolvers<void>()
+  const recordRequest = AccountManager.prototype.recordRequest
+  const usageObserver = spyOn(
+    AccountManager.prototype,
+    'recordRequest',
+  ).mockImplementation(function (this: AccountManager, index, family) {
+    recordRequest.call(this, index, family)
+    // Request completion does not join the repository's queued usage writes.
+    usagePersisted.resolve(this.flushSaveToDisk())
+  })
+  const applied = Promise.withResolvers<CommandApplyResult>()
+  const startRpcServer = rpcServer.startRpcServer
+  const rpcObserver = spyOn(rpcServer, 'startRpcServer').mockImplementation(
+    (options) =>
+      startRpcServer({
+        ...options,
+        apply: async (request) => {
+          try {
+            const result = await options.apply(request)
+            applied.resolve(result)
+            return result
+          } catch (error) {
+            applied.reject(error)
+            throw error
+          }
+        },
+      }),
+  )
+  const approvedNotice = Promise.withResolvers<void>()
+  const pushNotification = notifications.pushNotification
+  const queueObserver = spyOn(
+    notifications,
+    'pushNotification',
+  ).mockImplementation((payload, sessionId) => {
+    pushNotification(payload, sessionId)
+    if (
+      sessionId === 'approval-session' &&
+      'notify' in payload &&
+      payload.notify?.message === APPROVED_NOTICE
+    )
+      approvedNotice.resolve()
+  })
   const environment = {
     OPENCODE_CONFIG_DIR: join(root, 'config'),
     XDG_CONFIG_HOME: join(root, 'xdg'),
@@ -135,11 +182,17 @@ async function fixture() {
     send,
     collector,
     nonLoopback,
+    usagePersisted: usagePersisted.promise,
+    applied: applied.promise,
+    approvedNotice: approvedNotice.promise,
     async close() {
       await Promise.all(custodies.map((custody) => custody.dispose()))
       await repository.dispose()
       await daemon.close()
       fetchSpy.mockRestore()
+      usageObserver.mockRestore()
+      rpcObserver.mockRestore()
+      queueObserver.mockRestore()
       for (const [key, value] of Object.entries(prior)) {
         if (value === undefined) delete process.env[key]
         else process.env[key] = value
@@ -149,13 +202,7 @@ async function fixture() {
   }
 }
 
-async function waitUntil(check: () => Promise<boolean>) {
-  const deadline = Date.now() + 4_000
-  while (!(await check())) {
-    if (Date.now() >= deadline) throw new Error('No background approval notice')
-    await Bun.sleep(20)
-  }
-}
+const APPROVED_NOTICE = 'Vault access: approved as antigravity-auth-opencode'
 
 function localCredentialUsage(read: AccountRepositoryRead) {
   if (read.status !== 'ready') throw new Error(read.status)
@@ -235,9 +282,7 @@ describe('live enrollment switches the real OpenCode request paths', () => {
             },
           }) as Promise<Response>
         expect(await (await request()).text()).toContain('done')
-        // Local usage writes admitted by the first request must drain before
-        // taking the snapshot used to detect writes from the later vault request.
-        await Bun.sleep(1_100)
+        await f.usagePersisted
         const before = localCredentialUsage(await f.repository.read())
         expect(before[0]?.requests?.gemini).toBe(1)
         const networkBefore = f.nonLoopback.length
@@ -260,25 +305,23 @@ describe('live enrollment switches the real OpenCode request paths', () => {
           const initial = await rpc.pendingNotifications(0, 'approval-session')
           expect(JSON.stringify(initial)).toContain('1 account')
           noticeId = Math.max(0, ...initial.map((entry) => entry.id))
-          const pending = await rpc.apply({
+          const reply = rpc.apply({
             command: 'antigravity',
             sectionId: 'vault',
             actionId: 'request-access',
             sessionId: 'approval-session',
           })
+          // The RPC receipt has a short transport deadline; the dispatched menu
+          // action can still be syncing enrollment files after that receipt.
+          // Join that same action, never send another request to collect it.
+          const pending = await f.applied
+          await reply
           expect(pending).toMatchObject({ ok: true })
           expect(JSON.stringify(pending)).toContain(
             'waiting for operator approval',
           )
           f.daemon.approve()
-          await waitUntil(async () =>
-            (await rpc.pendingNotifications(noticeId, 'approval-session')).some(
-              (entry) =>
-                JSON.stringify(entry.payload).includes(
-                  'Vault access: approved as antigravity-auth-opencode',
-                ),
-            ),
-          )
+          await f.approvedNotice
           const notices = await rpc.pendingNotifications(
             noticeId,
             'approval-session',
@@ -309,8 +352,9 @@ describe('live enrollment switches the real OpenCode request paths', () => {
         expect(localCredentialUsage(await f.repository.read())).toEqual(before)
         expect(client.auth.set).not.toHaveBeenCalled()
         if (approval === 'background') {
-          await Bun.sleep(2_100)
-          const notices = await rpc.pendingNotifications(
+          // Disposal joins the ceremony watcher, including its notification.
+          await plugin.dispose?.()
+          const notices = notifications.drainNotifications(
             noticeId,
             'approval-session',
           )
@@ -369,13 +413,17 @@ describe('live enrollment switches the real OpenCode request paths', () => {
             body: JSON.stringify(input.envelope),
           })
         const notices: { scope: unknown; message: string }[] = []
+        const approvedNotice = Promise.withResolvers<void>()
         const serving = await services.start({
           runtime,
           generation: 'live-approval',
           send,
           notify: (scope, entry) => {
-            if ('notify' in entry && entry.notify)
+            if ('notify' in entry && entry.notify) {
               notices.push({ scope, message: entry.notify.message })
+              if (entry.notify.message === APPROVED_NOTICE)
+                approvedNotice.resolve()
+            }
             return null
           },
           isConnected: () => true,
@@ -399,8 +447,7 @@ describe('live enrollment switches the real OpenCode request paths', () => {
             { signal, send },
           )
         expect(await (await request()).text()).toContain('done')
-        await Bun.sleep(1_100)
-        await runtime.accounts()?.saveToDisk()
+        await f.usagePersisted
         const before = localCredentialUsage(await f.repository.read())
         expect(before[0]?.requests?.gemini).toBe(1)
         if (approval === 'background') {
@@ -417,11 +464,7 @@ describe('live enrollment switches the real OpenCode request paths', () => {
           expect(pending).toMatchObject({ ok: true })
           expect(pending.text).toContain('waiting for operator approval')
           f.daemon.approve()
-          await waitUntil(async () =>
-            notices.some((entry) =>
-              entry.message.includes('approved as antigravity-auth-opencode'),
-            ),
-          )
+          await approvedNotice.promise
           expect(
             notices.filter((entry) =>
               entry.message.includes('approved as antigravity-auth-opencode'),
