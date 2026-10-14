@@ -96,7 +96,7 @@ export const TUI_ROOTS: readonly TuiRoot[] = [V1_TUI_ROOT, GA_TUI_ROOT]
  * preferences, file logger, OpenCode 1 adapter or embedded library module.
  */
 const GA_FORBIDDEN_SOURCE =
-  /\/(?:rpc|plugin|antigravity|hooks)\/|\/ga\/(?:server|rpc)\/|\/common-auth-embedded\/(?!quota\/(?:index|codec|format|map|merge|projection)(?:\.d)?\.[jt]s$)|\/(?:sidebar-state|tui-preferences|constants)\.ts$|\/tui\/(?:file-logger|host-v1|vault-setup)\.tsx?$/
+  /\/(?:rpc|plugin|antigravity|hooks)\/|\/ga\/(?:server|rpc)\/|\/common-auth-embedded\/(?!quota\/(?:index|codec|format|map|merge|projection)(?:\.d)?\.[jt]s$)|\/(?:sidebar-state|tui-preferences|constants)\.ts$|\/tui\/(?:file-logger|host-v1)\.tsx?$/
 /** The only bare packages GA source may import; the host supplies each one. */
 const GA_EXTERNALS = new Set([
   'solid-js',

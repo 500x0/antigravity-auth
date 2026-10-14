@@ -503,3 +503,44 @@ describe('checkVaultQuota', () => {
     expect(fetched).toBe(0)
   })
 })
+
+it('bounds the first roster wait while keeping shared discovery available for the next request', async () => {
+  let finish!: () => void
+  const discovered = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  let refreshes = 0
+  const pool = createVaultAccountPool({
+    source: {
+      refresh: async () => {
+        refreshes++
+        await discovered
+        return undefined
+      },
+      routes: () => [
+        {
+          routeId: 'route',
+          credentialId: 'credential',
+          accountIdentity: 'identity',
+          label: 'Work',
+        },
+      ],
+      admit: async () => {
+        throw new Error('no send')
+      },
+      reportServedStatus: async () => false,
+    },
+  })
+  try {
+    await expect(pool.sync()).rejects.toThrow(
+      'The vault roster is not available yet',
+    )
+    expect(refreshes).toBe(1)
+    finish()
+    await pool.sync()
+    expect(refreshes).toBe(1)
+    expect(pool.selector.rows).toHaveLength(1)
+  } finally {
+    finish()
+  }
+}, 4_000)

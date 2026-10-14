@@ -454,3 +454,52 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/sidebar-state.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^.*newer\smajor\sversion\sstays\sbyte-identical\safter\smachine\sand\srouting\swrites\swhile\slater\swrites\sstill\ssucceed.*$']
+
+
+[[control]]
+id = "opencode-background-approval"
+guards = "A pending real menu enrollment is collected in the background, notices its requesting session once, and serves the next request from the vault."
+file = "packages/opencode/src/plugin/vault-custody.ts"
+old = "                  watching = waitForApproval()"
+new = "                  watching = Promise.resolve(undefined) // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/vault-approval.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-approval.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^live\senrollment\sswitches\sthe\sreal\sOpenCode\srequest\spaths\sV1\sbackground\sapproval\sswitches\sthe\snext\sloaded\srequest\swithout\slocal\scredentials$']
+
+[[control]]
+id = "opencode-fresh-approval-switch"
+guards = "The next request of an already loaded local plugin honors an externally written enrollment token before the observer tick."
+file = "packages/opencode/src/plugin/vault-custody.ts"
+old = "        record: authority === 'vault' ? CUSTODY_MODE : LOCAL_MODE,"
+new = "        record: LOCAL_MODE, // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/vault-approval.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-approval.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^live\senrollment\sswitches\sthe\sreal\sOpenCode\srequest\spaths\sV1\sexternal\stoken\sapproval\sswitches\sthe\snext\sloaded\srequest\swithout\slocal\scredentials$']
+
+[[control]]
+id = "opencode-blocked-approval-failure"
+guards = "A blocked request-access result remains a menu failure with the operator remedy, not a success string."
+file = "packages/opencode/src/plugin/vault-custody.ts"
+old = "                  ok: step.state === 'approved' || step.state === 'pending',"
+new = "                  ok: true, // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/vault-custody.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-custody.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^Vault\ssection\senrollment\sguidance\sexplains\sa\spending_exists\srefusal\sonce,\swith\sthe\swait\sand\sthe\soperator\sremedy$']
+
+[[control]]
+id = "opencode-vault-discovery-after-local-tick"
+guards = "A first roster wait that joined a local-authority observer starts fresh vault discovery after approval."
+file = "packages/opencode/src/plugin/vault-custody.ts"
+old = "            if (mode.ok && mode.record.mode === 'custody')"
+new = "            if (false && mode.ok && mode.record.mode === 'custody') // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/vault-custody.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-custody.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^starts\svault-authority\sdiscovery\swhen\sthe\srequest\sjoins\san\sold\slocal\sobservation$']

@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadCommonAuthClaustrum } from '@cortexkit/antigravity-auth-core'
 
+import { createVaultAccountPool } from './shared/vault-request-credentials.ts'
 import {
   createOpenCodeVaultCustody,
   OPENCODE_VAULT_ENROLLMENT_NAME,
@@ -33,6 +34,7 @@ const ENROLLMENT_TOKEN = 'ab'.repeat(32)
 
 let root: string
 let accountFile: string
+const custodies: ReturnType<typeof createOpenCodeVaultCustody>[] = []
 
 beforeEach(() => {
   // Build/test runners can put TMPDIR below a shared dependency directory.
@@ -44,7 +46,8 @@ beforeEach(() => {
   accountFile = join(root, 'config', 'antigravity-accounts.json')
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(custodies.splice(0).map((custody) => custody.dispose()))
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -52,10 +55,18 @@ afterEach(() => {
 function fakeEnrollmentService() {
   const proposals: { name: string }[] = []
   let approve = false
+  let denied = false
+  let blocked = false
   return {
     proposals,
     approveNext() {
       approve = true
+    },
+    denyNext() {
+      denied = true
+    },
+    blockNext() {
+      blocked = true
     },
     connect: async () => ({
       async enrollPropose(input: { name: string; requestSecretHash: string }) {
@@ -63,6 +74,15 @@ function fakeEnrollmentService() {
         return { requestId: 'request-1' }
       },
       async enrollPoll() {
+        if (denied) return { status: 'denied' as const }
+        if (blocked) {
+          const claustrum = await loadCommonAuthClaustrum()
+          throw new claustrum.ClaustrumCredentialError(
+            'invalid_request',
+            'permanent',
+            'gone',
+          )
+        }
         return approve
           ? {
               status: 'approved' as const,
@@ -82,22 +102,19 @@ function custodyWith(
   service = fakeEnrollmentService(),
   extra: Partial<OpenCodeVaultCustodyOptions> = {},
 ) {
-  return {
-    service,
-    custody: createOpenCodeVaultCustody({
-      accountFile,
-      readHostSlot: hostSlot,
-      reporterSource: 'direct',
-      connectionFile: () => join(root, 'vault-connection.json'),
-      connectEnrollment: service.connect,
-      connect: async () => {
-        throw new Error(
-          'the request-path vault client is not part of this test',
-        )
-      },
-      ...extra,
-    }),
-  }
+  const custody = createOpenCodeVaultCustody({
+    accountFile,
+    readHostSlot: hostSlot,
+    reporterSource: 'direct',
+    connectionFile: () => join(root, 'vault-connection.json'),
+    connectEnrollment: service.connect,
+    connect: async () => {
+      throw new Error('the request-path vault client is not part of this test')
+    },
+    ...extra,
+  })
+  custodies.push(custody)
+  return { service, custody }
 }
 
 describe('openCodeVaultPaths and the mode file', () => {
@@ -405,7 +422,7 @@ describe('Vault section enrollment guidance', () => {
     approve,
     `2. Grant read access: ${GRANT}`,
     'Both are needed: an approval without the grant serves this host no accounts.',
-    '3. Then choose Check vault approval here; once approved, accounts come from the vault.',
+    '3. OpenCode checks approval in the background and tells this session when the operator decides; once approved, accounts come from the vault.',
   ]
   const PENDING_EXISTS = [
     'An earlier request for antigravity-auth-opencode is still pending in the vault, possibly from an earlier, abandoned request on this host.',
@@ -430,14 +447,15 @@ describe('Vault section enrollment guidance', () => {
 
   it('gives the operator steps with the request ID while pending and offers no disconnect', async () => {
     const { custody } = custodyWith(async () => undefined)
-    expect(await runAction(custody, 'request-access')).toBe(
-      [
+    expect(await runAction(custody, 'request-access')).toEqual({
+      ok: true,
+      text: [
         'Vault access: waiting for operator approval',
         ...pendingSteps(
           '1. Approve the request: ck auth enroll approve --request-id request-1',
         ),
       ].join('\n'),
-    )
+    })
     const content = await custody.menuSection().build(invocation)
     expect(content.lines).toEqual([
       'Mode: this computer',
@@ -470,9 +488,12 @@ describe('Vault section enrollment guidance', () => {
         close() {},
       }),
     })
-    expect(await runAction(custody, 'request-access')).toBe(
-      ['Vault access: blocked (pending_exists)', ...PENDING_EXISTS].join('\n'),
-    )
+    expect(await runAction(custody, 'request-access')).toEqual({
+      ok: false,
+      text: ['Vault access: blocked (pending_exists)', ...PENDING_EXISTS].join(
+        '\n',
+      ),
+    })
     expect((await custody.menuSection().build(invocation)).lines).toEqual([
       'Mode: this computer',
       'Vault access: blocked (pending_exists)',
@@ -502,12 +523,13 @@ describe('Vault section enrollment guidance', () => {
         'Vault access: approved as antigravity-auth-opencode',
         ...NO_ACCOUNTS,
       ])
-      expect(await runAction(custody, 'request-access')).toBe(
-        [
+      expect(await runAction(custody, 'request-access')).toEqual({
+        ok: true,
+        text: [
           'Vault access: approved as antigravity-auth-opencode',
           ...NO_ACCOUNTS,
         ].join('\n'),
-      )
+      })
     } finally {
       await custody.dispose()
     }
@@ -536,4 +558,256 @@ describe('Vault section enrollment guidance', () => {
     ])
     expect(content.actions?.map((entry) => entry.id)).toContain('use-vault')
   })
+})
+
+describe('Vault menu background approval', () => {
+  async function request(
+    custody: ReturnType<typeof createOpenCodeVaultCustody>,
+    notify: (message: string, kind?: 'info' | 'warning' | 'error') => void,
+  ) {
+    const invocation = { notify }
+    const content = await custody.menuSection().build(invocation)
+    const action = content.actions?.find(
+      (entry) => entry.id === 'request-access',
+    )
+    if (!action) throw new Error('Missing vault request action')
+    return action.run({ values: {}, invocation })
+  }
+
+  it('collects approval in the background and reports it once to the first invocation', async () => {
+    const { custody, service } = custodyWith(async () => undefined)
+    const first: string[] = []
+    const second: string[] = []
+    let notified!: () => void
+    const notification = new Promise<void>((resolve) => {
+      notified = resolve
+    })
+    expect(
+      await request(custody, (message) => {
+        first.push(message)
+        notified()
+      }),
+    ).toMatchObject({ ok: true })
+    expect(
+      await request(custody, (message) => {
+        second.push(message)
+      }),
+    ).toMatchObject({ ok: true })
+    service.approveNext()
+    await Promise.race([
+      notification,
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('No background approval notice')),
+          4_000,
+        ),
+      ),
+    ])
+    expect(first).toHaveLength(1)
+    expect(first[0]).toContain('approved as antigravity-auth-opencode')
+    expect(second).toEqual([])
+    expect(await custody.readMode()).toEqual({
+      ok: true,
+      record: { version: 1, mode: 'custody' },
+    })
+  }, 6_000)
+
+  it('disposal cancels the wait without collecting or reporting a late approval', async () => {
+    const { custody, service } = custodyWith(async () => undefined)
+    const notices: string[] = []
+    expect(
+      await request(custody, (message) => {
+        notices.push(message)
+      }),
+    ).toMatchObject({ ok: true })
+    await custody.dispose()
+    service.approveNext()
+    await new Promise<void>((resolve) => setTimeout(resolve, 2_100))
+    expect(notices).toEqual([])
+    expect((await custody.status()).enrollment.state).toBe('pending')
+  })
+
+  it('stops when the local pending ceremony is disconnected rather than proposing again', async () => {
+    const { custody, service } = custodyWith(async () => undefined)
+    const notices: string[] = []
+    expect(
+      await request(custody, (message) => {
+        notices.push(message)
+      }),
+    ).toMatchObject({ ok: true })
+    await custody.useLocal()
+    await new Promise<void>((resolve) => setTimeout(resolve, 2_100))
+    expect(service.proposals).toHaveLength(1)
+    expect(notices).toEqual([])
+    expect((await custody.status()).enrollment.state).toBe('idle')
+  })
+})
+
+describe('Vault request failure outcomes', () => {
+  for (const state of [
+    'blocked',
+    'denied',
+    'unavailable',
+    'busy',
+    'idle',
+  ] as const) {
+    it(`returns a failure with remedy text for ${state}`, async () => {
+      const { custody } = custodyWith(async () => undefined)
+      custody.requestAccess = async () => {
+        const proposedName = OPENCODE_VAULT_ENROLLMENT_NAME
+        if (state === 'blocked')
+          return { state, proposedName, code: 'pending_exists' }
+        if (state === 'unavailable')
+          return { state, proposedName, code: 'connection-unavailable' }
+        return { state, proposedName }
+      }
+      const invocation = { notify: () => undefined }
+      const section = await custody.menuSection().build(invocation)
+      const action = section.actions?.find(
+        (entry) => entry.id === 'request-access',
+      )
+      if (!action) throw new Error('Missing vault action')
+      const result = await action.run({ invocation, values: {} })
+      if (typeof result === 'string')
+        throw new Error('Expected a failure outcome')
+      expect(result.ok).toBe(false)
+      expect(result.text).toContain('Vault access:')
+      if (state === 'blocked')
+        expect(result.text).toContain('ck auth enroll deny')
+      if (state === 'denied')
+        expect(result.text).toContain('request vault access again')
+      if (state === 'unavailable')
+        expect(result.text).toContain('connection file')
+    })
+  }
+
+  it('returns connection refusals as failures instead of a successful menu string', async () => {
+    const { custody } = custodyWith(async () => undefined, undefined, {
+      connectEnrollment: async () => {
+        throw new Error('synthetic vault connection refused')
+      },
+    })
+    const invocation = { notify: () => undefined }
+    const content = await custody.menuSection().build(invocation)
+    const action = content.actions?.find(
+      (entry) => entry.id === 'request-access',
+    )
+    expect(await action?.run({ invocation, values: {} })).toMatchObject({
+      ok: false,
+      text: expect.stringContaining('Check the vault connection'),
+    })
+  })
+
+  for (const outcome of ['denied', 'blocked'] as const) {
+    it(`reports a background ${outcome} once without resetting the terminal ceremony`, async () => {
+      const { custody, service } = custodyWith(async () => undefined)
+      const notices: { message: string; kind?: string }[] = []
+      let notified!: () => void
+      const notification = new Promise<void>((resolve) => {
+        notified = resolve
+      })
+      const invocation = {
+        notify: (message: string, kind?: 'info' | 'warning' | 'error') => {
+          notices.push({ message, kind })
+          notified()
+        },
+      }
+      const content = await custody.menuSection().build(invocation)
+      const action = content.actions?.find(
+        (entry) => entry.id === 'request-access',
+      )
+      expect(await action?.run({ invocation, values: {} })).toMatchObject({
+        ok: true,
+      })
+      if (outcome === 'denied') service.denyNext()
+      else service.blockNext()
+      await Promise.race([
+        notification,
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('No terminal enrollment notice')),
+            4_000,
+          ),
+        ),
+      ])
+      expect(notices).toHaveLength(1)
+      expect(notices[0]?.kind).toBe('warning')
+      expect(notices[0]?.message).toContain(outcome)
+      expect(service.proposals).toHaveLength(1)
+      expect((await custody.status()).enrollment.state).toBe(outcome)
+    }, 6_000)
+  }
+})
+
+it('starts vault-authority discovery when the request joins an old local observation', async () => {
+  const claustrum = await loadCommonAuthClaustrum()
+  let release!: () => void
+  let entered!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const observed = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  let firstRead = true
+  let lists = 0
+  const { custody, service } = custodyWith(async () => undefined, undefined, {
+    loadClaustrum: async () => ({
+      ...claustrum,
+      enrollmentAuthority: async (paths, name) => {
+        const authority = await claustrum.enrollmentAuthority(paths, name)
+        if (firstRead) {
+          firstRead = false
+          entered()
+          await held
+        }
+        return authority
+      },
+    }),
+    connect: async () => ({
+      listScoped: async () => {
+        lists++
+        return {
+          view: 'approved-view',
+          rows: [
+            {
+              id: 'credential',
+              accountId: 'identity',
+              credentialType: 'oauth',
+              createdAtMs: 1,
+              state: 'active',
+              recordVersion: 1,
+              categories: ['antigravity-native'],
+              serves: ['google'],
+              providerIds: ['google'],
+              operations: ['read'],
+              refreshAdapter: 'antigravity',
+            },
+          ],
+        }
+      },
+      getScoped: async () => {
+        throw new Error('no credential send')
+      },
+      reportAuthFailureScoped: async () => {},
+      close: () => {},
+    }),
+  })
+  try {
+    await custody.startObservation()
+    await observed
+    service.approveNext()
+    expect((await custody.requestAccess()).state).toBe('approved')
+    const pool = createVaultAccountPool({
+      source: await custody.custodySource(),
+    })
+    const pending = pool.sync()
+    release()
+    await pending
+    expect(lists).toBe(1)
+    expect(pool.selector.rows).toHaveLength(1)
+  } finally {
+    release()
+    await custody.dispose()
+  }
 })

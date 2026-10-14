@@ -303,6 +303,8 @@ export function createOpenCodeVaultCustody(
   let observedAuthority: EnrollmentAuthority | undefined
   let observing = false
   let closed = false
+  let watching: Promise<void> | undefined
+  let cancelWait: (() => void) | undefined
   const ensureSource = async (): Promise<AntigravityVaultAccountSource> => {
     if (closed) throw new OpenCodeVaultCustodyError('Vault custody is disposed')
     if (source) return source
@@ -321,7 +323,9 @@ export function createOpenCodeVaultCustody(
               connectionFile: await connectionFile(),
             })),
         isCustodyActive: async () => {
+          if (closed) return false
           const mode = await custody.readMode()
+          if (closed) return false
           const authority = !mode.ok
             ? 'unreadable'
             : mode.record.mode === 'custody'
@@ -341,9 +345,24 @@ export function createOpenCodeVaultCustody(
         ...(options.logger ? { logger: options.logger } : {}),
         ...(options.now ? { now: options.now } : {}),
       })
-      source = created
+      const activeSource: AntigravityVaultAccountSource = {
+        ...created,
+        refresh: async () => {
+          const roster = await created.refresh()
+          // A request can join an observer tick that read local authority just
+          // before approval. Its empty result is not vault discovery: retry
+          // through the consumer's shared in-flight slot under fresh authority.
+          if (!roster && !closed) {
+            const mode = await custody.readMode()
+            if (mode.ok && mode.record.mode === 'custody')
+              return created.refresh()
+          }
+          return roster
+        },
+      }
+      source = activeSource
       created.start()
-      return created
+      return activeSource
     })()
     try {
       return await creating
@@ -375,6 +394,72 @@ export function createOpenCodeVaultCustody(
     } catch {
       return []
     }
+  }
+
+  const connectStep = async (
+    resetTerminal: boolean,
+  ): Promise<EnrollmentStatus> => {
+    if (closed) throw new OpenCodeVaultCustodyError('Vault custody is disposed')
+    const claustrum = await loadClaustrum()
+    await ensureVaultDir(paths.dir)
+    const client = await (options.connectEnrollment
+      ? options.connectEnrollment()
+      : claustrum.connectClaustrumEnrollmentClient({
+          connectionFile: await connectionFile(),
+        }))
+    try {
+      if (closed)
+        throw new OpenCodeVaultCustodyError('Vault custody is disposed')
+      const manager = new claustrum.ClaustrumEnrollmentManager({
+        client,
+        paths: await enrollmentPaths(),
+        proposedName: OPENCODE_VAULT_ENROLLMENT_NAME,
+        ...(options.now ? { now: options.now } : {}),
+      })
+      const current = await manager.status()
+      if (
+        resetTerminal &&
+        (current.state === 'denied' || current.state === 'blocked')
+      )
+        await manager.resetTerminal()
+      return await manager.reconcile()
+    } finally {
+      client.close()
+    }
+  }
+
+  const stepText = async (step: EnrollmentStatus): Promise<string> =>
+    [
+      `Vault access: ${describeEnrollment(step)}`,
+      ...enrollmentGuidance(step),
+      ...(step.state === 'approved'
+        ? await approvedNextSteps((await custody.status()).mode)
+        : []),
+    ].join('\n')
+
+  const waitForApproval = async (): Promise<EnrollmentStatus | undefined> => {
+    while (!closed) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          cancelWait = undefined
+          resolve()
+        }
+        const timer = setTimeout(done, 2_000)
+        timer.unref?.()
+        cancelWait = done
+      })
+      if (closed) return undefined
+      const current = await readEnrollment()
+      // A disconnected ceremony has lost its request secret. Do not propose
+      // another request while the abandoned one may still be pending in the vault.
+      if (closed || current.state === 'idle') return undefined
+      if (current.state !== 'pending' && current.state !== 'busy')
+        return current
+      const step = await connectStep(false)
+      if (step.state !== 'pending' && step.state !== 'busy') return step
+    }
+    return undefined
   }
 
   const custody: OpenCodeVaultCustody = {
@@ -427,27 +512,7 @@ export function createOpenCodeVaultCustody(
     },
 
     async requestAccess() {
-      const claustrum = await loadClaustrum()
-      await ensureVaultDir(paths.dir)
-      const client = await (options.connectEnrollment
-        ? options.connectEnrollment()
-        : claustrum.connectClaustrumEnrollmentClient({
-            connectionFile: await connectionFile(),
-          }))
-      try {
-        const manager = new claustrum.ClaustrumEnrollmentManager({
-          client,
-          paths: await enrollmentPaths(),
-          proposedName: OPENCODE_VAULT_ENROLLMENT_NAME,
-          ...(options.now ? { now: options.now } : {}),
-        })
-        const current = await manager.status()
-        if (current.state === 'denied' || current.state === 'blocked')
-          await manager.resetTerminal()
-        return await manager.reconcile()
-      } finally {
-        client.close()
-      }
+      return connectStep(true)
     },
 
     async useVault() {
@@ -494,15 +559,48 @@ export function createOpenCodeVaultCustody(
                 status.enrollment.state === 'pending'
                   ? 'Check vault approval'
                   : 'Request vault access',
-              run: async () => {
-                const step = await custody.requestAccess()
-                return [
-                  `Vault access: ${describeEnrollment(step)}`,
-                  ...enrollmentGuidance(step),
-                  ...(step.state === 'approved'
-                    ? await approvedNextSteps((await custody.status()).mode)
-                    : []),
-                ].join('\n')
+              run: async ({ invocation }) => {
+                let step: EnrollmentStatus
+                try {
+                  step = await custody.requestAccess()
+                } catch (error) {
+                  return {
+                    ok: false,
+                    text: `Requesting vault access failed: ${error instanceof Error ? error.message : String(error)}. Check the vault connection and request access again.`,
+                  }
+                }
+                if (
+                  (step.state === 'pending' || step.state === 'busy') &&
+                  !watching &&
+                  !closed
+                ) {
+                  // All menu builds share one watch; its notice belongs to the
+                  // session that first requested access, not later menu visitors.
+                  watching = waitForApproval()
+                    .then(async (final) => {
+                      if (final === undefined || closed) return
+                      const text = await stepText(final)
+                      if (!closed)
+                        invocation.notify(
+                          text,
+                          final.state === 'approved' ? 'info' : 'warning',
+                        )
+                    })
+                    .catch((error: unknown) => {
+                      if (!closed)
+                        invocation.notify(
+                          `Requesting vault access failed: ${error instanceof Error ? error.message : String(error)}. Check the vault connection and request access again.`,
+                          'error',
+                        )
+                    })
+                    .finally(() => {
+                      watching = undefined
+                    })
+                }
+                return {
+                  ok: step.state === 'approved' || step.state === 'pending',
+                  text: await stepText(step),
+                }
               },
             },
           ]
@@ -527,7 +625,9 @@ export function createOpenCodeVaultCustody(
 
     dispose: async () => {
       closed = true
+      cancelWait?.()
       await closeSource()
+      await watching
     },
   }
   return custody
@@ -583,7 +683,7 @@ function pendingEnrollmentGuidance(requestId?: string): string[] {
       : `1. Approve the request: ck auth enroll approve --request-id ${requestId}`,
     `2. Grant read access: ${OPENCODE_VAULT_GRANT_COMMAND}`,
     'Both are needed: an approval without the grant serves this host no accounts.',
-    '3. Then choose Check vault approval here; once approved, accounts come from the vault.',
+    '3. OpenCode checks approval in the background and tells this session when the operator decides; once approved, accounts come from the vault.',
   ]
 }
 
@@ -614,6 +714,22 @@ function enrollmentGuidance(status: EnrollmentStatus): string[] {
     return pendingEnrollmentGuidance(status.requestId)
   if (status.state === 'blocked' && status.code === 'pending_exists')
     return pendingExistsGuidance()
+  if (status.state === 'denied')
+    return [
+      'The operator denied this request. Resolve access with the vault operator, then request vault access again.',
+    ]
+  if (status.state === 'blocked')
+    return [
+      'Resolve the enrollment problem with the vault operator, then request vault access again.',
+    ]
+  if (status.state === 'unavailable')
+    return [
+      'Check that the vault is running and its connection file is available, then request vault access again.',
+    ]
+  if (status.state === 'busy')
+    return [
+      'Another enrollment operation is running. OpenCode will keep checking its outcome in the background.',
+    ]
   return []
 }
 
