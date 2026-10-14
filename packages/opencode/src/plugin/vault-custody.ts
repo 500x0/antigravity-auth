@@ -34,6 +34,7 @@ import {
   loadCommonAuthFs,
   readVaultProviderState,
   resolveClaustrumConnectionPath,
+  sharedVaultTokenFolderOutcome,
   VAULT_ACCOUNT_REMEDY,
   type VaultLogger,
   type VaultProviderStateFile,
@@ -495,7 +496,17 @@ export function createOpenCodeVaultCustody(
                   ? 'Check vault approval'
                   : 'Request vault access',
               run: async () => {
-                const step = await custody.requestAccess()
+                let step: EnrollmentStatus
+                try {
+                  step = await custody.requestAccess()
+                } catch (error) {
+                  // A vault key the library refuses to save under a folder
+                  // other users share gets its own plain sentence; any other
+                  // error keeps the menu's generic failure.
+                  const refusal = sharedVaultTokenFolderOutcome(error)
+                  if (refusal) return refusal
+                  throw error
+                }
                 return [
                   `Vault access: ${describeEnrollment(step)}`,
                   ...enrollmentGuidance(step),

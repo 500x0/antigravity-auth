@@ -26,6 +26,9 @@ import {
   type PiVaultSetup,
   type PiVaultSetupStatus,
   piNoVaultAccountsGuidance,
+  VAULT_ACCOUNT_AVAILABLE,
+  VAULT_ACCOUNT_IN_USE,
+  VAULT_ACCOUNT_TURNED_OFF,
   vaultAccountName,
 } from './vault-setup.ts'
 
@@ -99,7 +102,7 @@ async function custodyAccounts(
   } catch (error) {
     return {
       list: [],
-      problem: `Vault accounts unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      problem: `Pi can't load the vault accounts right now: ${error instanceof Error ? error.message : String(error)}`,
     }
   }
 }
@@ -107,11 +110,11 @@ async function custodyAccounts(
 function localLoginLine(status: PiVaultSetupStatus): string {
   switch (status.hostSlot) {
     case 'dormant':
-      return 'The native Pi login is dormant while vault enrollment controls serving.'
+      return "Pi's own login is set aside while Pi uses the vault."
     case 'login':
       return "Signed in with Pi's own login. Pi's /login replaces it and /logout removes it."
     case 'placeholder':
-      return 'Pi holds the vault placeholder, not a login. Run /login, or serve from the vault in the Vault section.'
+      return "Not signed in with Pi's own login. Run /login, or choose Use the vault in the Vault section."
     case 'empty':
       return "Not signed in. Run Pi's /login to sign in."
   }
@@ -128,7 +131,9 @@ export function createPiAntigravityAccountSections(
         if (status.mode === 'unreadable')
           return {
             lines: [
-              `The vault mode file is unreadable (${status.modeProblem ?? 'unknown problem'}); Pi serves nothing until a mode is chosen in the Vault section.`,
+              status.modeProblem === undefined
+                ? "Pi can't tell whether to use the vault or its own login, so it sends no Antigravity requests. See the Vault section."
+                : `Pi can't tell whether to use the vault or its own login (${status.modeProblem}), so it sends no Antigravity requests. Choose one in the Vault section.`,
             ],
           }
         if (status.mode === 'local')
@@ -144,17 +149,17 @@ export function createPiAntigravityAccountSections(
           id: opaqueItemId(account.routeId),
           label: vaultAccountName(list, account),
           detail: account.declined
-            ? 'declined on this host'
+            ? VAULT_ACCOUNT_TURNED_OFF
             : account === serving
-              ? 'serving Pi'
-              : 'available',
+              ? VAULT_ACCOUNT_IN_USE
+              : VAULT_ACCOUNT_AVAILABLE,
         }))
         return {
           lines: [
-            'Pi serves Antigravity from the vault, one account at a time. Choose, decline or accept accounts in the Vault section.',
+            'Pi uses the vault for Antigravity, one account at a time. Choose an account, or turn accounts off and on, in the Vault section.',
             ...(status.hostSlot === 'login'
               ? [
-                  'Conflict: Pi also holds its own login. Requests are refused until /logout or a switch back to the local login.',
+                  "Pi is also signed in with its own login, so requests are refused. Run /logout, or switch back to Pi's own login in the Vault section.",
                 ]
               : []),
             ...(problem ? [problem] : []),
@@ -185,7 +190,7 @@ export function createPiAntigravityAccountSections(
         if (status.mode === 'unreadable')
           return {
             lines: [
-              'Vault enrollment authority is unreadable; requests are refused. Recover or Disconnect in the Vault section.',
+              "Pi can't read its vault setup, so requests are refused. See the Vault section.",
             ],
           }
         if (status.mode !== 'custody')
@@ -203,7 +208,7 @@ export function createPiAntigravityAccountSections(
         )
           return {
             lines: [
-              'The vault serves Pi no accounts, so requests are refused. There is no account rotation.',
+              'The vault gives Pi no accounts, so requests are refused. There is no account rotation.',
               ...piNoVaultAccountsGuidance(),
             ],
           }

@@ -12,6 +12,9 @@ import type { CommonAuthClaustrumModule } from '@cortexkit/antigravity-auth-core
 import {
   ANTIGRAVITY_PROVIDER_ID,
   enrollmentAuthority,
+  sharedVaultTokenFolder,
+  sharedVaultTokenFolderOutcome,
+  sharedVaultTokenFolderText,
 } from '@cortexkit/antigravity-auth-core'
 import { writeJsonAtomic } from '@cortexkit/antigravity-auth-core/atomic-write'
 import type {
@@ -92,18 +95,21 @@ export function readPiVaultMode(path: string): PiVaultModeRead {
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT')
       return { ok: true, record: LOCAL_MODE }
-    return { ok: false, reason: 'the vault mode file could not be read' }
+    return { ok: false, reason: 'its vault settings file could not be read' }
   }
   let raw: unknown
   try {
     raw = JSON.parse(text)
   } catch {
-    return { ok: false, reason: 'the vault mode file is not valid JSON' }
+    return { ok: false, reason: 'its vault settings file is damaged' }
   }
   const record = parseModeRecord(raw)
   return record
     ? { ok: true, record }
-    : { ok: false, reason: 'the vault mode file has an unknown shape' }
+    : {
+        ok: false,
+        reason: 'its vault settings file holds settings it does not understand',
+      }
 }
 
 export async function writePiVaultMode(
@@ -289,7 +295,7 @@ export class PiVaultSetup {
       )
     if (enrollment.state !== 'approved')
       throw new PiVaultSetupError(
-        'Pi is not enrolled with the vault yet. Request access and wait for the operator to approve it first.',
+        "Pi doesn't have vault access yet. Choose Request vault access and wait for the vault operator to approve it.",
       )
     if (routeId !== undefined && routeId.trim() === '')
       throw new PiVaultSetupError('Choose a vault account to use.')
@@ -312,7 +318,7 @@ export class PiVaultSetup {
       )) !== 'local'
     ) {
       throw new PiVaultSetupError(
-        'Disconnect vault enrollment before using local accounts.',
+        "Disconnect from the vault before switching to Pi's own login.",
       )
     }
     await writePiVaultMode(this.#options.modeFile, LOCAL_MODE)
@@ -332,7 +338,7 @@ export class PiVaultSetup {
     )
     if (result === 'busy')
       throw new PiVaultSetupError(
-        'Vault enrollment is busy; disconnect did not change it.',
+        'Another vault setup step is running, so Pi is still connected to the vault. Try again in a moment.',
       )
     await writePiVaultMode(this.#options.modeFile, LOCAL_MODE)
     await this.#options.onModeChanged?.(LOCAL_MODE)
@@ -343,24 +349,35 @@ export class PiVaultSetup {
 // Rendering through Pi's command and dialog surfaces
 // ---------------------------------------------------------------------------
 
+/**
+ * One line on where Pi's request for vault access stands. A vault code
+ * follows the explanation as a reference the user can quote to the vault
+ * operator; it never replaces the explanation.
+ */
 function describeEnrollment(status: ClaustrumEnrollmentStatus): string {
   switch (status.state) {
     case 'idle':
-      return 'not requested'
+      return 'Vault access: not requested yet.'
     case 'pending':
       return status.retryCode
-        ? `waiting for operator approval (retrying: ${status.retryCode})`
-        : 'waiting for operator approval'
+        ? `Vault access: the vault can't take Pi's request right now; Pi asks again the next time it checks (reference: ${status.retryCode}).`
+        : 'Vault access: waiting for the vault operator to approve this request.'
     case 'approved':
-      return `approved as ${status.approvedName ?? status.proposedName}`
+      return 'Vault access: approved by the vault operator.'
     case 'denied':
-      return 'denied by the operator'
+      return 'Vault access: the vault operator denied the request. Choose Request vault access to ask again.'
     case 'blocked':
-      return `blocked (${status.code})`
+      if (status.code === 'pending_exists')
+        return 'Vault access: the vault turned down a new request because an earlier request from Pi is still waiting.'
+      if (status.code === 'missing_token')
+        return "Vault access: approved, but Pi's vault key is missing from this computer. Disconnect from the vault, then request vault access again."
+      if (status.code === 'unreadable-state')
+        return "Vault access: Pi can't read its record of the vault request. Disconnect from the vault, then request vault access again."
+      return `Vault access: the vault ended this request (reference: ${status.code}). Choose Request vault access to start a new one.`
     case 'unavailable':
-      return `vault unavailable (${status.code})`
+      return `Vault access: Pi can't reach the vault right now. Try again later (reference: ${status.code}).`
     case 'busy':
-      return 'another setup step is running'
+      return 'Vault access: another vault setup step is running. Try again in a moment.'
   }
 }
 
@@ -376,11 +393,11 @@ function piPendingEnrollmentGuidance(requestId?: string): string[] {
   return [
     'Next, the vault operator runs these outside Pi:',
     requestId === undefined
-      ? '1. Find the request ID with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>'
+      ? `1. Find the request from ${PI_ANTIGRAVITY_ENROLLMENT_NAME} with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>`
       : `1. Approve the request: ck auth enroll approve --request-id ${requestId}`,
     `2. Grant read access: ${PI_VAULT_GRANT_COMMAND}`,
-    'Both are needed: an approval without the grant serves Pi no accounts.',
-    '3. Pi switches to the vault once it sees the approval; Request vault access checks again.',
+    'Both are needed: without the grant, Pi can see no accounts in the vault.',
+    '3. Pi switches to the vault once it sees the approval. Choose Request vault access to check again.',
   ]
 }
 
@@ -392,17 +409,17 @@ function piPendingEnrollmentGuidance(requestId?: string): string[] {
  */
 function piPendingExistsGuidance(): string[] {
   return [
-    `An earlier request for ${PI_ANTIGRAVITY_ENROLLMENT_NAME} is still pending in the vault, possibly from an enrollment forgotten here.`,
+    'The earlier request may come from a vault setup that was disconnected here before the operator answered it.',
     'It expires 15 minutes after it was made; request vault access again after that.',
-    'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+    `Or the vault operator clears it now: find the request from ${PI_ANTIGRAVITY_ENROLLMENT_NAME} with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.`,
   ]
 }
 
 /** Shown when Pi is approved but the vault lists no Antigravity accounts for it. */
 export function piNoVaultAccountsGuidance(): string[] {
   return [
-    `Enrollment is approved, but the vault serves ${PI_ANTIGRAVITY_ENROLLMENT_NAME} no Antigravity accounts.`,
-    `The vault operator grants read access with: ${PI_VAULT_GRANT_COMMAND}`,
+    "The vault operator approved Pi, but Pi can't see any Antigravity accounts in the vault yet.",
+    `If the operator has not granted Pi read access yet, they run: ${PI_VAULT_GRANT_COMMAND}`,
   ]
 }
 
@@ -415,38 +432,34 @@ function enrollmentGuidance(status: ClaustrumEnrollmentStatus): string[] {
   return []
 }
 
-function describeHostSlot(slot: HostSlotContent): string {
-  switch (slot) {
-    case 'login':
-      return 'signed in with a Pi login'
-    case 'placeholder':
-      return 'holds the vault placeholder'
-    case 'empty':
-      return 'empty'
+/**
+ * Where Pi gets its Antigravity accounts, in one line that also says whether
+ * Pi's own login is signed in. A `placeholder` in Pi's credential store is the
+ * stand-in entry Pi keeps while the vault serves it; it is not a login, so it
+ * reads the same as no login at all.
+ */
+function describeSource(status: PiVaultSetupStatus): string {
+  switch (status.mode) {
+    case 'custody':
+      return "Using the vault for Antigravity accounts; Pi's own login is set aside."
+    case 'local':
+      return status.hostSlot === 'login'
+        ? "Using Pi's own login (the account you signed in with /login), not the vault."
+        : status.hostSlot === 'dormant'
+          ? "Using Pi's own login, not the vault."
+          : "Using Pi's own login, not the vault, but you are not signed in. Run /login to sign in."
+    case 'unreadable':
+      return status.modeProblem === undefined
+        ? "Pi can't tell whether to use the vault or its own login, so it sends no Antigravity requests."
+        : `Pi can't tell whether to use the vault or its own login (${status.modeProblem}), so it sends no Antigravity requests.`
   }
 }
 
 /** Setup-menu status text with no credentials or Antigravity project identifiers. */
 export function formatPiVaultSetupStatus(status: PiVaultSetupStatus): string[] {
-  const lines = [
-    `Mode: ${
-      status.mode === 'custody'
-        ? 'vault (custody)'
-        : status.mode === 'local'
-          ? 'local Pi login'
-          : `unreadable (${status.modeProblem ?? 'unknown problem'})`
-    }`,
-    `Enrollment (${PI_ANTIGRAVITY_ENROLLMENT_NAME}): ${describeEnrollment(status.enrollment)}`,
-    status.hostSlot === 'dormant'
-      ? 'Pi auth slot: dormant (not read)'
-      : `Pi auth slot: ${describeHostSlot(status.hostSlot)}`,
-  ]
-  if (status.selectedRouteId !== undefined)
-    lines.push('Vault account: a specific account is chosen (marked below)')
-  if (status.mode === 'local' && status.hostSlot === 'placeholder')
-    lines.push(
-      'Conflict: local mode has no login to serve. Run /login or switch to the vault.',
-    )
+  const lines = [describeSource(status), describeEnrollment(status.enrollment)]
+  if (status.mode === 'custody' && status.selectedRouteId !== undefined)
+    lines.push('Pi uses the vault account marked "in use by Pi" below.')
   lines.push(...enrollmentGuidance(status.enrollment))
   return lines
 }
@@ -491,6 +504,11 @@ export function vaultAccountName(
   return `Vault account ${listed.indexOf(account) + 1}`
 }
 
+/** A vault account's state as its menu row shows it, in the Vault and Accounts sections alike. */
+export const VAULT_ACCOUNT_IN_USE = 'in use by Pi'
+export const VAULT_ACCOUNT_AVAILABLE = 'available'
+export const VAULT_ACCOUNT_TURNED_OFF = 'turned off for Pi on this computer'
+
 export function opaqueItemId(routeId: string): string {
   return `vault-${createHash('sha256').update(ITEM_ID_SALT).update(routeId).digest('hex').slice(0, 16)}`
 }
@@ -502,6 +520,17 @@ function errorText(error: unknown): string {
 function refused(error: unknown): ActionOutcome {
   if (error instanceof PiVaultSetupError)
     return { ok: false, text: error.message, code: 'vault-refused' }
+  throw error
+}
+
+/**
+ * A failed result naming the folder when the vault library refused to save
+ * Pi's vault key under a folder other users share; any other error is
+ * rethrown for the menu's generic failure handling.
+ */
+function sharedFolderRefusal(error: unknown): ActionOutcome {
+  const outcome = sharedVaultTokenFolderOutcome(error)
+  if (outcome) return outcome
   throw error
 }
 
@@ -564,7 +593,7 @@ export function createPiVaultSection(
     suffix = '',
   ): Promise<string> =>
     [
-      `Enrollment: ${describeEnrollment(step)}${suffix}`,
+      `${describeEnrollment(step)}${suffix}`,
       ...enrollmentGuidance(step),
       ...(step.state === 'approved' ? await approvedRosterGuidance() : []),
     ].join('\n')
@@ -591,42 +620,42 @@ export function createPiVaultSection(
               id: opaqueItemId(account.routeId),
               label: name,
               detail: account.declined
-                ? 'declined on this host'
+                ? VAULT_ACCOUNT_TURNED_OFF
                 : serving
-                  ? 'serving Pi'
-                  : 'available',
+                  ? VAULT_ACCOUNT_IN_USE
+                  : VAULT_ACCOUNT_AVAILABLE,
               actions: account.declined
                 ? [
                     {
                       id: 'accept',
-                      label: 'Accept on this host',
+                      label: 'Turn back on for Pi',
                       run: async () => {
                         await port.accept(account.routeId)
-                        return `${name} is accepted on this host.`
+                        return `Pi can use ${name} again.`
                       },
                     },
                   ]
                 : [
                     {
                       id: 'use',
-                      label: 'Serve Pi from this account',
+                      label: 'Use this account',
                       run: async () => {
                         try {
                           await setup.useVault(account.routeId)
                         } catch (error) {
                           return refused(error)
                         }
-                        return `Pi now serves Antigravity from ${name}.`
+                        return `Pi now uses ${name} for Antigravity.`
                       },
                     },
                     {
                       id: 'decline',
-                      label: 'Decline on this host',
+                      label: 'Turn off for Pi',
                       description:
-                        'It stays in the vault and in this list, and is never sent from this host until accepted again.',
+                        'The account stays in the vault and in this list, but Pi on this computer never uses it until you turn it back on.',
                       run: async () => {
                         await port.decline(account.routeId)
-                        return `${name} is declined on this host.`
+                        return `Pi on this computer won't use ${name} until you turn it back on.`
                       },
                     },
                   ],
@@ -635,10 +664,12 @@ export function createPiVaultSection(
           if (listed.length === 0) lines.push(...piNoVaultAccountsGuidance())
           else if (status.mode !== 'custody')
             lines.push(
-              'Next: choose Serve Pi from the vault to serve Pi from these accounts.',
+              'Next: choose Use the vault to have Pi use these accounts.',
             )
         } catch (error) {
-          lines.push(`Vault accounts unavailable: ${errorText(error)}`)
+          lines.push(
+            `Pi can't load the vault accounts right now: ${errorText(error)}`,
+          )
         }
       }
 
@@ -647,9 +678,15 @@ export function createPiVaultSection(
         actions.push({
           id: 'request-access',
           label: 'Request vault access',
-          description: `Asks the vault to enroll Pi as ${PI_ANTIGRAVITY_ENROLLMENT_NAME}; the operator approves it in the vault.`,
+          description:
+            "Asks the vault operator to let Pi use the vault's Antigravity accounts.",
           run: async ({ invocation }) => {
-            const step = await setup.connectStep()
+            let step: ClaustrumEnrollmentStatus
+            try {
+              step = await setup.connectStep()
+            } catch (error) {
+              return sharedFolderRefusal(error)
+            }
             if (step.state !== 'pending' && step.state !== 'busy')
               return {
                 ok: step.state === 'approved',
@@ -668,8 +705,11 @@ export function createPiVaultSection(
                   )
                 })
                 .catch((error: unknown) => {
+                  const folder = sharedVaultTokenFolder(error)
                   invocation.notify(
-                    `Requesting vault access failed: ${errorText(error)}`,
+                    folder === undefined
+                      ? `Requesting vault access failed: ${errorText(error)}`
+                      : sharedVaultTokenFolderText(folder),
                     'error',
                   )
                 })
@@ -681,7 +721,7 @@ export function createPiVaultSection(
               ok: true,
               text: await stepText(
                 step,
-                '. You are told here when the operator decides.',
+                ' Pi tells you here when the operator decides.',
               ),
             }
           },
@@ -689,14 +729,14 @@ export function createPiVaultSection(
       if (approved && status.mode !== 'custody')
         actions.push({
           id: 'use-vault',
-          label: 'Serve Pi from the vault',
+          label: 'Use the vault',
           run: async () => {
             try {
               await setup.useVault(status.selectedRouteId)
             } catch (error) {
               return refused(error)
             }
-            return 'Pi now serves Antigravity from the vault.'
+            return 'Pi now uses the vault for Antigravity.'
           },
         })
       if (
@@ -707,10 +747,10 @@ export function createPiVaultSection(
       )
         actions.push({
           id: 'use-local',
-          label: 'Serve Pi from its own login',
+          label: "Use Pi's own login",
           run: async () => {
             await setup.useLocal()
-            return 'Pi now serves Antigravity from its own login. Run /login if it has none.'
+            return "Pi now uses its own login for Antigravity. Run /login if you haven't signed in."
           },
         })
       // No Forget while a request is pending: the vault has no way to withdraw
@@ -719,19 +759,20 @@ export function createPiVaultSection(
       // the operator approves or denies the request.
       if (status.enrollment.state === 'pending')
         lines.push(
-          `Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id ${status.enrollment.requestId ?? '<id>'}; then choose Request vault access here.`,
+          `You can't disconnect while this request waits for the vault operator. To withdraw it, ask the vault operator to run ck auth enroll deny --request-id ${status.enrollment.requestId ?? '<id>'}, then choose Request vault access here so Pi sees the answer.`,
         )
       else if (status.enrollment.state !== 'idle')
         actions.push({
           id: 'forget',
-          label: 'Forget vault enrollment',
+          label: 'Disconnect from the vault',
           description:
-            "Deletes Pi's enrollment token and returns to the local login. The operator can still revoke the enrollment in the vault.",
+            "Removes Pi's vault key from this computer and goes back to Pi's own login. Using the vault here again needs a new request and a new approval. The earlier approval stays in the vault until the vault operator revokes it.",
           irreversible: true,
-          confirm: `Forget the ${PI_ANTIGRAVITY_ENROLLMENT_NAME} enrollment? Using the vault again needs a new approval.`,
+          confirm:
+            'Disconnect this computer from the vault? Pi goes back to its own login, and using the vault here again needs a new approval from the vault operator.',
           run: async () => {
             await setup.disconnect()
-            return 'Vault enrollment forgotten; Pi serves Antigravity from its own login.'
+            return 'Disconnected from the vault. Pi now uses its own login for Antigravity.'
           },
         })
 

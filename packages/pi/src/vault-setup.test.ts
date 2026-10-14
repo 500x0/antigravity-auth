@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -180,9 +188,7 @@ describe('Pi vault setup', () => {
     expect(status.hostSlot).toBe('dormant')
     const text = `${JSON.stringify(status)}\n${formatPiVaultSetupStatus(status).join('\n')}`
     expect(text).not.toContain(ENROLLMENT_SECRET)
-    expect(formatPiVaultSetupStatus(status)).toContain(
-      'Pi auth slot: dormant (not read)',
-    )
+    expect(formatPiVaultSetupStatus(status)).toContain(CUSTODY)
   })
 
   it('runs the enrollment ceremony only from an explicit step and closes each connection', async () => {
@@ -240,9 +246,7 @@ describe('Pi vault setup', () => {
     hostSlot = claustrum.custodyPlaceholder(PI_ANTIGRAVITY_PROVIDER_ID)
     await setup.useVault()
     const before = await readFile(modeFile, 'utf8')
-    await expect(setup.useLocal()).rejects.toThrow(
-      'Disconnect vault enrollment',
-    )
+    await expect(setup.useLocal()).rejects.toThrow('Disconnect from the vault')
     expect(await readFile(modeFile, 'utf8')).toBe(before)
     await setup.disconnect()
     await setup.useLocal()
@@ -344,7 +348,7 @@ describe('Pi vault menu section', () => {
     ).toMatchObject({ ok: true })
     for (let i = 0; i < 20 && call.notices.length === 0; i++) await Bun.sleep(1)
     expect(call.notices.at(-1)).toEqual({
-      message: 'Enrollment: approved as antigravity-auth-pi',
+      message: APPROVED,
       kind: 'info',
     })
     expect(endpoint.calls.closed).toBe(endpoint.calls.opened)
@@ -358,7 +362,7 @@ describe('Pi vault menu section', () => {
     )
     expect(content.items?.map((item) => [item.label, item.detail])).toEqual([
       ['Vault account 1', 'available'],
-      ['Vault account 2', 'declined on this host'],
+      ['Vault account 2', 'turned off for Pi on this computer'],
     ])
     await action(content, 'decline', 'Vault account 1').run({
       values: {},
@@ -411,7 +415,9 @@ describe('Pi vault menu section', () => {
     )
     const forget = action(content, 'forget')
     expect(forget.irreversible).toBe(true)
-    expect(forget.confirm).toContain('antigravity-auth-pi')
+    expect(forget.confirm).toBe(
+      'Disconnect this computer from the vault? Pi goes back to its own login, and using the vault here again needs a new approval from the vault operator.',
+    )
     await forget.run({ values: {}, invocation: invocation().value })
     expect(existsSync(setup.paths.tokenPath)).toBe(false)
   })
@@ -435,7 +441,7 @@ describe('Pi vault menu section', () => {
       second.items?.map((item) => item.id),
     )
     expect(new Set(first.items?.map((item) => item.id)).size).toBe(2)
-    expect(first.items?.[0]?.detail).toBe('serving Pi')
+    expect(first.items?.[0]?.detail).toBe('in use by Pi')
   })
 })
 
@@ -487,13 +493,24 @@ it('waits for the native credential-slot transition before enrollment activation
 const GRANT =
   'ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read'
 
+// The Vault section's status lines, as a newcomer reads them.
+const LOCAL =
+  "Using Pi's own login, not the vault, but you are not signed in. Run /login to sign in."
+const CUSTODY =
+  "Using the vault for Antigravity accounts; Pi's own login is set aside."
+const WAITING =
+  'Vault access: waiting for the vault operator to approve this request.'
+const APPROVED = 'Vault access: approved by the vault operator.'
+const PENDING_EXISTS_STATE =
+  'Vault access: the vault turned down a new request because an earlier request from Pi is still waiting.'
+
 function pendingSteps(approve: string): string[] {
   return [
     'Next, the vault operator runs these outside Pi:',
     approve,
     `2. Grant read access: ${GRANT}`,
-    'Both are needed: an approval without the grant serves Pi no accounts.',
-    '3. Pi switches to the vault once it sees the approval; Request vault access checks again.',
+    'Both are needed: without the grant, Pi can see no accounts in the vault.',
+    '3. Pi switches to the vault once it sees the approval. Choose Request vault access to check again.',
   ]
 }
 
@@ -501,14 +518,14 @@ const APPROVE_REQUEST_1 =
   '1. Approve the request: ck auth enroll approve --request-id request-1'
 
 const PENDING_EXISTS = [
-  'An earlier request for antigravity-auth-pi is still pending in the vault, possibly from an enrollment forgotten here.',
+  'The earlier request may come from a vault setup that was disconnected here before the operator answered it.',
   'It expires 15 minutes after it was made; request vault access again after that.',
-  'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+  'Or the vault operator clears it now: find the request from antigravity-auth-pi with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
 ]
 
 const NO_ACCOUNTS = [
-  'Enrollment is approved, but the vault serves antigravity-auth-pi no Antigravity accounts.',
-  `The vault operator grants read access with: ${GRANT}`,
+  "The vault operator approved Pi, but Pi can't see any Antigravity accounts in the vault yet.",
+  `If the operator has not granted Pi read access yet, they run: ${GRANT}`,
 ]
 
 /**
@@ -592,18 +609,17 @@ describe('Pi vault enrollment guidance', () => {
     ).toEqual({
       ok: true,
       text: [
-        'Enrollment: waiting for operator approval. You are told here when the operator decides.',
+        `${WAITING} Pi tells you here when the operator decides.`,
         ...pendingSteps(APPROVE_REQUEST_1),
       ].join('\n'),
     })
 
     const content = await build(section)
     expect(content.lines).toEqual([
-      'Mode: local Pi login',
-      'Enrollment (antigravity-auth-pi): waiting for operator approval',
-      'Pi auth slot: empty',
+      LOCAL,
+      WAITING,
       ...pendingSteps(APPROVE_REQUEST_1),
-      'Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id request-1; then choose Request vault access here.',
+      "You can't disconnect while this request waits for the vault operator. To withdraw it, ask the vault operator to run ck auth enroll deny --request-id request-1, then choose Request vault access here so Pi sees the answer.",
     ])
     expect(content.actions?.map((entry) => entry.id)).toEqual([
       'request-access',
@@ -624,9 +640,7 @@ describe('Pi vault enrollment guidance', () => {
     // the enrollment lock and gone back to sleep: wake it too.
     held.release()
     await settle(() => call.notices.length > 1)
-    expect(call.notices).toEqual([
-      { message: 'Enrollment: approved as antigravity-auth-pi', kind: 'info' },
-    ])
+    expect(call.notices).toEqual([{ message: APPROVED, kind: 'info' }])
   })
 
   it('says where to find the request ID when Pi does not know it', async () => {
@@ -640,11 +654,11 @@ describe('Pi vault enrollment guidance', () => {
     const content = await build(
       createPiVaultSection({ setup: async () => setup }),
     )
-    expect(content.lines?.slice(3)).toEqual([
+    expect(content.lines?.slice(2)).toEqual([
       ...pendingSteps(
-        '1. Find the request ID with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>',
+        '1. Find the request from antigravity-auth-pi with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>',
       ),
-      'Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id <id>; then choose Request vault access here.',
+      "You can't disconnect while this request waits for the vault operator. To withdraw it, ask the vault operator to run ck auth enroll deny --request-id <id>, then choose Request vault access here so Pi sees the answer.",
     ])
   })
 
@@ -665,18 +679,14 @@ describe('Pi vault enrollment guidance', () => {
     await settle(() => call.notices.length > 0, EXPECTED_MS)
     expect(call.notices).toEqual([
       {
-        message: [
-          'Enrollment: approved as antigravity-auth-pi',
-          ...NO_ACCOUNTS,
-        ].join('\n'),
+        message: [APPROVED, ...NO_ACCOUNTS].join('\n'),
         kind: 'info',
       },
     ])
 
     expect((await build(section)).lines).toEqual([
-      'Mode: vault (custody)',
-      'Enrollment (antigravity-auth-pi): approved as antigravity-auth-pi',
-      'Pi auth slot: dormant (not read)',
+      CUSTODY,
+      APPROVED,
       ...NO_ACCOUNTS,
     ])
   })
@@ -705,10 +715,9 @@ describe('Pi vault enrollment guidance', () => {
       }),
     )
     expect(content.lines).toEqual([
-      'Mode: local Pi login',
-      'Enrollment (antigravity-auth-pi): approved as antigravity-auth-pi',
-      'Pi auth slot: empty',
-      'Next: choose Serve Pi from the vault to serve Pi from these accounts.',
+      LOCAL,
+      APPROVED,
+      'Next: choose Use the vault to have Pi use these accounts.',
     ])
     expect(content.actions?.map((entry) => entry.id)).toContain('use-vault')
   })
@@ -729,18 +738,15 @@ describe('Pi vault enrollment guidance', () => {
       }),
     ).toEqual({
       ok: false,
-      text: ['Enrollment: blocked (pending_exists)', ...PENDING_EXISTS].join(
-        '\n',
-      ),
+      text: [PENDING_EXISTS_STATE, ...PENDING_EXISTS].join('\n'),
     })
     await settle()
     expect(call.notices).toEqual([])
 
     const content = await build(section)
     expect(content.lines).toEqual([
-      'Mode: local Pi login',
-      'Enrollment (antigravity-auth-pi): blocked (pending_exists)',
-      'Pi auth slot: empty',
+      LOCAL,
+      PENDING_EXISTS_STATE,
       ...PENDING_EXISTS,
     ])
     expect(content.actions?.map((entry) => entry.id)).toEqual([
@@ -801,11 +807,75 @@ describe('Pi vault enrollment guidance', () => {
       }),
     ).toEqual({
       ok: false,
-      text: ['Enrollment: blocked (pending_exists)', ...PENDING_EXISTS].join(
-        '\n',
-      ),
+      text: [PENDING_EXISTS_STATE, ...PENDING_EXISTS].join('\n'),
     })
     await settle()
     expect([...call.notices, ...retry.notices]).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// A vault key the vault library refuses to save under a shared folder
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.platform === 'win32')(
+  'Pi vault key under a shared folder',
+  () => {
+    /**
+     * Pi's vault folder below a folder its group can write. The sticky bit
+     * makes the vault client refuse it even on hosts where the user has a
+     * private group (which it would otherwise trust); the embedded state
+     * checks accept sticky folders, so the request reaches the key write.
+     */
+    async function sharedFolderSetup(script: PollStep[]) {
+      const shared = join(dir, 'shared')
+      await mkdir(shared, { mode: 0o700 })
+      await chmod(shared, 0o1770)
+      const setup = new PiVaultSetup({
+        claustrum,
+        stateDir: join(shared, 'vault'),
+        modeFile,
+        readHostSlot: () => hostSlot,
+        connectEnrollment: enrollmentEndpoint(script).connect,
+      })
+      return { setup, shared: await realpath(shared) }
+    }
+
+    const sentence = (folder: string) =>
+      `The vault key can't be saved because the folder ${folder} can be changed by other users. Make that folder owned by you and not writable by your group or by others, then try again.`
+
+    it('reports the refusal as a failure that names the folder, without the raw error', async () => {
+      const { setup, shared } = await sharedFolderSetup(['approved'])
+      const section = createPiVaultSection({ setup: async () => setup })
+      const result = await action(await build(section), 'request-access').run({
+        values: {},
+        invocation: invocation().value,
+      })
+      expect(result).toEqual({
+        ok: false,
+        code: 'vault-folder-shared',
+        text: sentence(shared),
+      })
+      expect(JSON.stringify(result)).not.toContain('not private')
+    })
+
+    it('tells the waiting session the same sentence when the approval arrives later', async () => {
+      const { setup, shared } = await sharedFolderSetup(['pending', 'approved'])
+      const section = createPiVaultSection({
+        setup: async () => setup,
+        wait: { pollIntervalMs: 0, sleep: async () => {} },
+      })
+      const call = invocation()
+      expect(
+        await action(await build(section), 'request-access').run({
+          values: {},
+          invocation: call.value,
+        }),
+      ).toMatchObject({ ok: true })
+      await settle(() => call.notices.length > 0, EXPECTED_MS)
+      expect(call.notices).toEqual([
+        { message: sentence(shared), kind: 'error' },
+      ])
+    })
+  },
+)
