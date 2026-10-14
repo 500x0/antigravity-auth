@@ -75,6 +75,42 @@ it('refuses a parent born after the candidate child', () => {
   expect(owned.observed.has(child.pid)).toBe(false)
 })
 
+it.skipIf(process.platform !== 'linux')(
+  'includes unmatched candidate proc diagnostics when refusing ancestry through init',
+  () => {
+    const capturedLeader = { ...leader, pid: process.pid + 1 }
+    const owned: PublicCommandScope = {
+      leader: capturedLeader,
+      observed: new Map([[capturedLeader.pid, capturedLeader]]),
+      signals: [],
+    }
+    const orphan = { ...child, pid: process.pid, ppid: 1 }
+    const init = { ...leader, pid: 1, ppid: 0, pgid: 1, sid: 1, start: 1n }
+    let message = ''
+    try {
+      inspectPublicCommandScope(
+        owned,
+        inspector([capturedLeader, orphan, init]),
+      )
+    } catch (error) {
+      message = String(error)
+    }
+    expect(message).toContain('owned process left captured session/group scope')
+    const diagnostic = JSON.parse(message.split('; unmatched ancestry: ')[1]!)
+    expect(diagnostic.member.pid).toBe(process.pid)
+    expect(diagnostic.member.start).toBe('120')
+    expect(diagnostic.leader.start).toBe('100')
+    expect(
+      diagnostic.chain.map((member: { pid: number }) => member.pid),
+    ).toEqual([process.pid])
+    expect(diagnostic.proc.cmdline).toContain(process.argv0)
+    expect(diagnostic.proc.cmdline).toContain('test')
+    expect(diagnostic.proc.status).toContain(`Pid:\t${process.pid}\n`)
+    expect([...owned.observed.keys()]).toEqual([capturedLeader.pid])
+    expect(owned.signals).toEqual([])
+  },
+)
+
 it('refuses a reused captured ancestor before admitting its candidate child', () => {
   const owned = scope()
   owned.observed.set(parent.pid, parent)

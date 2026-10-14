@@ -173,8 +173,11 @@ test('phase clock reports a synchronous child wait from an independent wrapper',
     import { withBuildPhaseClock, buildSyncPhase } from ${JSON.stringify(import.meta.resolve('../scripts/build-phase-clock.ts'))};
     await withBuildPhaseClock('blocked build', 50, async () => {
       buildSyncPhase('child spawn compiler', () => {
-        console.log('blocking-ready');
-        spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 750)'], { timeout: 2000 });
+        const compiler = spawnSync(process.execPath, ['-e', 'console.log("blocking-ready"); setTimeout(() => {}, 750)'], {
+          timeout: 2000,
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        if (compiler.status !== 0) throw new Error('compiler fixture did not exit cleanly');
       });
     }, { root: ${JSON.stringify(root)} });
   `,
@@ -193,13 +196,14 @@ test('phase clock reports a synchronous child wait from an independent wrapper',
     const reporter = createBuildPhaseReporter(root, {
       report: (line) => lines.push(line),
     })
-    reporter('wrapper is terminating the blocked test process')
+    reporter('wrapper observed a blocked test process')
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain('child spawn compiler')
     expect(lines[0]).not.toContain('child exit')
   } finally {
-    child.kill('SIGTERM')
-    await closed
+    // Killing the synchronous waiter would orphan its compiler. Let the bounded
+    // spawn finish and reap the compiler before the waiter itself exits.
+    expect(await closed).toEqual([0, null])
   }
 })
 
