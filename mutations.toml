@@ -443,6 +443,7 @@ command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolat
 test_count_pattern = "Ran {count} test"
 expect_red = ['^single\sAntigravity\srequest\spath\slegacy\sCLI\srouting\sconfig\ssends\sGemini\sthrough\sAntigravity\sonly$']
 
+[[control]]
 id = "sidebar-state-newer-version-write-guard"
 guards = "Sidebar writers skip unknown future major versions without replacing the file or blocking later writes."
 file = "packages/opencode/src/sidebar-state.ts"
