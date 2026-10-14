@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -454,6 +455,27 @@ describe('Vault section enrollment guidance', () => {
       ['use-vault', 'Serve accounts from the vault'],
     ])
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'names a shared parent folder in one sentence when the vault key cannot be saved there',
+    async () => {
+      // Group-writable and sticky: the vault client refuses it even on hosts
+      // where the user has a private group, while the embedded state checks
+      // accept sticky folders, so the request reaches the key write.
+      const config = join(root, 'config')
+      chmodSync(config, 0o1770)
+      const service = fakeEnrollmentService()
+      service.approveNext()
+      const { custody } = custodyWith(async () => undefined, service)
+      const result = await runAction(custody, 'request-access')
+      expect(result).toEqual({
+        ok: false,
+        code: 'vault-folder-shared',
+        text: `The vault token can't be saved because ${config} is shared with other users. Make it owned by you and not writable by your group or by others, then try again.`,
+      })
+      expect(JSON.stringify(result)).not.toContain('not private')
+    },
+  )
 
   it('explains a pending_exists refusal once, with the wait and the operator remedy', async () => {
     const claustrum = await loadCommonAuthClaustrum()

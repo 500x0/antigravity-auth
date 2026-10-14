@@ -229,7 +229,9 @@ it('public unreadable enrollment makes Accounts and Routing refuse local serving
   await writeFile(setup.paths.statePath, '{broken enrollment')
   const { menu } = await openPiMenu()
   const payload = await menu.open(invocation)
-  expect(section(payload, 'accounts').lines.join('\n')).toContain('unreadable')
+  expect(section(payload, 'accounts').lines.join('\n')).toContain(
+    "Pi can't tell whether to use the vault or its own login",
+  )
   expect(section(payload, 'routing').lines.join('\n')).toContain('refused')
   expect(section(payload, 'routing').lines.join('\n')).not.toContain(
     "uses Pi's own login",
@@ -285,7 +287,9 @@ describe('Pi /antigravity menu', () => {
     const requested = await apply(menu, 'vault', 'request-access')
     trace('request-access-finish')
     expect(requested.ok).toBe(true)
-    expect(requested.text).toContain('approved as antigravity-auth-pi')
+    expect(requested.text).toContain(
+      'Vault access: approved by the vault operator.',
+    )
 
     trace('stale-use-vault-start')
     const switched = await apply(menu, 'vault', 'use-vault')
@@ -299,7 +303,7 @@ describe('Pi /antigravity menu', () => {
     trace('menu-open-finish')
     const accounts = section(payload, 'accounts')
     expect(accounts.items.map((item) => [item.label, item.detail])).toEqual([
-      ['Vault account 1', 'serving Pi'],
+      ['Vault account 1', 'in use by Pi'],
     ])
     expect(section(payload, 'routing').lines[0]).toContain(
       'with a fresh token and project from the vault for each send',
@@ -314,25 +318,25 @@ describe('Pi /antigravity menu', () => {
   it('names the missing read grant when the approved vault serves Pi no accounts', async () => {
     emptyRoster = true
     const grant = [
-      'Enrollment is approved, but the vault serves antigravity-auth-pi no Antigravity accounts.',
+      'The vault operator approved Pi, but the vault gives Pi no Antigravity accounts yet.',
       'The vault operator grants read access with: ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read',
     ]
     const { menu } = await openPiMenu()
     const requested = await apply(menu, 'vault', 'request-access')
     expect(requested).toMatchObject({
       ok: true,
-      text: ['Enrollment: approved as antigravity-auth-pi', ...grant].join(
+      text: ['Vault access: approved by the vault operator.', ...grant].join(
         '\n',
       ),
     })
 
     const payload = await menu.open(invocation)
     expect(section(payload, 'accounts').lines).toEqual([
-      'Pi serves Antigravity from the vault, one account at a time. Choose, decline or accept accounts in the Vault section.',
+      'Pi uses the vault for Antigravity, one account at a time. Choose an account, or turn accounts off and on, in the Vault section.',
       ...grant,
     ])
     expect(section(payload, 'routing').lines).toEqual([
-      'The vault serves Pi no accounts, so requests are refused. There is no account rotation.',
+      'The vault gives Pi no accounts, so requests are refused. There is no account rotation.',
       ...grant,
     ])
     expect(section(payload, 'vault').lines.slice(-2)).toEqual(grant)
