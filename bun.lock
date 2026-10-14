@@ -23,6 +23,7 @@
       "dependencies": {
         "@cortexkit/claustrum-client": "0.9.0",
         "@cortexkit/private-files": "0.2.1",
+        "@cortexkit/subc-client": "0.16.1",
         "xdg-basedir": "^5.1.0",
         "zod": "^4.0.0",
       },
@@ -51,13 +52,14 @@
       },
       "dependencies": {
         "@cortexkit/antigravity-auth-core": "3.0.4",
+        "@cortexkit/claustrum-client": "0.9.0",
         "@cortexkit/private-files": "0.2.1",
+        "@cortexkit/subc-client": "0.16.1",
         "jsonc-parser": "^3.3.1",
         "xdg-basedir": "^5.1.0",
         "zod": "^4.0.0",
       },
       "devDependencies": {
-        "@cortexkit/claustrum-client": "0.9.0",
         "@opencode-ai/sdk": "1.17.13",
         "@opencode/plugin": "2.0.22",
         "@opentui/core-ga": "npm:@opentui/core@0.5.14",

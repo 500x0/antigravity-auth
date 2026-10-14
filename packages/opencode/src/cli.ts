@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 import {
@@ -18,6 +20,7 @@ import {
   refreshAntigravityToken,
 } from '@cortexkit/antigravity-auth-core'
 import { authorizeAntigravity, exchangeAntigravity } from './antigravity/oauth'
+import type { SetupHost, SetupIO } from './common-auth-embedded/setup/index.js'
 import {
   type AntigravityTokenExchangeSuccess,
   type OAuthLoginRequest,
@@ -27,6 +30,11 @@ import { persistAccountPool } from './plugin/persist-account-pool'
 import { checkAccountsQuotaStandalone } from './plugin/quota'
 import { startOAuthListener } from './plugin/server'
 import { getStoragePath, loadAccounts } from './plugin/storage'
+import {
+  assertSetupHostsStopped,
+  persistPiSetupLogin,
+  runPluginSetup,
+} from './setup.ts'
 
 interface WritableOutput {
   write(value: string): unknown
@@ -41,6 +49,7 @@ export interface CliDependencies {
   performLogin(
     request: OAuthLoginRequest,
     openBrowser: (url: string) => Promise<void>,
+    host?: SetupHost,
   ): Promise<AntigravityTokenExchangeSuccess>
   loadAccounts(): Promise<AccountStorageV4 | null>
   getQuota(
@@ -49,6 +58,7 @@ export interface CliDependencies {
   ): Promise<AccountQuotaResult[]>
   /** Offline operations on the account store; see `AccountStoreOperations`. */
   accountStore: AccountStoreOperations
+  setupIO?: SetupIO
 }
 
 /**
@@ -81,6 +91,7 @@ export type CliAccountsRead =
 const HELP = `Usage: antigravity-auth <command> [options]
 
 Commands:
+  setup [--yes] [--dry-run] [--claustrum|--no-claustrum] [--login] [--opencode=1|2|both]
   login [--project <id>] [--no-browser]
   list [--json]
   quota [--json] [--refresh]
@@ -98,6 +109,7 @@ Options:
 
 type ParsedCommand =
   | { command: 'help' }
+  | { command: 'setup'; args: string[] }
   | { command: 'login'; projectId?: string; noBrowser: boolean }
   | { command: 'list'; json: boolean }
   | { command: 'quota'; json: boolean; refresh: boolean }
@@ -117,6 +129,7 @@ function parseArgs(argv: string[]): ParseResult {
       : { ok: false, error: `Unknown argument: ${args[0]}` }
   }
   if (!command) return { ok: false, error: 'Missing command' }
+  if (command === 'setup') return { ok: true, value: { command, args } }
 
   if (command === 'login') {
     let projectId: string | undefined
@@ -298,6 +311,15 @@ export async function runCli(
   }
 
   try {
+    if (parsed.value.command === 'setup') {
+      await runPluginSetup(
+        parsed.value.args,
+        deps,
+        () => runCli(['migrate', '--offline', '--yes'], deps),
+        deps.setupIO,
+      )
+      return 0
+    }
     if (parsed.value.command === 'init') {
       const legacyPath = deps.accountStore.legacyPath()
       const outcome = await deps.accountStore.initialize(legacyPath)
@@ -431,13 +453,18 @@ export function createDefaultCliDependencies(): CliDependencies {
           process.env.SSH_TTY ||
           process.env.OPENCODE_HEADLESS,
       ),
-    performLogin: async (request, openBrowser) =>
+    performLogin: async (request, openBrowser, host) =>
       performOAuthLogin(request, {
         authorize: authorizeAntigravity,
         exchange: exchangeAntigravity,
         startListener: startOAuthListener,
         openBrowser,
         upsert: async (result) => {
+          if (host === 'pi') {
+            await persistPiSetupLogin(result)
+            return
+          }
+          if (host === 'opencode') await assertSetupHostsStopped()
           await persistAccountPool(
             [result],
             request.startFresh && request.accounts.length === 0,
@@ -579,7 +606,20 @@ export function createDefaultAccountStoreOperations(): AccountStoreOperations {
   }
 }
 
-if (import.meta.main) {
+function isCliEntry(): boolean {
+  if (import.meta.main !== undefined) return import.meta.main
+  // Node 20 has no import.meta.main; npx also invokes the CLI through a symlink.
+  try {
+    return (
+      !!process.argv[1] &&
+      realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+    )
+  } catch {
+    return false
+  }
+}
+
+if (isCliEntry()) {
   process.exitCode = await runCli(
     process.argv.slice(2),
     createDefaultCliDependencies(),

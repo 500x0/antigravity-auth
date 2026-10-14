@@ -134,6 +134,19 @@ export declare function recordVaultQuota(path: string, input: QuotaReceipt & {
     observation: QuotaObservation;
 }): Promise<boolean>;
 /**
+ * Merge a quota observation that belongs to an account rather than to a
+ * served credential, such as a background reading from insula. The write
+ * lands only while the row is still bound to that exact known account, so a
+ * reading taken before a replacement never reaches the successor. Unlike
+ * `recordVaultQuota` it never binds an account: a row without a known account
+ * is refused. Returns whether the observation was kept.
+ */
+export declare function recordVaultAccountQuota(path: string, input: {
+    routeId: string;
+    accountIdentity: string;
+    observation: QuotaObservation;
+}): Promise<boolean>;
+/**
  * Discover and commit the roster. The lease covers the list call and the
  * commit, not just the write: an opaque view cannot tell a delayed old reply
  * from a newer one, so a run that lost its lease is refused at commit. A

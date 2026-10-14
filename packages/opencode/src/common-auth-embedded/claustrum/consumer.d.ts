@@ -3,8 +3,9 @@ import type { QuotaObservation } from '../quota/index.js';
 import type { RoutingRow } from '../routing/index.js';
 import { type ClaustrumFamily, type ClaustrumScopedAttempt, type ClaustrumScopedClient, type IdentityParser } from './custody.js';
 import { type ClaustrumLogger } from './errors.js';
+import { type InsulaQuotaOptions } from './insula.js';
 import { type AccountMapper, type QuotaReceipt, type VaultRosterFile } from './roster.js';
-export interface ClaustrumConsumerOptions {
+export interface ClaustrumConsumerOptions<Q = QuotaObservation> {
     /**
      * The roster file: one row per vault account (route id, credential id,
      * account identity, state, quota), plus the accounts the user declined. It
@@ -45,6 +46,8 @@ export interface ClaustrumConsumerOptions {
     clearTimeoutImpl?: typeof clearTimeout;
     now?: () => number;
     logger?: ClaustrumLogger;
+    /** Optional background quota source. In-band readings still use recordQuota. */
+    insula?: InsulaQuotaOptions<Q>;
 }
 export interface SendOptions {
     /**
@@ -63,15 +66,34 @@ export interface SendOptions {
  * never are. It never enrolls: a missing token is an error here, and setup
  * is where enrollment happens.
  */
-export declare class ClaustrumConsumer {
+export declare class ClaustrumConsumer<Q = QuotaObservation> {
     #private;
-    constructor(options: ClaustrumConsumerOptions);
+    constructor(options: ClaustrumConsumerOptions<Q>);
     /** The last committed roster this instance saw, without any I/O. */
     snapshot(): VaultRosterFile | undefined;
     /** Rows for `/routing`, from the last committed roster. */
     routingRows(): RoutingRow[];
     refresh(): Promise<VaultRosterFile | undefined>;
     start(): void;
+    /**
+     * Fetch on a background tick, at most once per minute across projects with
+     * the same daemon and enrollment token path. Admission must use the cache
+     * instead, so an optional quota daemon never delays a provider request.
+     */
+    refreshInsulaQuota(): Promise<void>;
+    /**
+     * Cache-only, for unknown-quota admission with a served receipt. Undefined
+     * means poll the provider normally. Only get_scoped's asserted account_id
+     * joins insula; parsed identities and display metadata cannot substitute.
+     * Background polling should use cachedInsulaQuotaForRoute instead.
+     */
+    cachedInsulaQuota(receipt: Pick<ClaustrumScopedAttempt, 'assertedAccountIdentity'>): Promise<Q | undefined>;
+    /**
+     * Background cache lookup without fetching a credential. Re-read the roster
+     * so a peer's account replacement invalidates the old route immediately.
+     * A route without a known provider account cannot join an insula entry.
+     */
+    cachedInsulaQuotaForRoute(routeId: string): Promise<Q | undefined>;
     /**
      * Authorize one physical send on a vault route. The roster file is re-read
      * first, so a decline committed by another process applies before the next
@@ -98,5 +120,13 @@ export declare class ClaustrumConsumer {
      * (see `recordVaultQuota`), so a reading for a replaced account is dropped.
      */
     recordQuota(routeId: string, observation: QuotaObservation, attempt: QuotaReceipt): Promise<boolean>;
+    /**
+     * Store a background observation that belongs to an account rather than to
+     * a served credential (an insula reading from `cachedInsulaQuotaForRoute`).
+     * It lands only while the route is still bound to that known account, so no
+     * credential fetch is needed and a replaced account's reading is dropped.
+     * The in-memory roster is reloaded from the file, without a vault call.
+     */
+    recordAccountQuota(routeId: string, accountIdentity: string, observation: QuotaObservation): Promise<boolean>;
     close(): void;
 }

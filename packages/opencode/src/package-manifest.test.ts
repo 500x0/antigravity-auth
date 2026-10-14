@@ -48,6 +48,7 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(import.meta.url), '../../')
 
 interface Manifest {
+  version: string
   dependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
@@ -201,6 +202,16 @@ describe('published dependency ranges', () => {
     }
     expect(ourManifest.dependencies).not.toHaveProperty('@openauthjs/openauth')
     expect(coreManifest.dependencies).not.toHaveProperty('@openauthjs/openauth')
+    // Setup statically imports enrollment; clients stay external and share the core copy.
+    expect(ourManifest.dependencies).toEqual({
+      '@cortexkit/antigravity-auth-core': coreManifest.version,
+      '@cortexkit/claustrum-client': '0.9.0',
+      '@cortexkit/subc-client': '0.16.1',
+      '@cortexkit/private-files': '0.2.1',
+      'jsonc-parser': '^3.3.1',
+      'xdg-basedir': '^5.1.0',
+      zod: '^4.0.0',
+    })
   })
 
   it('the installed tree resolves one shared copy per host peer', () => {

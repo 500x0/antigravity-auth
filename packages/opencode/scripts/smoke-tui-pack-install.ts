@@ -251,8 +251,8 @@ export function expectedCandidateGraph(
     // Compare the historical OpenCode plugin install with the newly packed plugin.
     // Both installs use the newly packed core, which supplies private-files and
     // the vault client's store dependency to the historical baseline too. Only
-    // the plugin's version, core dependency pin, private-files dependency and
-    // optional OpenCode 2 peer may differ; all installed package rows stay fixed.
+    // the plugin's version, core pin, private-files and direct vault-client pins,
+    // and optional OpenCode 2 peer may differ; all installed package rows stay fixed.
     return [
       row[0],
       row[1],
@@ -261,6 +261,8 @@ export function expectedCandidateGraph(
         ...dependencies,
         [coreName]: candidateMetadata.corePin,
         '@cortexkit/private-files': '0.2.1',
+        '@cortexkit/claustrum-client': '0.9.0',
+        '@cortexkit/subc-client': '0.16.1',
       }),
       orderedMap({ ...peers, '@opencode/plugin': '>=2.0.22' }),
     ]
@@ -270,6 +272,17 @@ export function expectedCandidateGraph(
   return graph.sort((a, b) =>
     JSON.stringify(a).localeCompare(JSON.stringify(b)),
   )
+}
+
+export function assertVaultClientGraph(graph: readonly unknown[]): void {
+  for (const [name, version] of [
+    ['@cortexkit/claustrum-client', '0.9.0'],
+    ['@cortexkit/subc-client', '0.16.1'],
+  ]) {
+    const rows = graph.filter((row) => Array.isArray(row) && row[1] === name)
+    if (rows.length !== 1 || !Array.isArray(rows[0]) || rows[0][2] !== version)
+      throw new Error(`consumer.vault_clients: expected one ${name}@${version}`)
+  }
 }
 
 async function installedGraph(root: string, prefix = ''): Promise<unknown[]> {
@@ -521,6 +534,7 @@ async function install(
   const graph = await installedGraph(join(root, 'node_modules'))
   if (JSON.stringify(graph).includes('@cortexkit/common-auth'))
     throw new Error('consumer.cli_lean: common/tool runtime dependency')
+  if (contract === 'candidate') assertVaultClientGraph(graph)
   const probe = join(root, 'probe.mjs')
   await writeFile(probe, consumerProbe({ installed, ui, contract }))
   const args = ui ? ['--preload', '@opentui/solid/preload', probe] : [probe]
@@ -552,6 +566,44 @@ ${contract === 'candidate' ? privateFilesProbe() : ''}`,
   const cli = run('node', [join(installed, 'dist/cli.js'), '--help'], root, env)
   if (!cli.includes('antigravity-auth'))
     throw new Error('consumer.cli_lean: CLI help witness absent')
+  if (contract === 'candidate') {
+    const config = join(env.XDG_CONFIG_HOME, 'opencode')
+    const pi = join(root, 'pi-profile')
+    await mkdir(config, { recursive: true, mode: 0o700 })
+    const before = await readdir(config)
+    const planned = run(
+      'node',
+      [
+        join(root, 'node_modules/.bin/antigravity-auth'),
+        'setup',
+        '--yes',
+        '--dry-run',
+        '--opencode=1',
+        '--no-claustrum',
+      ],
+      root,
+      {
+        ...env,
+        OPENCODE_CONFIG_DIR: config,
+        OPENCODE_DB: join(root, 'setup-opencode.db'),
+        PI_AGENT_DIR: pi,
+        PI_CODING_AGENT_DIR: pi,
+        PI_ANTIGRAVITY_AUTH_FILE: join(pi, 'antigravity-accounts.json'),
+        SUBC_CONNECTION_FILE: join(root, 'absent-vault-connection.json'),
+        CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-vault-connection.json'),
+      },
+    )
+    if (
+      !planned.includes(
+        'Dry run: no registrations, enrollment, sign-in or migration',
+      ) ||
+      !planned.includes(`${productName}@${sourceManifest.version}`) ||
+      JSON.stringify(await readdir(config)) !== JSON.stringify(before)
+    )
+      throw new Error(
+        'consumer.cli_setup: installed setup preview missing or wrote configuration',
+      )
+  }
   return { installed, graph }
 }
 

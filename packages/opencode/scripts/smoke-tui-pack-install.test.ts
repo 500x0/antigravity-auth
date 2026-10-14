@@ -3,6 +3,7 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  assertVaultClientGraph,
   baselineRevision,
   baseline as buildBaseline,
   expectedCandidateGraph,
@@ -13,6 +14,38 @@ const product = '@cortexkit/opencode-antigravity-auth'
 const core = '@cortexkit/antigravity-auth-core'
 const metadata = { version: '3.0.0', corePin: '3.0.0' }
 const installCutoff = new Date('2026-05-14T12:00:00.000Z')
+
+describe('packed vault-client copies', () => {
+  const clients = [
+    [
+      '@cortexkit/claustrum-client',
+      '@cortexkit/claustrum-client',
+      '0.9.0',
+      {},
+      {},
+    ],
+    ['@cortexkit/subc-client', '@cortexkit/subc-client', '0.16.1', {}, {}],
+  ]
+  it('accepts exactly one locked copy of each client', () => {
+    expect(() => assertVaultClientGraph(clients)).not.toThrow()
+  })
+  it('rejects missing, duplicated or differently versioned clients', () => {
+    for (const graph of [
+      clients.slice(1),
+      [
+        ...clients,
+        ['nested/subc-client', '@cortexkit/subc-client', '0.16.1', {}, {}],
+      ],
+      [
+        clients[0],
+        ['@cortexkit/subc-client', '@cortexkit/subc-client', '0.17.0', {}, {}],
+      ],
+    ])
+      expect(() => assertVaultClientGraph(graph)).toThrow(
+        'consumer.vault_clients',
+      )
+  })
+})
 
 describe('historical baseline build', () => {
   it('archives the baseline core revision and bundles against that core', async () => {
@@ -59,7 +92,13 @@ const candidate = () => [
     product,
     product,
     '2.2.1',
-    { [core]: '2.2.1', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+    {
+      [core]: '2.2.1',
+      '@cortexkit/claustrum-client': '0.9.0',
+      '@cortexkit/private-files': '0.2.1',
+      '@cortexkit/subc-client': '0.16.1',
+      zod: '^4.0.0',
+    },
     {
       '@opencode-ai/plugin': '*',
       '@opencode/plugin': '>=2.0.22',
@@ -70,7 +109,7 @@ const candidate = () => [
 ]
 
 describe('packed consumer graph comparison', () => {
-  it('admits only private-files and the OpenCode 2 peer without mutating the baseline', () => {
+  it('admits exact private-files and vault-client pins plus the OpenCode 2 peer without mutating the baseline', () => {
     const graph = baseline()
     const before = JSON.stringify(graph)
     expect(
@@ -106,7 +145,13 @@ describe('packed consumer graph comparison', () => {
           product,
           product,
           '2.2.1',
-          { [core]: '2.2.1', '@cortexkit/private-files': '0.2.1', zod: '*' },
+          {
+            [core]: '2.2.1',
+            '@cortexkit/claustrum-client': '0.9.0',
+            '@cortexkit/private-files': '0.2.1',
+            '@cortexkit/subc-client': '0.16.1',
+            zod: '*',
+          },
           candidate()[0]?.[4],
         ],
         candidate()[1],
@@ -118,7 +163,9 @@ describe('packed consumer graph comparison', () => {
           '2.2.1',
           {
             [core]: '2.2.1',
+            '@cortexkit/claustrum-client': '0.9.0',
             '@cortexkit/private-files': '0.2.1',
+            '@cortexkit/subc-client': '0.16.1',
             zod: '^4.0.0',
           },
           {
@@ -136,7 +183,9 @@ describe('packed consumer graph comparison', () => {
           '2.2.1',
           {
             [core]: '2.2.1',
+            '@cortexkit/claustrum-client': '0.9.0',
             '@cortexkit/private-files': '0.2.1',
+            '@cortexkit/subc-client': '0.16.1',
             zod: '^4.0.0',
           },
           {
@@ -195,7 +244,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '3.0.0',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         {
           '@opencode-ai/plugin': '*',
           '@opencode/plugin': '>=2.0.22',
@@ -218,7 +273,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '2.2.1',
-        { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '3.0.0',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         candidate()[0]?.[4],
       ],
     ],
@@ -228,7 +289,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '2.2.1', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '2.2.1',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         candidate()[0]?.[4],
       ],
     ],
@@ -238,7 +305,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '*' },
+        {
+          [core]: '3.0.0',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '*',
+        },
         candidate()[0]?.[4],
       ],
     ],
@@ -248,7 +321,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '3.0.0',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         { ...(candidate()[0]?.[4] as object), '@opencode-ai/sdk': '*' },
       ],
     ],
@@ -265,7 +344,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.1', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '3.0.1',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         candidate()[0]?.[4],
       ],
       candidate()[1],
@@ -286,7 +371,13 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '3.0.0',
-        { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          [core]: '3.0.0',
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         candidate()[0]?.[4],
       ],
       candidate()[1],
@@ -302,7 +393,13 @@ describe('packed consumer graph comparison', () => {
       product,
       product,
       '3.0.0',
-      { [core]: '3.0.0', '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+      {
+        [core]: '3.0.0',
+        '@cortexkit/claustrum-client': '0.9.0',
+        '@cortexkit/private-files': '0.2.1',
+        '@cortexkit/subc-client': '0.16.1',
+        zod: '^4.0.0',
+      },
       candidate()[0]?.[4],
     ]
     expect(expectedCandidateGraph(baseline(), metadata)).not.toEqual([
@@ -326,7 +423,12 @@ describe('packed consumer graph comparison', () => {
         product,
         product,
         '2.2.1',
-        { '@cortexkit/private-files': '0.2.1', zod: '^4.0.0' },
+        {
+          '@cortexkit/claustrum-client': '0.9.0',
+          '@cortexkit/private-files': '0.2.1',
+          '@cortexkit/subc-client': '0.16.1',
+          zod: '^4.0.0',
+        },
         {},
       ],
     ],

@@ -1,14 +1,14 @@
 {
-  "version": "0.15.0",
-  "artifactStatus": "released",
-  "archiveBytes": 260445,
-  "sha256": "a23db89b43bedba8d371cd9d45e5f35306040cda3f425efb49fbce5610aa9c6b",
-  "sri": "sha512-1EQVggxbrijCtfdyv4z60eSl0dmZRGO6i1q2m8w20VxwdowWkUV0Y/7kErhp1/2ZNvmDZK65RICMiTcokidxiw==",
-  "manifestSha256": "05536366c3c1501de6901c09a1238a9a7ce7a20081e4407e21bc827f39028b7a",
-  "inventorySha256": "48a2d5fcf470626fc3855bc255f925c5bf2eb5062f1a594023eccef07391a9cf",
+  "version": "0.16.0",
+  "artifactStatus": "candidate",
+  "archiveBytes": 279870,
+  "sha256": "e7513fdc5fed846cbef09e432eb0ce76443dbc2793a8189954f1d3a1271bd34e",
+  "sri": "sha512-gUWZj4rxOk5Kxt884lFPikCPmCr13iA9p9b0Uwjxn6RCG689J1Y9NzZJfqhlcxFRIFwGUWa2kcyluDVQZ9WCbg==",
+  "manifestSha256": "2bda410a6de08a1f53105f34b92e64db5bf958eb246283d64adb0a7e21527e2b",
+  "inventorySha256": "ba80b6ef8b8cf56b9c3321e17b04e62b32cbac99946482e032535ecd2b2ec894",
   "licenseSha256": "bf737fd6a5d9da55873eb7ea481fd9e875bcfefc13ed42766a1964c6040c5581",
-  "canonicalFiles": 158,
-  "canonicalBytes": 859103,
+  "canonicalFiles": 176,
+  "canonicalBytes": 923789,
   "publicRoots": {
     "./rpc": {
       "types": "./dist/rpc/index.d.ts",
@@ -37,6 +37,10 @@
     "./claustrum": {
       "types": "./dist/claustrum/index.d.ts",
       "import": "./dist/claustrum/index.js"
+    },
+    "./setup": {
+      "types": "./dist/setup/index.d.ts",
+      "import": "./dist/setup/index.js"
     },
     "./commands": {
       "types": "./dist/commands/index.d.ts",
@@ -166,18 +170,18 @@
     ],
     [
       "claustrum/consumer.d.ts",
-      5064,
-      "8be8fd17170daddc8ad93a78fe33334358eb4fe717f55b8acfff880122bb9609"
+      6872,
+      "489bd5ab71fc4fdb614c000ff5fcdd1005e09a76454f8cf846db4433d0b6465e"
     ],
     [
       "claustrum/consumer.js",
-      12321,
-      "248a328c03690d6309ba45701d1548e2094fd503bf2978d4850df1611212a1ac"
+      16397,
+      "919f56b722f8b26ad691c3ca2b3d381b3e3d06cfbe6059e09db3311edb9c3f3d"
     ],
     [
       "claustrum/custody.d.ts",
-      8713,
-      "46ddac6c6641853dac313b7ddda106037a5b9fd512da5244c2767bfc0345536d"
+      8811,
+      "be2dab97c1ff8deb23972498e8ea23ffeaef15b92bdd156e2e1dd4d099376be3"
     ],
     [
       "claustrum/custody.js",
@@ -216,13 +220,23 @@
     ],
     [
       "claustrum/index.d.ts",
-      2735,
-      "b1b1184bed9c3586017123c06725750dd3f7d2ac3b2710e65ed9b3f3075210af"
+      2895,
+      "9cd0b310598af4b35b9b0753d6498154ad4c1f73d3f776543634f0885bc7d0f6"
     ],
     [
       "claustrum/index.js",
-      1967,
-      "ced1f8aa152e634ce9d5e4088e25985822ae0e280344e0de903e4320c850d864"
+      2141,
+      "33dc58809d432ea7bbe3f3d4425fe575589a018854444b63e0874f917981ab19"
+    ],
+    [
+      "claustrum/insula.d.ts",
+      2489,
+      "21a92525f04810a15a877e1c1ff9d7cf2fc2eb4ffe8a6aa408db22da6337d30f"
+    ],
+    [
+      "claustrum/insula.js",
+      6097,
+      "1db6a99b9db96635bbf846e58ab54eaaa1892bf8939801a181741022d47ce428"
     ],
     [
       "claustrum/interlock.d.ts",
@@ -236,13 +250,13 @@
     ],
     [
       "claustrum/roster.d.ts",
-      9312,
-      "45a63920ad5998b68b1bcba9a2208e7adab99cb1999df55d798b0a2b088d7d39"
+      9932,
+      "7c5684ff5c3f66d418f3624d07565a08556662f445cb96a7575a270851fab9c3"
     ],
     [
       "claustrum/roster.js",
-      23840,
-      "8f9d247e7d614e997cebb9728eaeb96fd0f32955cebfccc3d016351ad39a3947"
+      24959,
+      "e1f9c016955a3140436f0ff2c8827ba924a923729a402f1c47b6e4fbef4456c3"
     ],
     [
       "commands/builtins.d.ts",
@@ -663,6 +677,86 @@
       "rpc/server-registry.js",
       1537,
       "7a7bb67f11f072e2fd655694445458295c5461579bc4e73b11559c9d18d3c93d"
+    ],
+    [
+      "setup/command-runner.js",
+      2161,
+      "a462c083c5119d49fc2f940ec08d5f44a298653967f29bffac05e4355e6d53d3"
+    ],
+    [
+      "setup/command.d.ts",
+      340,
+      "65205bfcb3b240600a89c917b48154314115f5abef6ba1840024f2ca9711c79c"
+    ],
+    [
+      "setup/command.js",
+      9015,
+      "536f3b289bb4f9f9ca775d83ecb10e1cd66f3acd3a716294eccab8f784c797da"
+    ],
+    [
+      "setup/config-write.js",
+      2368,
+      "7f1561a53100f33cbc37fe6807035ca9bc3ade6250b8ee39cb7aba3431e93717"
+    ],
+    [
+      "setup/detect.d.ts",
+      498,
+      "81e4f3d636f69d1d7e19f8db90cb6e3b7efe5434c26d8f6354033e03b59ee584"
+    ],
+    [
+      "setup/detect.js",
+      8226,
+      "025b5f7b429978cc3842cc72240b8bc154a86859ceb2ad3b5ad8636ab334e649"
+    ],
+    [
+      "setup/enroll.js",
+      3354,
+      "47cefe1d5cbe065de2258d089a70d6586ff6f4d4fc8d81072b8986133ee24049"
+    ],
+    [
+      "setup/index.d.ts",
+      702,
+      "95ea60b38fe8e8a9e93a9247eb8b700d6b04c907bad3b7a1d197188e4a74fc3d"
+    ],
+    [
+      "setup/index.js",
+      444,
+      "a8ae2a1e0612424a184cf81421453666516bab8ba43de009253a8cc15d2d6374"
+    ],
+    [
+      "setup/paths.js",
+      1194,
+      "d87c664a34c81fe5b3515bc32821b8bbfee751e998e61f589986603b64e0ad20"
+    ],
+    [
+      "setup/process-fence.d.ts",
+      1500,
+      "06bfccb5dd73575e1aa577c04e393a53c735061754ef79605fed8233f5ac94be"
+    ],
+    [
+      "setup/process-fence.js",
+      7640,
+      "7b705aa236c20c5c53012c9a2ffbed2a50d0abbe0fc8d79499aaebe4e2a0a627"
+    ],
+    [
+      "setup/prompts.js",
+      1023,
+      "a0b1479c53ff444c73d72b3bfb001faa3834544869958729b0b524837f7ce056"
+    ],
+    [
+      "setup/register.d.ts",
+      744,
+      "7a3a2dcfa6a459c307673516b692ba526aa6b3c1e2259ec8320a17055343e8c1"
+    ],
+    [
+      "setup/register.js",
+      5941,
+      "5c1f63ba2cf6ca315531398346470db78e9e999b27041816e919762d14cb225b"
+    ],
+    [
+      "setup/types.d.ts",
+      2895,
+      "c459b0b6ab16549703cec035770b6afadef79067bcb1d18825d09bc24036d6be"
     ],
     [
       "store/attribution.d.ts",

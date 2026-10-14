@@ -14,7 +14,8 @@
  * evaluate the store, the command menu or the vault client. A loaded module is
  * cached for the life of the process; a failed load is not cached, so a later
  * call can retry it. `./claustrum` additionally needs the
- * `@cortexkit/claustrum-client` dependency, which is only resolved when
+ * `@cortexkit/claustrum-client` and `@cortexkit/subc-client` dependencies,
+ * which are only resolved when
  * `loadCommonAuthClaustrum` is called.
  *
  * Static consumers can import the same modules through this package's
