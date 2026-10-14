@@ -29,7 +29,13 @@ const REPO_ROOT = resolve(PACKAGE_ROOT, '../..')
 const TOOL_ROOT = join(REPO_ROOT, 'tools/common-auth-build')
 const LOCK_HASH =
   'c48bd0a0ac7575fd31201c3340c88769f0d0fa2104be89c93bf095e228598845'
-export const BUNDLE_EXTERNALS = ['zod', '@cortexkit/private-files']
+export const BUNDLE_EXTERNALS = [
+  'zod',
+  'jsonc-parser',
+  '@cortexkit/private-files',
+  '@cortexkit/claustrum-client',
+  '@cortexkit/subc-client',
+]
 export interface Graph {
   files: string[]
   externals: string[]
@@ -186,7 +192,7 @@ export async function auditGraph(
       !(
         tui
           ? /^(?:rpc\/(?:client|port-file|rpc-client)|logger\/(?:index|engine|capture-sink|redact)|fs\/private-files|quota\/(?:index|codec|format|map|merge|projection))\.js$/
-          : /^(?:rpc\/(?:index|client|port-file|rpc-client|rpc-server|server-registry|notifications)|logger\/(?:index|engine|capture-sink|redact)|fs\/private-files|quota\/(?:index|codec|format|map|merge|projection))\.js$/
+          : /^(?:rpc\/(?:index|client|port-file|rpc-client|rpc-server|server-registry|notifications)|logger\/(?:index|engine|capture-sink|redact)|quota\/(?:index|codec|format|map|merge|projection)|(?:auth-menu|claustrum|commands|fs|routing|setup|store)\/[a-z-]+|util\/any-signal)\.js$/
       ).test(embedded)
     )
       throw new Error(`graph: forbidden TUI source ${path}`)

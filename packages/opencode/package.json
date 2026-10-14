@@ -70,7 +70,7 @@
   ],
   "scripts": {
     "embed:check": "bun scripts/build-tui.ts --check",
-    "build": "bun run embed:check && bun scripts/build-tui.ts --library && esbuild src/server.ts --bundle --platform=node --format=esm --external:zod --external:@cortexkit/private-files --outfile=dist/server.js --sourcemap --metafile=dist/server.meta.json --log-level=warning && tsc -p tsconfig.ga.emit.json && bun ../../scripts/finalize-declaration-specifiers.ts dist/types .",
+    "build": "bun run embed:check && bun scripts/build-tui.ts --library && esbuild src/server.ts --bundle --platform=node --format=esm --external:zod --external:jsonc-parser --external:@cortexkit/private-files --external:@cortexkit/claustrum-client --external:@cortexkit/subc-client --outfile=dist/server.js --sourcemap --metafile=dist/server.meta.json --log-level=warning && tsc -p tsconfig.ga.emit.json && bun ../../scripts/finalize-declaration-specifiers.ts dist/types .",
     "build:tui": "bun run embed:check && bun scripts/build-tui.ts",
     "build:schema": "bun script/build-schema.ts",
     "smoke:tui": "bun run embed:check && bun scripts/smoke-tui-pack-install.ts",
@@ -117,8 +117,6 @@
     }
   },
   "devDependencies": {
-    "@cortexkit/claustrum-client": "0.9.0",
-    "@cortexkit/subc-client": "0.16.1",
     "@opencode-ai/sdk": "1.17.13",
     "@opencode/plugin": "2.0.22",
     "@opentui/core-ga": "npm:@opentui/core@0.5.14",
@@ -130,6 +128,8 @@
     "zod-to-json-schema": "^3.25.1"
   },
   "dependencies": {
+    "@cortexkit/claustrum-client": "0.9.0",
+    "@cortexkit/subc-client": "0.16.1",
     "@cortexkit/antigravity-auth-core": "3.0.4",
     "@cortexkit/private-files": "0.2.1",
     "jsonc-parser": "^3.3.1",

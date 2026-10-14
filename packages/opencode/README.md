@@ -20,7 +20,7 @@ This package is part of the Antigravity Auth monorepo. See the [root README](../
 - **OpenTUI sidebar** — read-only account/quota state; V1 polls the on-disk sidebar-state file, while GA polls location-scoped snapshots through native host RPC. Neither carries credentials.
 - **One `/antigravity` menu** for accounts, quota, routing, limits, diagnostics, sign-in, and vault setup. See [`src/plugin/commands.ts`](src/plugin/commands.ts) and [`src/tui/command-dialogs.tsx`](src/tui/command-dialogs.tsx).
 - **Thinking models** with optional signature caching and precompiled OpenTUI JSX.
-- **Standalone CLI** shipped as the `antigravity-auth` bin (`init`, `migrate`, `rollback`, `login`, `list`, `quota`) — same local shared account store as the plugin.
+- **Standalone CLI** shipped as the `antigravity-auth` bin (`setup`, `init`, `migrate`, `rollback`, `login`, `list`, `quota`) — same local shared account store as the plugin.
 - **Auto-recovery** from `tool_result_missing` errors and proactive background token refresh.
 
 ## Host requirement
@@ -45,6 +45,12 @@ The public entries are:
 Top-level [`server.js`](server.js) and [`tui.js`](tui.js) forward directory-based host loading to those same entries. No separate OpenCode 2 adapter is installed.
 
 ## Installation
+
+### Guided setup
+
+Quit all OpenCode and Pi processes, then run `npx @cortexkit/opencode-antigravity-auth setup`. It detects the hosts, signs in locally or enrolls with the Claustrum vault, writes the versioned plugin registration into OpenCode's configuration or runs Pi's package installer, and migrates an existing OpenCode legacy pool offline. Fresh or already migrated profiles and Pi's native auth slot need no pool migration.
+
+Preview without writes using `setup --yes --dry-run --opencode=1 --no-claustrum`. Choose `--opencode=1|2|both` when detection is ambiguous. `--no-claustrum` skips vault enrollment, `--claustrum` requires the person running the vault to approve host enrollment with `ck auth enroll approve`, and `--login` requests a new local login. `--yes` does not bypass stopped-host checks or authentication. After setup, start the host and run `/antigravity`. See the [root setup guide](../../README.md#guided-setup-opencode-and-pi).
 
 ### OpenCode V1 (npm)
 

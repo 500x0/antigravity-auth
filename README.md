@@ -36,6 +36,25 @@ The [OpenCode manifest](packages/opencode/package.json) exposes `.` (`dist/index
 
 ## Installation matrix
 
+### Guided setup (OpenCode and Pi)
+
+Quit all OpenCode and Pi processes, then run:
+
+```bash
+npx @cortexkit/opencode-antigravity-auth setup
+```
+
+Setup detects installed hosts, uses the existing local OAuth login or approved Claustrum vault enrollment, and writes a versioned plugin registration into OpenCode's configuration (or runs Pi's package installer) without replacing unrelated settings. OpenCode's legacy local pool is migrated with the existing offline migration; fresh and already migrated profiles need no migration. Pi keeps its native `auth.json` rather than creating an OpenCode pool.
+
+For a noninteractive preview or local setup, select the OpenCode generation explicitly:
+
+```bash
+npx @cortexkit/opencode-antigravity-auth setup --yes --dry-run --opencode=1 --no-claustrum
+npx @cortexkit/opencode-antigravity-auth setup --yes --opencode=2 --no-claustrum
+```
+
+`--opencode=1|2|both` resolves ambiguous host detection; `--dry-run` writes nothing. `--no-claustrum` skips vault enrollment, `--claustrum` requires the running vault and its operator to approve host enrollment with `ck auth enroll approve`, and `--login` requests a new local OAuth login instead of reusing one. `--yes` accepts host selection; it does not bypass stopped-host checks or OAuth/vault approval. Start the configured host afterward and run `/antigravity`.
+
 ### OpenCode V1 (npm)
 
 For V1 hosts that expose `opencode plugin`, the documented npm installation command is:
