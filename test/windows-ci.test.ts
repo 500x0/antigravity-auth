@@ -62,6 +62,7 @@ for (const job of ['vault', 'migration']) {
       /^\s*(bun run --cwd packages\/opencode esbuild .+)$/m,
     )![1]!
     expect(line).toContain(' @externals ')
+    if (job === 'vault') expect(line).toContain(' --sourcemap ')
     const args = line
       .split(/\s+/)
       .flatMap((arg) => (arg === '@externals' ? externals : [arg]))
@@ -85,6 +86,12 @@ for (const job of ['vault', 'migration']) {
         `--metafile=${metafile}`,
       ])
       const meta = JSON.parse(await readFile(metafile, 'utf8'))
+      if (job === 'vault') {
+        const map = JSON.parse(await readFile(`${bundle}.map`, 'utf8'))
+        expect(map.sources).toContain(
+          '../../core/dist/common-auth-embedded/claustrum/enrollment.js',
+        )
+      }
       expect(
         Object.keys(meta.inputs).some((path) =>
           path.includes('/jsonc-parser/'),
@@ -116,6 +123,7 @@ for (const job of ['vault', 'migration']) {
       )
     } finally {
       await rm(bundle, { force: true })
+      await rm(`${bundle}.map`, { force: true })
     }
   })
 }

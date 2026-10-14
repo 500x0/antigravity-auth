@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $externals = bun -e "import { BUNDLE_EXTERNALS } from './packages/opencode/scripts/build-tui.ts'; for (const name of BUNDLE_EXTERNALS) console.log('--external:' + name)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bun run --cwd packages/opencode esbuild ../../test/windows-vault/product-entry.mjs --bundle --platform=node --format=esm @externals --outfile=dist/windows-vault-product.mjs
+          bun run --cwd packages/opencode esbuild ../../test/windows-vault/product-entry.mjs --bundle --platform=node --format=esm --sourcemap @externals --outfile=dist/windows-vault-product.mjs
           exit $LASTEXITCODE
       - name: Enroll, check the token DACL, and serve one vault request
         shell: pwsh

@@ -40,9 +40,14 @@ disposal, the dormant file must be unchanged.
 
 Only `receipt.json` is uploaded. It contains completed stage names, redacted DACL
 identities, daemon method names, bearer/project match booleans, control results,
-and read counts. It never contains token files, connection keys, raw request
-bodies, exception messages, or profile contents. The workflow deletes the
-synthetic profile after uploading the receipt, including on failure.
+and read counts. On failure only, it also contains the error name, code and
+redacted message, a bundle-relative frame and the first product frame's
+repository-relative source location from the bundle's source map. Missing or
+invalid maps leave the source location null without hiding the original failure.
+Assertion operands, quoted values, structured payloads, known fixture secrets,
+secret-shaped strings and user paths are suppressed. It never contains token
+files, connection keys, raw request bodies, raw stacks or profile contents. The
+workflow deletes the synthetic profile after uploading the receipt, including on failure.
 
 Local checks:
 
@@ -52,7 +57,9 @@ node --check test/windows-vault/verify.mjs
 node --check test/windows-vault/dacl.mjs
 node --check test/windows-vault/local-reads.mjs
 node --check test/windows-vault/guards.test.mjs
-node --test test/windows-vault/guards.test.mjs
+node --check test/windows-vault/failure.mjs
+node --check test/windows-vault/failure.test.mjs
+node --test test/windows-vault/guards.test.mjs test/windows-vault/failure.test.mjs
 ```
 
 `verify.mjs ROOT EVIDENCE --portable-smoke` can test the real enrollment wire
