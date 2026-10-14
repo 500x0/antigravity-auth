@@ -8,6 +8,7 @@ import { homedir, release } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { assertPrivateTokenDacl, readTokenDacl, redactDacl } from './dacl.mjs'
+import { failureDetails } from './failure.mjs'
 import { installLocalReadFence } from './local-reads.mjs'
 
 const portable = process.argv.includes('--portable-smoke')
@@ -97,6 +98,30 @@ let plugin
 let fence
 let recorder
 const realFetch = globalThis.fetch
+const recordFailure = async (error) => {
+  receipt.status = 'failed'
+  receipt.failedStage = stage
+  receipt.failureKind =
+    error instanceof assert.AssertionError ? 'assertion' : 'runtime'
+  Object.assign(
+    receipt,
+    await failureDetails(error, {
+      bundleUrl: new URL(
+        '../../packages/opencode/dist/windows-vault-product.mjs',
+        import.meta.url,
+      ),
+      secrets: [
+        accessToken,
+        projectId,
+        'synthetic-dormant-local',
+        parent,
+        root,
+        evidence,
+      ],
+    }),
+  )
+  process.exitCode = 1
+}
 try {
   await check('isolated-profile', async () => {
     // A pre-existing profile could supply approval or local credentials and mask a failure.
@@ -358,26 +383,14 @@ try {
   })
   receipt.status = 'passed'
 } catch (error) {
-  // Assertions can contain actual bearer values. Publish stage names and booleans
-  // only; neither exception text nor the daemon's raw parameters are artifacts.
-  receipt.status = 'failed'
-  receipt.failedStage = stage
-  receipt.failureKind =
-    error instanceof assert.AssertionError ? 'assertion' : 'runtime'
-  receipt.failureLocation =
-    error instanceof Error
-      ? (error.stack?.match(
-          /(?:verify|windows-vault-product)\.mjs:\d+:\d+/,
-        )?.[0] ?? null)
-      : null
-  process.exitCode = 1
+  await recordFailure(error)
 } finally {
   stage = 'cleanup'
   const cleanup = async (run) => {
     try {
       await finite(run())
-    } catch {
-      receipt.status = 'failed'
+    } catch (error) {
+      if (!receipt.failureError) await recordFailure(error)
       receipt.cleanupFailed = true
       process.exitCode = 1
     }
