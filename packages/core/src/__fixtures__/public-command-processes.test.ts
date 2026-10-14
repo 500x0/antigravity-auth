@@ -317,6 +317,42 @@ export function assertPublicCommandIdentity(
     )
 }
 
+function unmatchedLinuxAncestry(
+  scope: PublicCommandScope,
+  member: PublicCommandIdentity,
+  chain: PublicCommandIdentity[],
+): string {
+  const proc: Record<string, string> = {}
+  // Read only on refusal. These bounded snapshots aid diagnosis, never ownership.
+  for (const name of ['cmdline', 'status']) {
+    let fd: number | undefined
+    try {
+      fd = openSync(
+        `/proc/${member.pid}/${name}`,
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      )
+      const buffer = Buffer.alloc(16 * 1024)
+      const bytes = readSync(fd, buffer, 0, buffer.length, 0)
+      proc[name] = buffer.subarray(0, bytes).toString().replaceAll('\0', ' ')
+    } catch (error) {
+      proc[name] = String(error)
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd)
+        } catch (error) {
+          proc[`${name}CloseError`] = String(error)
+        }
+      }
+    }
+  }
+  return JSON.stringify(
+    { member, leader: scope.leader, chain, proc },
+    (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+  )
+}
+
 function capturePublicCommandAncestry(
   scope: PublicCommandScope,
   member: PublicCommandIdentity,
@@ -337,7 +373,15 @@ function capturePublicCommandAncestry(
       assertPublicCommandIdentity(captured, cursor, scope.leader)
       break
     }
-    assertPublicCommandIdentity(cursor, cursor, scope.leader)
+    try {
+      assertPublicCommandIdentity(cursor, cursor, scope.leader)
+    } catch (error) {
+      if (cursor.pid !== 1 || process.platform !== 'linux') throw error
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; unmatched ancestry: ${unmatchedLinuxAncestry(scope, member, chain)}`,
+        { cause: error },
+      )
+    }
     chain.push(cursor)
     const parent = inspector.read(cursor.ppid)
     if (!parent || parent.zombie || cursor.start < parent.start)
