@@ -79,6 +79,7 @@ function cli(p: ReturnType<typeof profile>, ...argv: string[]) {
     {
       cwd: p.home,
       env: p.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
       timeout: 30_000,
     },
@@ -122,6 +123,34 @@ function seedLocal(p: ReturnType<typeof profile>) {
 }
 
 describe('real setup CLI entry', () => {
+  it('dry-run alone without a terminal reports plans without any filesystem changes', () => {
+    const p = profile()
+    seedLocal(p)
+    writeFileSync(
+      join(p.config, 'opencode.jsonc'),
+      '{\n  // keep this setting\n  "theme": "owned",\n  "plugin": ["other-plugin@1"]\n}\n',
+      { mode: 0o640 },
+    )
+    const before = snapshot(p.root)
+    const result = cli(p, '--dry-run')
+    expect({ status: result.status, stderr: result.stderr }).toEqual({
+      status: 0,
+      stderr: '',
+    })
+    expect(result.stdout).toContain(
+      'Dry run: no registrations, enrollment, sign-in or migration',
+    )
+    expect(result.stdout).toContain('Would write')
+    expect(result.stdout).toContain(
+      `@cortexkit/opencode-antigravity-auth@${version}`,
+    )
+    expect(result.stdout).toContain('"plugin"')
+    expect(result.stdout).toContain(
+      'Next: start OpenCode and run /antigravity.',
+    )
+    expect(snapshot(p.root)).toEqual(before)
+  })
+
   it.each([
     '1',
     '2',
