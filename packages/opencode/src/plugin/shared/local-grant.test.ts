@@ -672,7 +672,7 @@ async function runScenario(mode: Mode, stage: Stage = 'project') {
             }
           : { contents: [{ role: 'user', parts: [{ text: 'hello' }] }] }
       const model =
-        stage === 'thinking' ? 'claude-opus-5-5-low' : 'gemini-3.7-flash-medium'
+        stage === 'thinking' ? 'claude-opus-5-5-low' : 'gemini-3.8-flash-medium'
       phase('execute-start')
       const response = await createGaJobExecutor(executor)(
         {
