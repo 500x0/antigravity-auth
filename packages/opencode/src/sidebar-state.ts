@@ -866,20 +866,6 @@ interface SidebarStateWriteOptions {
 }
 
 let sidebarWriteChain: Promise<void> = Promise.resolve()
-let hasLoggedNewerSidebarVersion = false
-
-function logNewerSidebarVersion(version: number): void {
-  if (hasLoggedNewerSidebarVersion) return
-  hasLoggedNewerSidebarVersion = true
-  try {
-    console.debug(
-      '[antigravity.sidebar-state] a newer writer owns the file; skipping write',
-      { version, writerVersion: SIDEBAR_STATE_VERSION },
-    )
-  } catch {
-    // Logging must not turn a skipped write into a failed producer update.
-  }
-}
 
 function enqueueSidebarWrite<T>(work: () => Promise<T>): Promise<T> {
   // Always run `work` regardless of whether the prior link resolved or
@@ -949,8 +935,9 @@ async function performSidebarWrite(
     try {
       await lock.assertOwned()
       const version = readSidebarStateVersion(stateFile)
+      // A newer plugin owns the file; skip silently. This module is part of the
+      // TUI renderer graph, which must never write to the terminal.
       if (version !== undefined && version > SIDEBAR_STATE_VERSION) {
-        logNewerSidebarVersion(version)
         return
       }
       const existing = readSidebarState(stateFile)
