@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { BUNDLE_EXTERNALS } from '../packages/opencode/scripts/build-tui.ts'
 import {
   inputPath,
@@ -16,8 +17,12 @@ async function owned() {
   temporary.push(path)
   return path
 }
-function command(cwd: string, program: string, args: string[]) {
-  return execFileSync(program, args, {
+// Child processes run asynchronously: a synchronous spawn inside a Bun test
+// worker can leave the worker spinning after the child exits, which hangs the
+// isolated suite.
+const run = promisify(execFile)
+async function command(cwd: string, program: string, args: string[]) {
+  const { stdout } = await run(program, args, {
     cwd,
     encoding: 'utf8',
     timeout: 120000,
@@ -27,6 +32,7 @@ function command(cwd: string, program: string, args: string[]) {
       GIT_CONFIG_GLOBAL: '/dev/null',
     },
   })
+  return stdout
 }
 afterEach(async () => {
   for (const path of temporary.splice(0))
@@ -46,7 +52,7 @@ for (const job of ['vault', 'migration']) {
       step.run?.includes(' esbuild '),
     )!.run!
     const expression = run.match(/^\s*\$externals = bun -e "([^"]+)"$/m)![1]!
-    const externals = command(root, 'bun', ['-e', expression])
+    const externals = (await command(root, 'bun', ['-e', expression]))
       .trim()
       .split(/\r?\n/)
     expect(externals).toEqual(
@@ -72,7 +78,7 @@ for (const job of ['vault', 'migration']) {
     )
     const metafile = join(temporary, 'meta.json')
     try {
-      command(root, args[0]!, [
+      await command(root, args[0]!, [
         ...args
           .slice(1)
           .map((arg) => (arg === originalOutput ? `--outfile=${bundle}` : arg)),
@@ -99,8 +105,8 @@ for (const job of ['vault', 'migration']) {
       })
       const loaded =
         job === 'migration'
-          ? command(root, 'node', [bundle, '--help'])
-          : command(root, 'node', [
+          ? await command(root, 'node', [bundle, '--help'])
+          : await command(root, 'node', [
               '--input-type=module',
               '-e',
               `const m = await import(${JSON.stringify(pathToFileURL(bundle).href)}); if (typeof m.createAntigravityPlugin !== 'function') throw new Error('Missing plugin export'); console.log('vault bundle loaded')`,
@@ -126,8 +132,8 @@ test('Windows checkout preserves the embedded generator self-hash and manifest b
     'checkout conversion control\n',
   )
   const git = (...args: string[]) => command(target, 'git', args)
-  git('init', '-q')
-  git(
+  await git('init', '-q')
+  await git(
     '-c',
     'core.autocrlf=false',
     'add',
@@ -137,7 +143,7 @@ test('Windows checkout preserves the embedded generator self-hash and manifest b
   )
   await rm(join(target, generator))
   await rm(join(target, 'unprotected.txt'))
-  git(
+  await git(
     '-c',
     'core.autocrlf=true',
     'checkout-index',
