@@ -14,7 +14,7 @@ import {
   realpath,
   rm,
 } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build as bundle } from 'esbuild'
 import { parse } from 'jsonc-parser'
@@ -366,6 +366,18 @@ export async function auditGraph(
   return { files: [...files].sort(), externals: [...externals].sort() }
 }
 
+// Compares with path.relative so the check also holds for Windows separators
+// and drive-letter paths, not only POSIX `/`.
+function isInsideDirectory(directory: string, path: string): boolean {
+  const inside = relative(directory, path)
+  return (
+    inside !== '' &&
+    inside !== '..' &&
+    !inside.startsWith(`..${sep}`) &&
+    !isAbsolute(inside)
+  )
+}
+
 export async function verifyPrerequisites(): Promise<void> {
   if (Bun.version !== '1.4.2')
     throw new Error('build.prerequisite_order: requires Bun 1.4.2')
@@ -413,7 +425,9 @@ export async function verifyPrerequisites(): Promise<void> {
       'package.json',
     )
     const actual = realpathSync(path)
-    if (!actual.startsWith(`${realpathSync(TOOL_ROOT)}/node_modules/`))
+    if (
+      !isInsideDirectory(join(realpathSync(TOOL_ROOT), 'node_modules'), actual)
+    )
       throw new Error(`build.prerequisite_order: private root escaped ${name}`)
     const pkg = JSON.parse(
       await buildPhase(`prerequisites.readFile ${actual}`, () =>

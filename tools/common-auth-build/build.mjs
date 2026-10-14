@@ -38,7 +38,17 @@ async function verifiedCompiler() {
     const installed = await realpath(
       resolve(toolRoot, 'node_modules', name, 'package.json'),
     )
-    if (!installed.startsWith(`${toolRoot}/node_modules/`))
+    // path.relative keeps the containment check valid for Windows paths.
+    const inside = relative(
+      resolve(await realpath(toolRoot), 'node_modules'),
+      installed,
+    )
+    if (
+      inside === '' ||
+      inside === '..' ||
+      inside.startsWith(`..${sep}`) ||
+      isAbsolute(inside)
+    )
       throw new Error(`Private tool root escaped: ${name}`)
     if (JSON.parse(await readFile(installed, 'utf8')).version !== version)
       throw new Error(`Private tool version mismatch: ${name}`)
