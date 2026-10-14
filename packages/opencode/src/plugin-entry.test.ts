@@ -91,6 +91,77 @@ function createPluginInput(
   }
 }
 
+function watchSidebarFixture(directory: string) {
+  const markerName = '.sidebar-watcher-ready'
+  const finishedMarkerName = '.sidebar-watcher-finished'
+  const marker = join(directory, markerName)
+  const changes: string[] = []
+  let markerObserved: () => void = () => {}
+  let seedObserved: () => void = () => {}
+  let finishObserved: () => void = () => {}
+  const sidebarSeedObserved = new Promise<void>((done) => {
+    seedObserved = done
+  })
+  const finished = new Promise<void>((done) => {
+    finishObserved = done
+  })
+  const watcher = watch(directory, (_event, name) => {
+    const filename = name?.toString()
+    if (filename === markerName) {
+      markerObserved()
+      return
+    }
+    if (filename === finishedMarkerName) {
+      finishObserved()
+      return
+    }
+    if (filename?.startsWith('sidebar-state')) changes.push(filename)
+    if (filename === 'sidebar-state.json') seedObserved()
+  })
+
+  // Bun's macOS FSEvents stream starts asynchronously and can deliver earlier
+  // setup writes after watch() returns: a production-free probe did so 17/40 times.
+  // Observe a separate marker before seeding any watched product file.
+  let probeTimer: ReturnType<typeof setTimeout> | undefined
+  const ready = new Promise<void>((done, reject) => {
+    const deadline = performance.now() + 4_000
+    markerObserved = () => {
+      clearTimeout(probeTimer)
+      done()
+    }
+    const probe = () => {
+      if (performance.now() >= deadline) {
+        reject(new Error('Sidebar watcher did not become ready'))
+        return
+      }
+      try {
+        writeFileSync(marker, 'ready', { mode: 0o600 })
+        probeTimer = setTimeout(probe, 1)
+      } catch (error) {
+        reject(error)
+      }
+    }
+    probe()
+  }).finally(() => {
+    clearTimeout(probeTimer)
+    rmSync(marker, { force: true })
+  })
+  return {
+    watcher,
+    changes,
+    ready,
+    sidebarSeedObserved,
+    async finish() {
+      // An observed end marker drains delayed product events, not just JS tasks.
+      const path = join(directory, finishedMarkerName)
+      writeFileSync(path, 'finished', { mode: 0o600 })
+      await finished
+      await new Promise<void>((done) => setImmediate(done))
+      unlinkSync(path)
+    },
+  }
+}
+
 async function withUnmigratedComposition(
   run: (
     send: FetchImpl,
@@ -413,20 +484,14 @@ it('a real default background quota tick leaves an unmigrated pool and account-s
   writeFileSync(pool, bytes, { mode: 0o600 })
   const sidebarBytes =
     '{"version":1,"checkedAt":0,"accounts":[],"routingAuthoritative":false,"activeRouting":{}}'
-  writeFileSync(overrides.ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE, sidebarBytes, {
-    mode: 0o600,
-  })
   const upstream = spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response('not-found', { status: 404 }),
   )
   const transport = mock(
     async () => new Response('unexpected physical send', { status: 500 }),
   )
-  const changes: string[] = []
-  const watcher = watch(owned, (_event, name) => {
-    if (name?.toString().startsWith('sidebar-state'))
-      changes.push(name.toString())
-  })
+  const { watcher, changes, ready, sidebarSeedObserved, finish } =
+    watchSidebarFixture(owned)
   const originalTimer = globalThis.setTimeout
   let timerSpy: ReturnType<typeof spyOn> | undefined
   let poller: BackgroundQuotaRefresh | undefined
@@ -438,6 +503,15 @@ it('a real default background quota tick leaves an unmigrated pool and account-s
     | Awaited<ReturnType<ReturnType<typeof createAntigravityPlugin>>>
     | undefined
   try {
+    await ready
+    // Observe the single seed and finish its event batch before plugin creation.
+    writeFileSync(overrides.ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE, sidebarBytes, {
+      mode: 0o600,
+    })
+    await sidebarSeedObserved
+    await new Promise<void>((done) => setImmediate(done))
+    expect(changes).toContain('sidebar-state.json')
+    changes.length = 0
     plugin = await createAntigravityPlugin('google', {
       dependencies: {
         agyTransport: transport,
@@ -467,6 +541,8 @@ it('a real default background quota tick leaves an unmigrated pool and account-s
     await tick
     await new Promise<void>((done) => setImmediate(done))
     await poller!.dispose()
+    await plugin.dispose?.()
+    await finish()
     expect(changes).toEqual([])
     expect(readFileSync(pool, 'utf8')).toBe(bytes)
     expect(
