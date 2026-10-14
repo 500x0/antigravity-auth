@@ -12,14 +12,12 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { build as bundle } from 'esbuild'
-import {
-  buildPhase,
-  buildPhaseNote,
-  buildSyncPhase,
-} from '../../../scripts/build-phase-clock.ts'
 import sourceManifest from '../package.json'
 import {
   auditGraph,
+  buildPhase,
+  buildPhaseNote,
+  buildSyncPhase,
   checkGaGraph,
   inventory,
   PACKAGE_ROOT,

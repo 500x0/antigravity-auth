@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'bun:test'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildPhase,
+  buildPhaseNote,
   withBuildPhaseClock,
 } from '../../../scripts/build-phase-clock.ts'
 import {
   baselineRevision,
-  baseline as buildBaseline,
   expectedCandidateGraph,
   installResolution,
 } from './smoke-tui-pack-install.ts'
@@ -31,10 +32,50 @@ describe('historical baseline build', () => {
           mkdtemp(join(tmpdir(), 'smoke-tui-baseline-')),
         )
         try {
-          const packageRoot = await buildPhase(
-            'baseline test.buildBaseline',
-            () => buildBaseline(workspace),
+          // The baseline helper uses synchronous children. Run it in a separate Bun
+          // process to keep those waits out of the isolated unit-test worker, while
+          // preserving the archive/core/bundle assertions below.
+          let childPid: number | undefined
+          const builderPid = await buildPhase(
+            'baseline test.child baseline build',
+            () =>
+              new Promise<number>((resolve, reject) => {
+                const child = execFile(
+                  process.execPath,
+                  [
+                    '-e',
+                    `import { baseline } from ${JSON.stringify(import.meta.resolve('./smoke-tui-pack-install.ts'))}; import { withBuildPhaseClock } from ${JSON.stringify(import.meta.resolve('../../../scripts/build-phase-clock.ts'))}; await withBuildPhaseClock('historical baseline child', 30000, () => baseline(${JSON.stringify(workspace)})); console.log(JSON.stringify({ baselineBuilder: process.pid })); process.exit(0);`,
+                  ],
+                  { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+                  (error, stdout) => {
+                    if (error) reject(error)
+                    else {
+                      try {
+                        resolve(JSON.parse(stdout).baselineBuilder)
+                      } catch (error) {
+                        reject(error)
+                      }
+                    }
+                  },
+                )
+                childPid = child.pid
+                buildPhaseNote(
+                  'child spawn baseline builder',
+                  JSON.stringify({ pid: child.pid, command: process.execPath }),
+                )
+                child.once('exit', (status, signal) =>
+                  buildPhaseNote(
+                    'child exit baseline builder',
+                    JSON.stringify({ pid: child.pid, status, signal }),
+                  ),
+                )
+              }),
           )
+          expect(builderPid).not.toBe(process.pid)
+          if (childPid === undefined)
+            throw new Error('baseline builder PID unavailable')
+          expect(builderPid).toBe(childPid)
+          const packageRoot = join(workspace, 'baseline/packages/opencode')
           const coreRoot = join(workspace, 'baseline/packages/core')
           const coreLink = join(
             packageRoot,

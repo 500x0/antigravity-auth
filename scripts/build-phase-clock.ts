@@ -228,3 +228,9 @@ export function createBuildPhaseReporter(
     }
   }
 }
+
+// Expose optional clock hooks under a shared symbol for copied build scripts.
+Object.defineProperty(globalThis, Symbol.for('cortexkit.build-phase-clock'), {
+  configurable: true,
+  value: { phase: buildPhase, sync: buildSyncPhase, note: buildPhaseNote },
+})

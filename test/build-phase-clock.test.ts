@@ -5,6 +5,11 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildPhase as copiedBuildPhase,
+  buildPhaseNote as copiedBuildPhaseNote,
+  buildSyncPhase as copiedBuildSyncPhase,
+} from '../packages/opencode/scripts/build-tui.ts'
+import {
   buildPhase,
   buildPhaseNote,
   buildSyncPhase,
@@ -196,4 +201,32 @@ test('phase clock reports a synchronous child wait from an independent wrapper',
     child.kill('SIGTERM')
     await closed
   }
+})
+
+test('copied build scripts join the installed phase clock without importing its helper', async () => {
+  const { root, lines, options } = await fixture()
+  await withBuildPhaseClock(
+    'copied builder',
+    120000,
+    async () => {
+      await copiedBuildPhase('copied builder await', async () => 'source')
+      copiedBuildSyncPhase('copied builder child spawn', () => 'result')
+      copiedBuildPhaseNote('copied builder child exit', 'status=0')
+    },
+    options,
+  )
+  const [file] = await readdir(join(root, 'build-test-phase-clocks'))
+  const journal = JSON.parse(
+    await readFile(join(root, 'build-test-phase-clocks', file!), 'utf8'),
+  )
+  expect(journal.recent.map((event: { name: string }) => event.name)).toEqual([
+    'enter copied builder await',
+    'exit copied builder await',
+    'enter copied builder child spawn',
+    'exit copied builder child spawn',
+    'copied builder child exit',
+    'passed',
+  ])
+  createBuildPhaseReporter(root, options)('another test failed')
+  expect(lines).toEqual([])
 })

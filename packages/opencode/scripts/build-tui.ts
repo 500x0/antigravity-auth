@@ -19,12 +19,38 @@ import { fileURLToPath } from 'node:url'
 import { build as bundle } from 'esbuild'
 import { parse } from 'jsonc-parser'
 import ts from 'typescript'
-import {
-  buildPhase,
-  buildPhaseNote,
-  buildSyncPhase,
-} from '../../../scripts/build-phase-clock.ts'
 import { embedCommonAuth, sha256 } from './embed-common-auth'
+
+const phaseClockKey = Symbol.for('cortexkit.build-phase-clock')
+type PhaseClockHooks = {
+  phase: <T>(name: string, action: () => Promise<T>) => Promise<T>
+  sync: <T>(name: string, action: () => T) => T
+  note: (name: string, detail: string) => void
+}
+function phaseClockHooks() {
+  return (
+    globalThis as typeof globalThis & {
+      [key: symbol]: PhaseClockHooks | undefined
+    }
+  )[phaseClockKey]
+}
+
+// Hermetic build fixtures copy this script without repository-root test helpers.
+// Tests may install clock hooks; copied builds need no repository-root clock helper.
+export function buildPhase<T>(
+  name: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const hooks = phaseClockHooks()
+  return hooks ? hooks.phase(name, action) : action()
+}
+export function buildSyncPhase<T>(name: string, action: () => T): T {
+  const hooks = phaseClockHooks()
+  return hooks ? hooks.sync(name, action) : action()
+}
+export function buildPhaseNote(name: string, detail: string) {
+  phaseClockHooks()?.note(name, detail)
+}
 
 export const PACKAGE_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
