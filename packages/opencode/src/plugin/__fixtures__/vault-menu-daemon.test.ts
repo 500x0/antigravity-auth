@@ -11,13 +11,19 @@ type FrameHeader = {
 }
 
 /** A loopback vault using the installed client's wire protocol and real enrollment flow. */
-export async function startMenuVaultFixture(root: string) {
-  const clientEntry = Bun.resolveSync(
-    '@cortexkit/claustrum-client',
-    import.meta.dir,
-  )
+export async function startMenuVaultFixture(
+  root: string,
+  credential?: { accessToken: string; projectId: string },
+) {
+  // Node needs --experimental-import-meta-resolve to honor the client as the parent.
+  const clientEntry =
+    typeof Bun === 'undefined'
+      ? import.meta.resolve('@cortexkit/claustrum-client')
+      : Bun.resolveSync('@cortexkit/claustrum-client', import.meta.dir)
   const subc = await import(
-    Bun.resolveSync('@cortexkit/subc-client', dirname(clientEntry))
+    typeof Bun === 'undefined'
+      ? import.meta.resolve('@cortexkit/subc-client', clientEntry)
+      : Bun.resolveSync('@cortexkit/subc-client', dirname(clientEntry))
   )
   const key = Uint8Array.from({ length: 32 }, (_, index) => index + 1)
   const daemonId = Uint8Array.from({ length: 16 }, (_, index) => 200 + index)
@@ -112,11 +118,15 @@ export async function startMenuVaultFixture(root: string) {
     )
       return {
         result: {
+          // Callers may supply the served credential; otherwise a fixed
+          // synthetic one is served.
           payload: Array.from(
-            new TextEncoder().encode('synthetic-vault-access'),
+            new TextEncoder().encode(
+              credential?.accessToken ?? 'synthetic-vault-access',
+            ),
           ),
           credential_id: 'synthetic-vault-credential',
-          project_id: 'synthetic-vault-project',
+          project_id: credential?.projectId ?? 'synthetic-vault-project',
           account_id: 'synthetic-vault-account',
           record_version: 1,
           expires_at_ms: Date.now() + 3_600_000,
