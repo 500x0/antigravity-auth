@@ -353,6 +353,30 @@ export function createOpenCodeVaultCustody(
     }
   }
 
+  /**
+   * What an approved host does next. In vault mode, read the roster the
+   * vault source last saved (no vault round trip while the menu opens): an
+   * empty one means the operator approved but has not granted read access.
+   * A missing or unreadable roster says nothing, since emptiness is unknown.
+   */
+  const approvedNextSteps = async (
+    mode: OpenCodeVaultStatus['mode'],
+  ): Promise<string[]> => {
+    if (mode === 'local')
+      return [
+        'Next: choose Serve accounts from the vault to use the accounts the vault serves this host.',
+      ]
+    if (mode !== 'custody') return []
+    try {
+      const roster = await (await loadClaustrum()).readVaultRoster(
+        paths.rosterFile,
+      )
+      return roster?.rows.length === 0 ? noVaultAccountsGuidance() : []
+    } catch {
+      return []
+    }
+  }
+
   const custody: OpenCodeVaultCustody = {
     paths,
     async startObservation() {
@@ -458,6 +482,9 @@ export function createOpenCodeVaultCustody(
         title: 'Vault',
         build: async () => {
           const status = await custody.status()
+          const lines = statusLines(status)
+          if (status.enrollment.state === 'approved')
+            lines.push(...(await approvedNextSteps(status.mode)))
           const actions: NonNullable<
             Awaited<ReturnType<MenuExtraSection['build']>>['actions']
           > = [
@@ -467,8 +494,16 @@ export function createOpenCodeVaultCustody(
                 status.enrollment.state === 'pending'
                   ? 'Check vault approval'
                   : 'Request vault access',
-              run: async () =>
-                `Vault access: ${describeEnrollment(await custody.requestAccess())}`,
+              run: async () => {
+                const step = await custody.requestAccess()
+                return [
+                  `Vault access: ${describeEnrollment(step)}`,
+                  ...enrollmentGuidance(step),
+                  ...(step.state === 'approved'
+                    ? await approvedNextSteps((await custody.status()).mode)
+                    : []),
+                ].join('\n')
+              },
             },
           ]
           if (status.mode !== 'custody')
@@ -483,7 +518,7 @@ export function createOpenCodeVaultCustody(
               label: 'Disconnect vault and restore local accounts',
               run: async () => refusalOr(() => custody.useLocal()),
             })
-          return { lines: statusLines(status), actions }
+          return { lines, actions }
         },
       }
     },
@@ -532,6 +567,56 @@ function describeEnrollment(status: EnrollmentStatus): string {
   }
 }
 
+/**
+ * The vault operator approves and grants with Claustrum's `ck` command,
+ * outside OpenCode. Approval alone serves nothing: the enrollment also needs
+ * read access to the vault's Antigravity accounts.
+ */
+export const OPENCODE_VAULT_GRANT_COMMAND = `ck auth grant --principal enrolled:${OPENCODE_VAULT_ENROLLMENT_NAME} --selector-kind category --selector antigravity-native --operation read`
+
+/** What to do while this host's request waits in the vault; names the request when its ID is known. */
+function pendingEnrollmentGuidance(requestId?: string): string[] {
+  return [
+    'Next, the vault operator runs these outside OpenCode:',
+    requestId === undefined
+      ? '1. Find the request ID with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>'
+      : `1. Approve the request: ck auth enroll approve --request-id ${requestId}`,
+    `2. Grant read access: ${OPENCODE_VAULT_GRANT_COMMAND}`,
+    'Both are needed: an approval without the grant serves this host no accounts.',
+    '3. Then choose Check vault approval here; once approved, accounts come from the vault.',
+  ]
+}
+
+/**
+ * Why a new request was refused with `pending_exists`, and the way out. The
+ * vault holds one pending request per name; an earlier one blocks a new one
+ * until it expires or the operator denies it.
+ */
+function pendingExistsGuidance(): string[] {
+  return [
+    `An earlier request for ${OPENCODE_VAULT_ENROLLMENT_NAME} is still pending in the vault, possibly from an earlier, abandoned request on this host.`,
+    'It expires 15 minutes after it was made; request vault access again after that.',
+    'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+  ]
+}
+
+/** Shown when this host is approved but the vault lists no Antigravity accounts for it. */
+function noVaultAccountsGuidance(): string[] {
+  return [
+    `Vault access is approved, but the vault serves ${OPENCODE_VAULT_ENROLLMENT_NAME} no Antigravity accounts.`,
+    `The vault operator grants read access with: ${OPENCODE_VAULT_GRANT_COMMAND}`,
+  ]
+}
+
+/** The next steps for an enrollment state that needs the user or the operator to act. */
+function enrollmentGuidance(status: EnrollmentStatus): string[] {
+  if (status.state === 'pending')
+    return pendingEnrollmentGuidance(status.requestId)
+  if (status.state === 'blocked' && status.code === 'pending_exists')
+    return pendingExistsGuidance()
+  return []
+}
+
 function describeHostSlot(slot: OpenCodeVaultStatus['hostSlot']): string {
   switch (slot) {
     case 'login':
@@ -561,5 +646,6 @@ export function statusLines(status: OpenCodeVaultStatus): string[] {
     ...(status.mode === 'local'
       ? [`OpenCode Google sign-in: ${describeHostSlot(status.hostSlot)}`]
       : []),
+    ...enrollmentGuidance(status.enrollment),
   ]
 }

@@ -25,6 +25,7 @@ import {
   type PiVaultAccountsPort,
   type PiVaultSetup,
   type PiVaultSetupStatus,
+  piNoVaultAccountsGuidance,
   vaultAccountName,
 } from './vault-setup.ts'
 
@@ -157,6 +158,13 @@ export function createPiAntigravityAccountSections(
                 ]
               : []),
             ...(problem ? [problem] : []),
+            // An approved enrollment without a read grant lists nothing;
+            // say so rather than show an empty account list.
+            ...(!problem &&
+            list.length === 0 &&
+            status.enrollment.state === 'approved'
+              ? piNoVaultAccountsGuidance()
+              : []),
           ],
           items,
         }
@@ -186,8 +194,19 @@ export function createPiAntigravityAccountSections(
               "Every request uses Pi's own login. There is no account rotation.",
             ],
           }
-        const { list } = await custodyAccounts(status, options)
+        const { list, problem } = await custodyAccounts(status, options)
         const serving = servingAccount(status, list)
+        if (
+          !problem &&
+          list.length === 0 &&
+          status.enrollment.state === 'approved'
+        )
+          return {
+            lines: [
+              'The vault serves Pi no accounts, so requests are refused. There is no account rotation.',
+              ...piNoVaultAccountsGuidance(),
+            ],
+          }
         return {
           lines: [
             serving

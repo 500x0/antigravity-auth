@@ -29,6 +29,7 @@ import {
   type PiVaultModeRecord,
   PiVaultSetup,
   PiVaultSetupError,
+  type PiVaultSetupStatus,
   readPiVaultMode,
   writePiVaultMode,
 } from './vault-setup.ts'
@@ -80,7 +81,12 @@ let modeFile: string
 let hostSlot: unknown
 let modeChanges: PiVaultModeRecord[]
 
-function makeSetup(endpoint = enrollmentEndpoint(['pending'])) {
+function makeSetup(
+  endpoint: Pick<
+    ReturnType<typeof enrollmentEndpoint>,
+    'connect'
+  > = enrollmentEndpoint(['pending']),
+) {
   return new PiVaultSetup({
     claustrum,
     stateDir: join(dir, 'vault'),
@@ -472,4 +478,334 @@ it('waits for the native credential-slot transition before enrollment activation
     await pending
   }
   expect(finished).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// Enrollment guidance: what the user and the vault operator do next
+// ---------------------------------------------------------------------------
+
+const GRANT =
+  'ck auth grant --principal enrolled:antigravity-auth-pi --selector-kind category --selector antigravity-native --operation read'
+
+function pendingSteps(approve: string): string[] {
+  return [
+    'Next, the vault operator runs these outside Pi:',
+    approve,
+    `2. Grant read access: ${GRANT}`,
+    'Both are needed: an approval without the grant serves Pi no accounts.',
+    '3. Pi switches to the vault once it sees the approval; Request vault access checks again.',
+  ]
+}
+
+const APPROVE_REQUEST_1 =
+  '1. Approve the request: ck auth enroll approve --request-id request-1'
+
+const PENDING_EXISTS = [
+  'An earlier request for antigravity-auth-pi is still pending in the vault, possibly from an enrollment forgotten here.',
+  'It expires 15 minutes after it was made; request vault access again after that.',
+  'Or the vault operator clears it now: find its ID with ck auth enroll list, run ck auth enroll deny --request-id <id>, then request vault access again here.',
+]
+
+const NO_ACCOUNTS = [
+  'Enrollment is approved, but the vault serves antigravity-auth-pi no Antigravity accounts.',
+  `The vault operator grants read access with: ${GRANT}`,
+]
+
+/**
+ * The vault's enrollment endpoint with answers the test changes as it goes:
+ * `refuse` makes the next proposals fail with a vault refusal code.
+ */
+function vaultEndpoint() {
+  const calls = { proposals: 0 }
+  const answers: {
+    refuse?: { code: string; retry: boolean }
+    poll: PollStep
+  } = { poll: 'pending' }
+  const connect = async (): Promise<ClaustrumEnrollmentConnection> => ({
+    enrollPropose: async () => {
+      calls.proposals++
+      const refusal = answers.refuse
+      if (refusal)
+        throw new claustrum.ClaustrumCredentialError(
+          refusal.code,
+          refusal.retry ? 'transient' : 'permanent',
+          refusal.retry ? 'retry' : 'gone',
+        )
+      return { requestId: `request-${calls.proposals}` }
+    },
+    enrollPoll: async () =>
+      answers.poll === 'approved'
+        ? {
+            status: 'approved' as const,
+            name: PI_ANTIGRAVITY_ENROLLMENT_NAME,
+            token: ENROLLMENT_SECRET,
+            tokenGeneration: 1,
+          }
+        : { status: answers.poll },
+    close: () => {},
+  })
+  return { connect, calls, answers }
+}
+
+/** A sleep the test releases by hand, so the approval watch waits where the test wants it. */
+function heldSleep() {
+  const waiting: Array<() => void> = []
+  return {
+    sleep: () =>
+      new Promise<void>((resolve) => {
+        waiting.push(resolve)
+      }),
+    waiting: () => waiting.length,
+    release: () => {
+      for (const resolve of waiting.splice(0)) resolve()
+    },
+  }
+}
+
+/**
+ * Let background work run until `until` holds or `ms` pass. A check that
+ * something does NOT happen waits out the whole period.
+ */
+async function settle(until: () => boolean = () => false, ms = 300) {
+  const deadline = Date.now() + ms
+  while (!until() && Date.now() < deadline) await Bun.sleep(2)
+}
+
+/** Generous bound for work the test expects to finish. */
+const EXPECTED_MS = 5_000
+
+describe('Pi vault enrollment guidance', () => {
+  it('gives the operator steps with the request ID while pending, offers no Forget, and reports the decision once', async () => {
+    const endpoint = vaultEndpoint()
+    const setup = makeSetup(endpoint)
+    const held = heldSleep()
+    const section = createPiVaultSection({
+      setup: async () => setup,
+      wait: { pollIntervalMs: 0, sleep: held.sleep },
+    })
+    const call = invocation()
+    expect(
+      await action(await build(section), 'request-access').run({
+        values: {},
+        invocation: call.value,
+      }),
+    ).toEqual({
+      ok: true,
+      text: [
+        'Enrollment: waiting for operator approval. You are told here when the operator decides.',
+        ...pendingSteps(APPROVE_REQUEST_1),
+      ].join('\n'),
+    })
+
+    const content = await build(section)
+    expect(content.lines).toEqual([
+      'Mode: local Pi login',
+      'Enrollment (antigravity-auth-pi): waiting for operator approval',
+      'Pi auth slot: empty',
+      ...pendingSteps(APPROVE_REQUEST_1),
+      'Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id request-1; then choose Request vault access here.',
+    ])
+    expect(content.actions?.map((entry) => entry.id)).toEqual([
+      'request-access',
+    ])
+
+    // Asking again while the first request is watched starts no second
+    // watch, so the operator's decision is reported once.
+    await settle(() => held.waiting() > 0, EXPECTED_MS)
+    await action(content, 'request-access').run({
+      values: {},
+      invocation: call.value,
+    })
+    await settle(() => held.waiting() > 1)
+    endpoint.answers.poll = 'approved'
+    held.release()
+    await settle(() => call.notices.length > 0, EXPECTED_MS)
+    // A second watch, had one started, may have found the first holding
+    // the enrollment lock and gone back to sleep: wake it too.
+    held.release()
+    await settle(() => call.notices.length > 1)
+    expect(call.notices).toEqual([
+      { message: 'Enrollment: approved as antigravity-auth-pi', kind: 'info' },
+    ])
+  })
+
+  it('says where to find the request ID when Pi does not know it', async () => {
+    const endpoint = vaultEndpoint()
+    endpoint.answers.refuse = { code: 'pending_queue_full', retry: true }
+    const setup = makeSetup(endpoint)
+    expect(await setup.connectStep()).toMatchObject({
+      state: 'pending',
+      retryCode: 'pending_queue_full',
+    })
+    const content = await build(
+      createPiVaultSection({ setup: async () => setup }),
+    )
+    expect(content.lines?.slice(3)).toEqual([
+      ...pendingSteps(
+        '1. Find the request ID with ck auth enroll list, then approve it: ck auth enroll approve --request-id <id>',
+      ),
+      'Forget vault enrollment is offered again once Pi sees the request approved or denied. To drop it, the operator runs ck auth enroll deny --request-id <id>; then choose Request vault access here.',
+    ])
+  })
+
+  it('names the missing read grant when approval serves an empty roster', async () => {
+    const endpoint = vaultEndpoint()
+    const setup = makeSetup(endpoint)
+    const call = invocation()
+    const section = createPiVaultSection({
+      setup: async () => setup,
+      accounts: () => accountsPort([]).port,
+      wait: { pollIntervalMs: 0, sleep: async () => {} },
+    })
+    await action(await build(section), 'request-access').run({
+      values: {},
+      invocation: call.value,
+    })
+    endpoint.answers.poll = 'approved'
+    await settle(() => call.notices.length > 0, EXPECTED_MS)
+    expect(call.notices).toEqual([
+      {
+        message: [
+          'Enrollment: approved as antigravity-auth-pi',
+          ...NO_ACCOUNTS,
+        ].join('\n'),
+        kind: 'info',
+      },
+    ])
+
+    expect((await build(section)).lines).toEqual([
+      'Mode: vault (custody)',
+      'Enrollment (antigravity-auth-pi): approved as antigravity-auth-pi',
+      'Pi auth slot: dormant (not read)',
+      ...NO_ACCOUNTS,
+    ])
+  })
+
+  it('points an approved host with vault accounts but local mode at Serve Pi from the vault', async () => {
+    // Pi's authority reads custody as soon as enrollment is approved, so a
+    // local mode beside an approval is forced here through the status the
+    // menu builds from.
+    class LocalModeSetup extends PiVaultSetup {
+      override async status(): Promise<PiVaultSetupStatus> {
+        return { ...(await super.status()), mode: 'local', hostSlot: 'empty' }
+      }
+    }
+    const setup = new LocalModeSetup({
+      claustrum,
+      stateDir: join(dir, 'vault'),
+      modeFile,
+      readHostSlot: () => hostSlot,
+      connectEnrollment: enrollmentEndpoint(['approved']).connect,
+    })
+    expect((await setup.connectStep()).state).toBe('approved')
+    const content = await build(
+      createPiVaultSection({
+        setup: async () => setup,
+        accounts: () => accountsPort(ACCOUNTS).port,
+      }),
+    )
+    expect(content.lines).toEqual([
+      'Mode: local Pi login',
+      'Enrollment (antigravity-auth-pi): approved as antigravity-auth-pi',
+      'Pi auth slot: empty',
+      'Next: choose Serve Pi from the vault to serve Pi from these accounts.',
+    ])
+    expect(content.actions?.map((entry) => entry.id)).toContain('use-vault')
+  })
+
+  it('explains a pending_exists refusal once, with the wait and the operator remedy', async () => {
+    const endpoint = vaultEndpoint()
+    endpoint.answers.refuse = { code: 'pending_exists', retry: false }
+    const setup = makeSetup(endpoint)
+    const section = createPiVaultSection({
+      setup: async () => setup,
+      wait: { pollIntervalMs: 0, sleep: async () => {} },
+    })
+    const call = invocation()
+    expect(
+      await action(await build(section), 'request-access').run({
+        values: {},
+        invocation: call.value,
+      }),
+    ).toEqual({
+      ok: false,
+      text: ['Enrollment: blocked (pending_exists)', ...PENDING_EXISTS].join(
+        '\n',
+      ),
+    })
+    await settle()
+    expect(call.notices).toEqual([])
+
+    const content = await build(section)
+    expect(content.lines).toEqual([
+      'Mode: local Pi login',
+      'Enrollment (antigravity-auth-pi): blocked (pending_exists)',
+      'Pi auth slot: empty',
+      ...PENDING_EXISTS,
+    ])
+    expect(content.actions?.map((entry) => entry.id)).toEqual([
+      'request-access',
+      'forget',
+    ])
+  })
+
+  it('stops watching a request forgotten while it waits, and the next request states the remedy once', async () => {
+    const endpoint = vaultEndpoint()
+    // Counts the local reads that find no request, so the test knows when
+    // the approval watch has looked and stopped.
+    class WatchedSetup extends PiVaultSetup {
+      idleReads = 0
+      override async sourceStatus() {
+        const status = await super.sourceStatus()
+        if (status.enrollment.state === 'idle') this.idleReads++
+        return status
+      }
+    }
+    const setup = new WatchedSetup({
+      claustrum,
+      stateDir: join(dir, 'vault'),
+      modeFile,
+      readHostSlot: () => hostSlot,
+      connectEnrollment: endpoint.connect,
+    })
+    const held = heldSleep()
+    const section = createPiVaultSection({
+      setup: async () => setup,
+      wait: { pollIntervalMs: 0, sleep: held.sleep },
+    })
+    const call = invocation()
+    await action(await build(section), 'request-access').run({
+      values: {},
+      invocation: call.value,
+    })
+    await settle(() => held.waiting() > 0, EXPECTED_MS)
+
+    // Pi's request secret is deleted while the vault still holds the
+    // request, so any new proposal is refused until that request goes.
+    await setup.disconnect()
+    endpoint.answers.refuse = { code: 'pending_exists', retry: false }
+    held.release()
+    await settle(
+      () => setup.idleReads > 0 || endpoint.calls.proposals > 1,
+      EXPECTED_MS,
+    )
+    await settle(() => call.notices.length > 0)
+    expect(endpoint.calls.proposals).toBe(1)
+    expect(call.notices).toEqual([])
+
+    const retry = invocation()
+    expect(
+      await action(await build(section), 'request-access').run({
+        values: {},
+        invocation: retry.value,
+      }),
+    ).toEqual({
+      ok: false,
+      text: ['Enrollment: blocked (pending_exists)', ...PENDING_EXISTS].join(
+        '\n',
+      ),
+    })
+    await settle()
+    expect([...call.notices, ...retry.notices]).toEqual([])
+  })
 })
