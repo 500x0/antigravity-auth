@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   admitPublicConsumer,
   requirePublicConsumerRoot,
+  stagePrivateFilesDependency,
 } from '../../packages/core/src/__fixtures__/common-auth-public-consumer.test.ts'
 import { admitLegacyWriter } from '../../packages/core/src/__fixtures__/legacy-writer.test.ts'
 import {
@@ -240,6 +241,7 @@ export async function preparePublicMigrationConsumer(
     await mkdir(consumerDir, { mode: 0o700 })
     await mkdir(packageRoot, { mode: 0o700, recursive: true })
   }
+  await stagePrivateFilesDependency(consumerDir)
   let packageManifest: Record<string, unknown> | undefined
   for (const [member, payload] of entries) {
     const relative = member.slice('package/'.length)

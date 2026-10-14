@@ -8,8 +8,10 @@ import {
   readdir,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -196,6 +198,24 @@ export async function admitPublicConsumer(root: string) {
   return { entries, packageRoot, receipt: JSON.parse(receipt) }
 }
 
+/** Link the backend that rejects containing directories other users can modify, on POSIX and Windows. */
+export async function stagePrivateFilesDependency(root: string) {
+  const name = '@cortexkit/private-files'
+  const require = createRequire(new URL('../../package.json', import.meta.url))
+  const source = dirname(
+    await realpath(require.resolve(`${name}/package.json`)),
+  )
+  const target = join(root, 'node_modules', name)
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 })
+  const existing = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return undefined
+  })
+  if (!existing) await symlink(source, target, 'dir')
+  if ((await realpath(target)) !== source)
+    throw new Error('public consumer private-files dependency differs')
+}
+
 export async function provisionPublicConsumer() {
   const entries = await admittedPublicArchive()
   if ((await realpath(CONSUMER_PARENT)) !== CONSUMER_PARENT)
@@ -228,6 +248,7 @@ export async function provisionPublicConsumer() {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 })
       await writeFile(path, payload, { mode: 0o600, flag: 'wx' })
     }
+    await stagePrivateFilesDependency(root)
     await writeFile(join(root, 'package.json'), CONSUMER_MANIFEST, {
       mode: 0o600,
       flag: 'wx',

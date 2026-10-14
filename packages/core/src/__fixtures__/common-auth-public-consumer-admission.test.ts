@@ -1,4 +1,5 @@
 import { expect, it } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import { symlink, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -9,6 +10,7 @@ import {
   provisionPublicConsumer,
   publicFixtureBytes,
   requirePublicConsumerRoot,
+  stagePrivateFilesDependency,
 } from './common-auth-public-consumer.test.ts'
 import {
   admitLegacyWriter,
@@ -97,6 +99,42 @@ it('refuses corrupted public store payload bytes', async () => {
     await writeFile(entry, 'corrupt synthetic bytes')
     await expect(admitPublicConsumer(fixture.root)).rejects.toThrow(
       'public payload byte identity differs: package/dist/store/index.js',
+    )
+  } finally {
+    await fixture.remove()
+  }
+})
+
+it('stages the real private-files backend for isolated public consumers on every platform', async () => {
+  const fixture = await provisionPublicConsumer()
+  try {
+    await stagePrivateFilesDependency(fixture.root)
+    const result = spawnSync(
+      'node',
+      [
+        '--input-type=module',
+        '-e',
+        "import assert from 'node:assert/strict'; import { realpathSync } from 'node:fs'; import { fileURLToPath } from 'node:url'; import * as backend from '@cortexkit/private-files'; import * as fs from './fs-bridge.mjs'; assert.equal(realpathSync(fileURLToPath(new URL('..', import.meta.resolve('@cortexkit/private-files')))), realpathSync('./node_modules/@cortexkit/private-files')); assert.equal(typeof fs.writeJsonAtomic, 'function'); assert.equal(typeof backend.verifySafeParent, 'function'); assert.equal(typeof (await backend.verifySafeParent(process.cwd())).ok, 'boolean'); console.log('PUBLIC_PRIVATE_FILES_BACKEND_OK')",
+      ],
+      { cwd: fixture.root, encoding: 'utf8' },
+    )
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim()).toBe('PUBLIC_PRIVATE_FILES_BACKEND_OK')
+  } finally {
+    await fixture.remove()
+  }
+})
+
+it('refuses an isolated private-files link that does not resolve to the installed backend', async () => {
+  const fixture = await provisionPublicConsumer()
+  try {
+    const target = join(fixture.root, 'node_modules/@cortexkit/private-files')
+    await unlink(target)
+    await symlink(fixture.root, target, 'dir')
+    await expect(stagePrivateFilesDependency(fixture.root)).rejects.toThrow(
+      'public consumer private-files dependency differs',
     )
   } finally {
     await fixture.remove()
