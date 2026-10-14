@@ -29,30 +29,23 @@ type MenuPluginSection = NonNullable<CommonAuthMenuOptions['cache']>
 /**
  * The location's operator settings as the shared menu's Routing and Limits
  * sections read and write them. Reads go to the live controller every
- * time; only the two update methods write.
+ * time; only the killswitch update method writes.
  */
 export function operatorMenuSettings(
   settings: Pick<OperatorSettingsController, 'get' | 'update'>,
+  selectionStrategy: () => 'sticky' | 'round-robin' | 'hybrid' | 'vault',
 ): AntigravityMenuSettingsSource {
   return {
     read() {
       const current = settings.get()
       return {
-        routing: {
-          cliFirst: current.routing.cli_first,
-          quotaStyleFallback: current.routing.quota_style_fallback,
-        },
+        selectionStrategy: selectionStrategy(),
         killswitch: {
           enabled: current.killswitch.enabled,
           minimumRemainingPercent: current.killswitch.minimum_remaining_percent,
         },
       }
     },
-    updateRouting: (next) =>
-      settings.update((draft) => {
-        draft.routing.cli_first = next.cliFirst
-        draft.routing.quota_style_fallback = next.quotaStyleFallback
-      }),
     updateKillswitch: (next) =>
       settings.update((draft) => {
         draft.killswitch.enabled = next.enabled

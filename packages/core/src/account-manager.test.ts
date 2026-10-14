@@ -172,7 +172,6 @@ describe('core AccountManager', () => {
     manager.markRateLimitedWithReason(
       limited,
       'gemini',
-      'antigravity',
       'antigravity-gemini-3.6-flash',
       'RATE_LIMIT_EXCEEDED',
     )
@@ -181,7 +180,6 @@ describe('core AccountManager', () => {
       'gemini',
       'antigravity-gemini-3.6-flash',
       'hybrid',
-      'antigravity',
     )
 
     expect(selected?.index).toBe(0)
@@ -210,7 +208,6 @@ describe('core AccountManager', () => {
       manager.markRateLimitedWithReason(
         account,
         'gemini',
-        'antigravity',
         'antigravity-gemini-3.6-flash',
         'RATE_LIMIT_EXCEEDED',
       )
@@ -220,7 +217,6 @@ describe('core AccountManager', () => {
       'gemini',
       'antigravity-gemini-3.6-flash',
       'hybrid',
-      'antigravity',
     )
 
     expect(selected).toBeNull()
@@ -238,35 +234,13 @@ describe('core AccountManager', () => {
     manager.markRateLimitedWithReason(
       first,
       'gemini',
-      'antigravity',
       'gemini-3-pro',
       'RATE_LIMIT_EXCEEDED',
     )
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        first,
-        'gemini',
-        'antigravity',
-        'gemini-3-pro',
-      ),
-    ).toBe(true)
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        first,
-        'gemini',
-        'antigravity',
-        'gemini-3-flash',
-      ),
-    ).toBe(false)
+    expect(manager.isRateLimited(first, 'gemini', 'gemini-3-pro')).toBe(true)
+    expect(manager.isRateLimited(first, 'gemini', 'gemini-3-flash')).toBe(false)
     now += 30_001
-    expect(
-      manager.isRateLimitedForHeaderStyle(
-        first,
-        'gemini',
-        'antigravity',
-        'gemini-3-pro',
-      ),
-    ).toBe(false)
+    expect(manager.isRateLimited(first, 'gemini', 'gemini-3-pro')).toBe(false)
   })
 
   it('isolates child selection from its exact parent', () => {
@@ -279,7 +253,6 @@ describe('core AccountManager', () => {
         'gemini',
         null,
         'round-robin',
-        'antigravity',
         false,
         100,
         600_000,
@@ -909,7 +882,7 @@ describe('repository-backed AccountManager', () => {
     if (account === undefined) throw new Error('no account')
     manager.markRateLimited(account, 1_000, 'claude')
     manager.markRateLimited(account, 5_000, 'claude')
-    manager.markRateLimited(account, 2_000, 'gemini', 'gemini-cli')
+    manager.markRateLimited(account, 2_000, 'gemini')
     manager.markAccountCoolingDown(account, 3_000, 'network-error')
     manager.markSwitched(account, 'rate-limit', 'gemini')
     await manager.flushSaveToDisk()
@@ -936,7 +909,7 @@ describe('repository-backed AccountManager', () => {
         rateLimitResetTimes: {
           claude: now + 9_000,
           other: 1,
-          'gemini-cli': now + 2_000,
+          gemini: now + 2_000,
         },
         coolingDownUntil: now + 3_000,
         cooldownReason: 'network-error',
@@ -1474,11 +1447,10 @@ describe('repository writes oracle', () => {
     }
     const session = { id: 'session' }
     manager.getCurrentOrNextForFamily('claude', null, 'hybrid')
-    manager.markRateLimited(b, 1_000, 'gemini', 'antigravity', model)
+    manager.markRateLimited(b, 1_000, 'gemini', model)
     manager.markRateLimitedWithReason(
       a,
       'claude',
-      'antigravity',
       null,
       'RATE_LIMIT_EXCEEDED',
       2_000,

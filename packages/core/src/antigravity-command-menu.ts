@@ -59,12 +59,9 @@ export type AntigravityMenuAccounts = Pick<
   'read' | 'setEnabled' | 'remove' | 'selectAccount'
 >
 
-/** Routing and killswitch values the Routing and Limits sections show. */
+/** Account selection and killswitch values shown by the settings sections. */
 export interface AntigravityMenuSettings {
-  readonly routing: {
-    readonly cliFirst: boolean
-    readonly quotaStyleFallback: boolean
-  }
+  readonly selectionStrategy: 'sticky' | 'round-robin' | 'hybrid' | 'vault'
   readonly killswitch: {
     readonly enabled: boolean
     readonly minimumRemainingPercent: number
@@ -73,12 +70,11 @@ export interface AntigravityMenuSettings {
 
 /**
  * The location's operator settings. `read` is called for every section
- * build, so the menu always shows the current values; only the two update
- * methods write.
+ * build, so the menu always shows the current values; only the killswitch update
+ * method writes.
  */
 export interface AntigravityMenuSettingsSource {
   read(): AntigravityMenuSettings | Promise<AntigravityMenuSettings>
-  updateRouting(next: AntigravityMenuSettings['routing']): Promise<void>
   updateKillswitch(next: AntigravityMenuSettings['killswitch']): Promise<void>
 }
 
@@ -591,46 +587,22 @@ function routingSection(options: {
   return {
     title: 'Routing',
     async build() {
-      const current = (await options.settings.read()).routing
+      const strategy = (await options.settings.read()).selectionStrategy
+      const explanations = {
+        sticky: 'Keep the current account until it is unavailable.',
+        'round-robin': 'Rotate among available accounts for each request.',
+        hybrid: 'Choose available accounts using health and quota signals.',
+        vault: "Selection follows the vault's served accounts.",
+      }
       return {
-        lines: [
-          `Gemini CLI headers first: ${onOff(current.cliFirst)}`,
-          `Fall back to the other header style on quota: ${onOff(current.quotaStyleFallback)}`,
-        ],
-        actions: [
-          {
-            id: 'set',
-            label: 'Change routing',
-            knobs: [
-              {
-                kind: 'toggle',
-                id: 'cliFirst',
-                label: 'Gemini CLI headers first',
-                value: current.cliFirst,
-              },
-              {
-                kind: 'toggle',
-                id: 'quotaStyleFallback',
-                label: 'Header-style fallback on quota',
-                value: current.quotaStyleFallback,
-              },
-            ],
-            run: async ({ values }) => {
-              const latest = (await options.settings.read()).routing
-              await options.settings.updateRouting({
-                cliFirst:
-                  typeof values.cliFirst === 'boolean'
-                    ? values.cliFirst
-                    : latest.cliFirst,
-                quotaStyleFallback:
-                  typeof values.quotaStyleFallback === 'boolean'
-                    ? values.quotaStyleFallback
-                    : latest.quotaStyleFallback,
-              })
-              return 'Routing updated'
-            },
-          },
-        ],
+        lines:
+          strategy === 'vault'
+            ? [explanations.vault]
+            : [
+                `Account selection strategy: ${strategy}`,
+                explanations[strategy],
+                'Configured in antigravity.json: account_selection_strategy',
+              ],
       }
     },
   }

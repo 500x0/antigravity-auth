@@ -452,7 +452,7 @@ sequenceDiagram
 | Manual bypass | `force` bypasses backoff, not identity/admission checks |
 | Disposal | Aborts controllers and awaits in-flight refreshes |
 
-Results can include Antigravity and Gemini CLI header-style readings. Presentation groups those into quota pools; it must not confuse header-style routing with observation freshness.
+Results contain Antigravity quota readings grouped into Gemini and non-Gemini pools, with per-model readings retained. Observation freshness is independent of account routing.
 
 ### Observation timestamps and formatter
 
@@ -490,17 +490,17 @@ The selector's soft-quota check reads cached remaining fraction only while the c
 
 `getEffectiveSoftQuotaThreshold` uses 100 for a single enabled account so the configured soft threshold does not block a user with no rotation partner.
 
-### Routing
+### Account routing
 
-Two header styles: `antigravity` (Electron-style UA + `X-Goog-Api-Client` + `Client-Metadata`) and `gemini-cli` (`GeminiCLI/{}/{}/({}; {})` UA). Claude has only `antigravity`; Gemini has both. The resolver is `resolveHeaderRoutingDecision` (`packages/opencode/src/plugin/fetch-routing.ts`) and the fallback is `resolveQuotaFallbackHeaderStyle`. When the preferred style is rate-limited for the chosen account, the interceptor either switches account (if another account has the preferred style available) or flips to the alternate style.
+Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
 
-Routing settings are read at dispatch, so changes through the `/antigravity` settings menu affect subsequent work without rebooting the plugin.
+Every content send and warmup uses Antigravity transport and its User-Agent. Account selection and retry keys have no header-style dimension: the key is a family with an optional model, scoped to the account. The read-only Routing menu shows `account_selection_strategy` from the effective config, or the vault-served account policy.
 
 ### Killswitch
 
 `packages/opencode/src/plugin/killswitch.ts` exposes `evaluateKillswitchForAccount` and `throwIfAllKilled`. The operator sets minimum remaining quota; accounts below a fresh threshold are excluded. Missing/stale quota fails open so a cold start is not blocked solely for lack of readings.
 
-Evaluation is **model-aware**: `gemini-pro` checks its own quota group, not the maximum of pro and flash. Callers omitting a model keep family-level behavior. The shared executor computes an eligibility mask for the selection pass and reuses it after quota-fallback selection; all-excluded policy produces a native error response.
+Evaluation is **model-aware**: `gemini-pro` checks its own quota group, not the maximum of pro and flash. Callers omitting a model keep family-level behavior. The shared executor computes an eligibility mask for the selection pass; all-excluded policy produces a native error response.
 
 ## OAuth and token lifecycle
 
@@ -533,7 +533,7 @@ Evaluation is **model-aware**: `gemini-pro` checks its own quota group, not the 
 `packages/opencode/src/plugin/request.ts` implements `prepareAntigravityRequest`. The pipeline:
 
 1. **Sanitize** — strip Claude thinking blocks (`packages/core/src/transform/claude.ts`), normalize cross-model payloads (`packages/core/src/transform/cross-model-sanitizer.ts`), apply `applyGeminiTransforms` / `applyClaudeTransforms` (`packages/core/src/transform/`) depending on the resolved model family.
-2. **Resolve** — `resolveModelWithTier` from `packages/core/src/transform/model-resolver.ts` maps the user-facing tag (`claude-sonnet-4-6`, `antigravity-gemini-3.7-flash`, `antigravity-gemini-3.8-flash`, etc.) to the Antigravity wire model and the header style.
+2. **Resolve** — `resolveModelWithTier` from `packages/core/src/transform/model-resolver.ts` maps the user-facing tag (`claude-sonnet-4-6`, `antigravity-gemini-3.7-flash`, `antigravity-gemini-3.8-flash`, etc.) to the Antigravity wire model.
 3. **Inject** — `buildAgyAgentRequestMetadata` in `packages/core/src/agy-request-metadata.ts` builds step/model/trajectory labels and `agent/<conversationId>/<timestamp>/<trajectoryId>/<step>` request IDs. The source owns the model-enum mapping.
 4. **Stabilize prefix** — `orderAgyRequestPayloadInPlace` orders `contents → systemInstruction → tools → toolConfig → labels → generationConfig → sessionId`, avoiding needless prefix changes. This is a wire-order rule, not a measured cache-hit guarantee.
 5. **Harden** — `CLAUDE_TOOL_SYSTEM_INSTRUCTION` in `packages/core/src/constants.ts` is injected when tools require it.
@@ -577,7 +577,7 @@ gantt
 
 ### Endpoint fallback
 
-`ANTIGRAVITY_ENDPOINT_FALLBACKS = [DAILY, PROD]` in `packages/core/src/constants.ts`. The shared executor walks them under bounded capacity retries; Gemini CLI header style uses PROD only.
+`ANTIGRAVITY_ENDPOINT_FALLBACKS = [DAILY, PROD]` in `packages/core/src/constants.ts`. The shared executor walks them under bounded capacity retries.
 
 ### Retry-after and rate-limit bookkeeping
 
@@ -589,7 +589,7 @@ gantt
 - `SERVER_ERROR` — 20s.
 - `UNKNOWN` — 60s.
 
-The selector tracks rate limits by account/family/model/header style; repository observations retain credential attribution.
+The selector tracks rate limits by account/family/model; repository observations retain credential attribution.
 
 ## Sidebar snapshot and RPC protocols
 
@@ -776,7 +776,7 @@ Use `package.json` for exact selectors rather than copying commands into a secon
 
 1. Add the model identity to the registry in `packages/core/src/model-registry.ts`.
 2. Add a `getQuotaGroupForModel` mapping so the quota manager classifies it correctly.
-3. Check header style and `getAgyModelEnum` mapping in `packages/core/src/agy-request-metadata.ts`.
+3. Check the Antigravity wire model and `getAgyModelEnum` mapping in `packages/core/src/agy-request-metadata.ts`.
 4. Add the model to `applyClaudeTransforms` / `applyGeminiTransforms` if the transform needs to know about it.
 5. If the model is exposed via the Pi provider, add it to `getPublicModelDefinitions()`.
 

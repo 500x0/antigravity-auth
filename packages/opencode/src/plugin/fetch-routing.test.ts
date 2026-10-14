@@ -5,8 +5,6 @@ import {
   getCapacityBackoffDelay,
   getModelFamilyFromUrl,
   isCapacityRetryBudgetExhausted,
-  resolveHeaderRoutingDecision,
-  resolveQuotaFallbackHeaderStyle,
   toUrlString,
   toWarmupStreamUrl,
 } from './fetch-routing'
@@ -37,40 +35,6 @@ describe('fetch URL routing', () => {
         GEMINI_URL.replace('gemini-3-flash', 'claude-sonnet-4-6'),
       ),
     ).toBe('claude')
-  })
-})
-
-describe('header routing', () => {
-  it('keeps fallback directional and Gemini-only', () => {
-    expect(
-      resolveQuotaFallbackHeaderStyle({
-        family: 'gemini',
-        headerStyle: 'antigravity',
-        alternateStyle: 'gemini-cli',
-      }),
-    ).toBe('gemini-cli')
-    expect(
-      resolveQuotaFallbackHeaderStyle({
-        family: 'claude',
-        headerStyle: 'antigravity',
-        alternateStyle: 'gemini-cli',
-      }),
-    ).toBeNull()
-  })
-
-  it('honors explicit quota and opt-in fallback', () => {
-    expect(
-      resolveHeaderRoutingDecision(
-        GEMINI_URL.replace('gemini-3-flash', 'antigravity-gemini-3-flash'),
-        'gemini',
-        { cli_first: true, quota_style_fallback: true } as never,
-      ),
-    ).toEqual({
-      cliFirst: true,
-      preferredHeaderStyle: 'antigravity',
-      explicitQuota: true,
-      allowQuotaFallback: true,
-    })
   })
 })
 

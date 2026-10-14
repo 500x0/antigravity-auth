@@ -212,7 +212,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'round-robin',
-        'antigravity',
         false,
         100,
         600_000,
@@ -243,7 +242,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         strategy,
-        'antigravity',
         false,
         100,
         600_000,
@@ -270,7 +268,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'round-robin',
-        'antigravity',
         false,
         100,
         600_000,
@@ -298,7 +295,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'sticky',
-        'antigravity',
         false,
         100,
         600_000,
@@ -310,7 +306,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'sticky',
-        'antigravity',
         false,
         100,
         600_000,
@@ -336,7 +331,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'round-robin',
-        'antigravity',
         false,
         100,
         600_000,
@@ -349,7 +343,6 @@ describe('AccountManager', () => {
         'gemini',
         null,
         'round-robin',
-        'antigravity',
         false,
         100,
         600_000,
@@ -663,171 +656,73 @@ describe('AccountManager', () => {
     expect(manager.shouldShowAccountToast(0)).toBe(true)
   })
 
-  describe('header style fallback for Gemini', () => {
-    it('tracks rate limits separately for each header style', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
+  describe('account/family/model rate limits', () => {
+    it('keeps legacy style keys inert and preserved while rotating on current model limits', () => {
+      const limits = {
+        'gemini-cli': 9999999999999,
+        'gemini-antigravity:gemini-4-argon': 9999999999999,
       }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      manager.markRateLimited(account!, 60000, 'gemini', 'antigravity')
-
-      expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'antigravity'),
-      ).toBe(true)
-      expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'gemini-cli'),
-      ).toBe(false)
-    })
-
-    it('getAvailableHeaderStyle returns antigravity first for Gemini', () => {
-      const stored: AccountStorageV4 = {
+      const manager = new AccountManager(undefined, {
         version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
         activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      expect(manager.getAvailableHeaderStyle(account!, 'gemini')).toBe(
-        'antigravity',
+        accounts: [
+          {
+            refreshToken: 'r1',
+            addedAt: 1,
+            lastUsed: 0,
+            rateLimitResetTimes: limits,
+          },
+          { refreshToken: 'r2', addedAt: 1, lastUsed: 0 },
+        ],
+      })
+      const first = manager.getCurrentOrNextForFamily(
+        'gemini',
+        'gemini-4-argon',
+      )!
+      expect(first.index).toBe(0)
+      expect(manager.isRateLimited(first, 'gemini', 'gemini-4-argon')).toBe(
+        false,
       )
-    })
-
-    it('getAvailableHeaderStyle returns gemini-cli when antigravity is rate-limited', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      manager.markRateLimited(account!, 60000, 'gemini', 'antigravity')
-
-      expect(manager.getAvailableHeaderStyle(account!, 'gemini')).toBe(
-        'gemini-cli',
+      expect(first.rateLimitResetTimes).toEqual(limits)
+      manager.markRateLimited(first, 60000, 'gemini', 'gemini-4-argon')
+      expect(manager.isRateLimited(first, 'gemini', 'gemini-4-argon')).toBe(
+        true,
       )
-    })
-
-    it('getAvailableHeaderStyle returns null when both header styles are rate-limited', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      manager.markRateLimited(account!, 60000, 'gemini', 'antigravity')
-      manager.markRateLimited(account!, 60000, 'gemini', 'gemini-cli')
-
-      expect(manager.getAvailableHeaderStyle(account!, 'gemini')).toBeNull()
-    })
-
-    it('getAvailableHeaderStyle always returns antigravity for Claude', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('claude')
-
-      expect(manager.getAvailableHeaderStyle(account!, 'claude')).toBe(
-        'antigravity',
+      expect(manager.isRateLimited(first, 'gemini', 'gemini-3.5-flash')).toBe(
+        false,
       )
-    })
-
-    it('getAvailableHeaderStyle returns null for Claude when rate-limited', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('claude')
-
-      manager.markRateLimited(account!, 60000, 'claude', 'antigravity')
-
-      expect(manager.getAvailableHeaderStyle(account!, 'claude')).toBeNull()
-    })
-
-    it('Gemini rate limits expire independently per header style', () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date(0))
-
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      manager.markRateLimited(account!, 30000, 'gemini', 'antigravity')
-      manager.markRateLimited(account!, 60000, 'gemini', 'gemini-cli')
-
-      jest.setSystemTime(new Date(35000))
-
+      expect(manager.isRateLimited(first, 'claude', 'gemini-4-argon')).toBe(
+        false,
+      )
       expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'antigravity'),
-      ).toBe(false)
-      expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'gemini-cli'),
-      ).toBe(true)
-
-      expect(manager.getAvailableHeaderStyle(account!, 'gemini')).toBe(
-        'antigravity',
-      )
+        manager.getCurrentOrNextForFamily('gemini', 'gemini-4-argon')?.index,
+      ).toBe(1)
+      expect(first.rateLimitResetTimes['gemini-cli']).toBe(limits['gemini-cli'])
     })
 
-    it('getMinWaitTimeForFamily considers both Gemini header styles', () => {
-      jest.useFakeTimers()
-      jest.setSystemTime(new Date(0))
-
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const account = manager.getCurrentOrNextForFamily('gemini')
-
-      manager.markRateLimited(account!, 30000, 'gemini', 'antigravity')
-
-      expect(manager.getMinWaitTimeForFamily('gemini')).toBe(0)
-
-      manager.markRateLimited(account!, 60000, 'gemini', 'gemini-cli')
-
-      expect(manager.getMinWaitTimeForFamily('gemini')).toBe(30000)
+    it('waits for the later of family and model limits, then the earliest available account', () => {
+      const manager = new AccountManager(
+        undefined,
+        {
+          version: 4,
+          activeIndex: 0,
+          accounts: [
+            { refreshToken: 'r1', addedAt: 1, lastUsed: 0 },
+            { refreshToken: 'r2', addedAt: 1, lastUsed: 0 },
+          ],
+        },
+        { now: () => 1000 },
+      )
+      const [first, second] = manager.getAccounts()
+      manager.markRateLimited(first!, 30000, 'gemini')
+      manager.markRateLimited(first!, 60000, 'gemini', 'gemini-4-argon')
+      manager.markRateLimited(second!, 45000, 'gemini', 'gemini-4-argon')
+      expect(manager.getMinWaitTimeForFamily('gemini', 'gemini-4-argon')).toBe(
+        45000,
+      )
+      expect(
+        manager.getMinWaitTimeForFamily('gemini', 'gemini-3.5-flash'),
+      ).toBe(0)
     })
   })
 
@@ -1055,12 +950,8 @@ describe('AccountManager', () => {
       manager.markAccountCoolingDown(account!, 30000, 'auth-failure')
 
       expect(manager.isAccountCoolingDown(account!)).toBe(true)
-      expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'antigravity'),
-      ).toBe(false)
-      expect(
-        manager.isRateLimitedForHeaderStyle(account!, 'gemini', 'gemini-cli'),
-      ).toBe(false)
+      expect(manager.isRateLimited(account!, 'gemini')).toBe(false)
+      expect(manager.isRateLimited(account!, 'gemini')).toBe(false)
     })
   })
 
@@ -1465,7 +1356,7 @@ describe('AccountManager', () => {
       manager.markTouchedForQuota(account, 'claude')
       expect(manager.isFreshForQuota(account, 'claude')).toBe(false)
 
-      manager.markRateLimited(account, 60000, 'claude', 'antigravity')
+      manager.markRateLimited(account, 60000, 'claude')
 
       jest.setSystemTime(new Date(70000))
       expect(manager.isFreshForQuota(account, 'claude')).toBe(true)
@@ -1508,85 +1399,6 @@ describe('AccountManager', () => {
 
       account.consecutiveFailures = 0
       expect(account.consecutiveFailures).toBe(0)
-    })
-  })
-
-  describe('Issue #147: headerStyle-aware account selection', () => {
-    it('skips account when requested headerStyle is rate-limited even if other style is available', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-          { refreshToken: 'r2', projectId: 'p2', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-        activeIndexByFamily: { claude: 0, gemini: 0 },
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const firstAccount = manager.getCurrentOrNextForFamily('gemini')
-
-      // Mark ONLY antigravity as rate-limited (gemini-cli is still available)
-      manager.markRateLimited(firstAccount!, 60000, 'gemini', 'antigravity')
-
-      // Verify: antigravity is limited, gemini-cli is not
-      expect(
-        manager.isRateLimitedForHeaderStyle(
-          firstAccount!,
-          'gemini',
-          'antigravity',
-        ),
-      ).toBe(true)
-      expect(
-        manager.isRateLimitedForHeaderStyle(
-          firstAccount!,
-          'gemini',
-          'gemini-cli',
-        ),
-      ).toBe(false)
-
-      // BUG: When we explicitly request antigravity headerStyle,
-      // we should skip this account and get the next one
-      // Current behavior: returns the same account because "family" is not fully limited
-      const nextAccount = manager.getCurrentOrNextForFamily(
-        'gemini',
-        null,
-        'sticky',
-        'antigravity', // Explicitly requesting antigravity
-      )
-
-      // Verifies headerStyle-aware account selection: should skip account 0
-      // because its antigravity quota is limited, even though gemini-cli is available
-      expect(nextAccount?.index).toBe(1)
-    })
-
-    it('returns same account when a different headerStyle is rate-limited', () => {
-      const stored: AccountStorageV4 = {
-        version: 4,
-        accounts: [
-          { refreshToken: 'r1', projectId: 'p1', addedAt: 1, lastUsed: 0 },
-          { refreshToken: 'r2', projectId: 'p2', addedAt: 1, lastUsed: 0 },
-        ],
-        activeIndex: 0,
-        activeIndexByFamily: { claude: 0, gemini: 0 },
-      }
-
-      const manager = new AccountManager(undefined, stored)
-      const firstAccount = manager.getCurrentOrNextForFamily('gemini')
-
-      // Mark gemini-cli as rate-limited (antigravity is still available)
-      manager.markRateLimited(firstAccount!, 60000, 'gemini', 'gemini-cli')
-
-      // When requesting antigravity, should return the same account
-      // because antigravity quota is still available
-      const nextAccount = manager.getCurrentOrNextForFamily(
-        'gemini',
-        null,
-        'sticky',
-        'antigravity', // Requesting antigravity which is NOT limited
-      )
-
-      expect(nextAccount?.index).toBe(0) // Should stay on account 0
     })
   })
 
@@ -1700,7 +1512,7 @@ describe('AccountManager', () => {
   })
 
   describe('Rate Limit Reason Classification', () => {
-    it('getMinWaitTimeForFamily respects strict header style', () => {
+    it('getMinWaitTimeForFamily respects independent model limits', () => {
       jest.useFakeTimers()
       jest.setSystemTime(new Date(0))
 
@@ -1715,26 +1527,15 @@ describe('AccountManager', () => {
       const manager = new AccountManager(undefined, stored)
       const account = manager.getCurrentOrNextForFamily('gemini')
 
-      manager.markRateLimited(
-        account!,
-        30000,
-        'gemini',
-        'antigravity',
-        'gemini-3-pro-image',
-      )
-
-      expect(
-        manager.getMinWaitTimeForFamily(
-          'gemini',
-          'gemini-3-pro-image',
-          'antigravity',
-          true,
-        ),
-      ).toBe(30000)
+      manager.markRateLimited(account!, 30000, 'gemini', 'gemini-3-pro-image')
 
       expect(
         manager.getMinWaitTimeForFamily('gemini', 'gemini-3-pro-image'),
-      ).toBe(0)
+      ).toBe(30000)
+
+      expect(manager.getMinWaitTimeForFamily('gemini', 'gemini-4-argon')).toBe(
+        0,
+      )
     })
 
     describe('parseRateLimitReason', () => {
@@ -1840,7 +1641,6 @@ describe('AccountManager', () => {
         const backoff1 = manager.markRateLimitedWithReason(
           account,
           'gemini',
-          'antigravity',
           null,
           'QUOTA_EXHAUSTED',
         )
@@ -1850,7 +1650,6 @@ describe('AccountManager', () => {
         const backoff2 = manager.markRateLimitedWithReason(
           account,
           'gemini',
-          'antigravity',
           null,
           'QUOTA_EXHAUSTED',
         )
@@ -1860,7 +1659,6 @@ describe('AccountManager', () => {
         const backoff3 = manager.markRateLimitedWithReason(
           account,
           'gemini',
-          'antigravity',
           null,
           'QUOTA_EXHAUSTED',
         )
@@ -1888,7 +1686,6 @@ describe('AccountManager', () => {
         const backoff = manager.markRateLimitedWithReason(
           account,
           'gemini',
-          'antigravity',
           null,
           'QUOTA_EXHAUSTED',
           180_000,
@@ -1932,8 +1729,7 @@ describe('AccountManager', () => {
               addedAt: 1,
               lastUsed: 0,
               rateLimitResetTimes: {
-                'gemini-antigravity': 11_500,
-                'gemini-cli': 11_500,
+                gemini: 11_500,
               },
             },
           ],
@@ -1959,8 +1755,7 @@ describe('AccountManager', () => {
               addedAt: 1,
               lastUsed: 0,
               rateLimitResetTimes: {
-                'gemini-antigravity': 15_000,
-                'gemini-cli': 15_000,
+                gemini: 15_000,
               },
             },
           ],
@@ -1999,7 +1794,7 @@ describe('AccountManager', () => {
               addedAt: 1,
               lastUsed: 0,
               rateLimitResetTimes: {
-                'gemini-antigravity': 70_000,
+                gemini: 70_000,
                 'gemini-cli': 80_000,
               },
             },
@@ -2008,7 +1803,7 @@ describe('AccountManager', () => {
               projectId: 'p2',
               addedAt: 2,
               lastUsed: 0,
-              rateLimitResetTimes: { 'gemini-antigravity': 90_000 },
+              rateLimitResetTimes: { gemini: 90_000 },
             },
           ],
           activeIndex: 0,
@@ -2021,13 +1816,9 @@ describe('AccountManager', () => {
 
         manager.clearAllRateLimitsForFamily('gemini')
 
-        expect(
-          accounts[0]!.rateLimitResetTimes['gemini-antigravity'],
-        ).toBeUndefined()
-        expect(accounts[0]!.rateLimitResetTimes['gemini-cli']).toBeUndefined()
-        expect(
-          accounts[1]!.rateLimitResetTimes['gemini-antigravity'],
-        ).toBeUndefined()
+        expect(accounts[0]!.rateLimitResetTimes.gemini).toBeUndefined()
+        expect(accounts[0]!.rateLimitResetTimes['gemini-cli']).toBe(80_000)
+        expect(accounts[1]!.rateLimitResetTimes.gemini).toBeUndefined()
         expect(accounts[0]!.consecutiveFailures).toBe(0)
         expect(accounts[1]!.consecutiveFailures).toBe(0)
 
@@ -2056,7 +1847,6 @@ describe('AccountManager', () => {
       manager.markRateLimitedWithReason(
         account!,
         'claude',
-        'antigravity',
         null,
         'QUOTA_EXHAUSTED',
         null,
@@ -2072,7 +1862,6 @@ describe('AccountManager', () => {
       manager.markRateLimitedWithReason(
         account!,
         'claude',
-        'antigravity',
         null,
         'QUOTA_EXHAUSTED',
         null,
@@ -2102,7 +1891,6 @@ describe('AccountManager', () => {
       manager.markRateLimitedWithReason(
         account!,
         'claude',
-        'antigravity',
         null,
         'QUOTA_EXHAUSTED',
         null,
@@ -2117,7 +1905,6 @@ describe('AccountManager', () => {
       manager.markRateLimitedWithReason(
         account!,
         'claude',
-        'antigravity',
         null,
         'QUOTA_EXHAUSTED',
         null,
@@ -2252,7 +2039,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2277,7 +2063,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2314,7 +2099,6 @@ describe('AccountManager', () => {
           'claude',
           null,
           strategy,
-          'antigravity',
           false,
           80,
         )
@@ -2346,7 +2130,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         100,
       )
@@ -2375,7 +2158,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2401,7 +2183,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'round-robin',
-        'antigravity',
         false,
         90,
       )
@@ -2423,7 +2204,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2449,7 +2229,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2479,7 +2258,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )
@@ -2508,7 +2286,6 @@ describe('AccountManager', () => {
         'claude',
         null,
         'sticky',
-        'antigravity',
         false,
         90,
       )

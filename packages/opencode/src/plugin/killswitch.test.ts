@@ -19,7 +19,6 @@ function disabled(): OperatorSettings {
 
 function enabledWith(threshold: number): OperatorSettings {
   return {
-    routing: { cli_first: false, quota_style_fallback: false },
     killswitch: { enabled: true, minimum_remaining_percent: threshold },
     log_level: 'info',
   }
@@ -100,7 +99,6 @@ describe('evaluateKillswitchForAccount', () => {
 
   it('honours a per-account override that is stricter than the global threshold', () => {
     const settings: OperatorSettings = {
-      routing: { cli_first: false, quota_style_fallback: false },
       killswitch: {
         enabled: true,
         minimum_remaining_percent: 5,

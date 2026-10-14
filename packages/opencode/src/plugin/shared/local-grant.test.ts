@@ -616,9 +616,6 @@ async function runScenario(mode: Mode, stage: Stage = 'project') {
           },
         )
       },
-      fetchImpl: async () => {
-        throw new Error('standard network fetch forbidden')
-      },
       debug,
       dump: createGeminiDumpState({ enabled: false }),
       logger,
@@ -1016,7 +1013,7 @@ it('quota refuses provider metadata cleared after its attributed refresh before 
   }
 })
 
-it('quota admits healthy initialized metadata and confirms both physical sends with the exact signal', async () => {
+it('quota admits healthy initialized metadata and confirms the summary physical send with the exact signal', async () => {
   const pool = await freshPool()
   let manager: AccountManager | undefined
   try {
@@ -1054,11 +1051,8 @@ it('quota admits healthy initialized metadata and confirms both physical sends w
       },
     })
     expect((await fetchQuota(target, controller.signal)).status).toBe('ok')
-    expect(sends).toHaveLength(2)
-    expect(sends.map((send) => send.token)).toEqual([
-      `Bearer ${TOKEN_A}`,
-      `Bearer ${TOKEN_A}`,
-    ])
+    expect(sends).toHaveLength(1)
+    expect(sends.map((send) => send.token)).toEqual([`Bearer ${TOKEN_A}`])
     expect(sends.every((send) => send.signal === controller.signal)).toBe(true)
     expect(pool.exchangeCalls).toEqual(['synthetic-refresh'])
   } finally {

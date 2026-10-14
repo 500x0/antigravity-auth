@@ -23,7 +23,6 @@ import {
   type AccountRepository,
   type AntigravityQuotaCheckReport,
   type AntigravityVaultAccountSource,
-  aggregateGeminiCliQuota,
   aggregateQuota,
   aggregateQuotaSummary,
   type AccountManager as CoreAccountManager,
@@ -33,10 +32,8 @@ import {
   type FetchAccountQuota,
   type FetchAvailableModelsOptions,
   fetchAvailableModels,
-  fetchGeminiCliQuota,
   fetchQuotaSummary,
   fetchWithActiveTimeout,
-  type GeminiCliQuotaSummary,
   getHealthTracker,
   type QuotaManager,
   type QuotaSummary,
@@ -51,7 +48,6 @@ import {
 import {
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
   ANTIGRAVITY_PROVIDER_ID,
-  buildGeminiCliUserAgent,
 } from '../constants'
 import {
   buildSidebarMachineStateFromAccounts,
@@ -83,8 +79,6 @@ const log = createLogger('quota')
 export type {
   AccountQuotaResult,
   AccountQuotaStatus,
-  GeminiCliQuotaModel,
-  GeminiCliQuotaSummary,
   PerModelQuotaEntry,
   QuotaGroup,
   QuotaGroupSummary,
@@ -563,9 +557,8 @@ async function fetchLegacyModelsFallback(options: {
 }
 
 /**
- * Fetches both quota payloads for one account with a bearer and project the
- * caller already resolved: the windowed quota summary (with the legacy
- * model-list fallback) and the Gemini CLI quota. Shared by the OpenCode 1
+ * Fetches the Antigravity quota summary for one account with a bearer and
+ * project the caller already resolved, with a legacy model-list fallback. Shared by the OpenCode 1
  * fetcher and `createAuthorizedFetchAccountQuota`.
  */
 async function fetchQuotaPayloads(options: {
@@ -576,16 +569,9 @@ async function fetchQuotaPayloads(options: {
   logger: Pick<Logger, 'debug'>
 }): Promise<{
   quota: QuotaSummary
-  geminiCliQuota: GeminiCliQuotaSummary
   fellBackToLegacy: boolean
 }> {
   const { accessToken, managedProjectId, projectId, fetchVia } = options
-  // Two independent payload contracts: the windowed summary
-  // (with legacy fallback) and the gemini-CLI quota. They share
-  // access + project but target different endpoints, so the
-  // two 10s timeouts ran back-to-back for ~20s per account on
-  // modal open. Run them concurrently; either rejection is
-  // handled by its own branch and the result is still merged.
   const fetchSummaryPayload = (async (): Promise<{
     result: QuotaSummary
     fellBackToLegacy: boolean
@@ -616,78 +602,13 @@ async function fetchQuotaPayloads(options: {
     }
   })()
 
-  // CLI fetch is independent of the summary fetch. A CLI failure must
-  // NOT kill the summary result, but it also must not be laundered into
-  // "No Gemini CLI quota available" (a permanent-looking status) when
-  // the real cause is a transient network error. Capture the error
-  // message separately so the annotated result can carry it.
-  let geminiCliFetchError: string | undefined
-  const fetchGeminiCliPayload = fetchGeminiCliQuota({
-    accessToken,
-    projectId,
-    endpoints: ANTIGRAVITY_ENDPOINT_FALLBACKS,
-    userAgent: buildGeminiCliUserAgent(),
-    timeoutMs: 10_000,
-    ...(fetchVia ? { fetchVia } : {}),
-  }).catch((error: unknown) => {
-    geminiCliFetchError = error instanceof Error ? error.message : String(error)
-    options.logger.debug('fetchGeminiCliQuota failed', {
-      error: geminiCliFetchError,
-    })
-    return { buckets: undefined } as Awaited<
-      ReturnType<typeof fetchGeminiCliQuota>
-    >
-  })
-
-  const [summary, geminiCliResponse] = await Promise.all([
-    fetchSummaryPayload,
-    fetchGeminiCliPayload,
-  ])
+  const summary = await fetchSummaryPayload
 
   return {
     quota: summary.result,
-    geminiCliQuota: annotateGeminiCliQuota(
-      geminiCliResponse,
-      geminiCliFetchError,
-    ),
     fellBackToLegacy: summary.fellBackToLegacy,
   }
 }
-
-/**
- * The Gemini CLI quota summary for a `retrieveUserQuota` answer. An empty or
- * missing answer carries an error: the fetch error when the request failed
- * (a transient failure, not "no CLI quota configured"), else the generic
- * "no quota" text.
- */
-function annotateGeminiCliQuota(
-  response: Awaited<ReturnType<typeof fetchGeminiCliQuota>>,
-  fetchError: string | undefined,
-): GeminiCliQuotaSummary {
-  const result = aggregateGeminiCliQuota(response)
-  if (response.buckets !== undefined && response.buckets.length > 0) {
-    return result
-  }
-  return {
-    ...result,
-    error:
-      fetchError ??
-      (result.models.length === 0
-        ? 'No Gemini CLI quota available'
-        : undefined),
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Vault quota checks
-//
-// A vault-held account has no stored token. For each physical request the
-// vault source serves a credential receipt (the source calls it an
-// admission): an access token, the project to send it under, and the record
-// version of the credential it came from. One served receipt authorizes one
-// physical request. A 401 is reported against the record version of the
-// receipt that received it.
-// ---------------------------------------------------------------------------
 
 /** The vault account source operations a quota check uses. */
 export type VaultQuotaSource = Pick<
@@ -698,7 +619,6 @@ export type VaultQuotaSource = Pick<
 /** Quota summaries and the credential versions that authorized their requests. */
 export interface VaultQuotaReading {
   quota: QuotaSummary
-  geminiCliQuota: GeminiCliQuotaSummary
   fellBackToLegacy: boolean
   /**
    * The credential and record version of the receipt that authorized the
@@ -707,8 +627,6 @@ export interface VaultQuotaReading {
    * answer was obtained.
    */
   quotaAttribution?: VaultStateAttribution
-  /** Likewise for `geminiCliQuota`. */
-  geminiCliAttribution?: VaultStateAttribution
 }
 
 export interface VaultQuotaCheckOptions {
@@ -843,7 +761,7 @@ async function vaultQuotaAttempt<T>(
 
 /**
  * Fetches a vault account's quota: the windowed quota summary (with the
- * legacy model-list fallback) and the Gemini CLI quota, from the same core
+ * legacy model-list fallback), from the same core
  * builders and endpoint list the local check uses.
  *
  * Every physical request (each endpoint, each fallback, and the model
@@ -858,9 +776,7 @@ async function vaultQuotaAttempt<T>(
 export async function fetchVaultAccountQuota(
   options: VaultQuotaCheckOptions,
 ): Promise<VaultQuotaReading> {
-  // Shared by the summary and Gemini CLI halves, which run concurrently: a
-  // refusal in one stops requests in the other too, including one whose
-  // receipt was being served when the refusal happened.
+  // A refused receipt stops endpoint retries and the legacy model-list fallback.
   const stopped = { value: false }
   const isStopped = () => stopped.value || options.signal.aborted
   const attempt = async <T>(
@@ -961,48 +877,11 @@ export async function fetchVaultAccountQuota(
     }
   }
 
-  const fetchGeminiCli = async (): Promise<{
-    response: Awaited<ReturnType<typeof fetchGeminiCliQuota>>
-    error?: string
-    attribution?: VaultStateAttribution
-  }> => {
-    const errors: string[] = []
-    for (const endpoint of ANTIGRAVITY_ENDPOINT_FALLBACKS) {
-      const result = await attempt((grant, fetchVia) =>
-        fetchGeminiCliQuota({
-          accessToken: grant.accessToken,
-          projectId: grant.projectId,
-          endpoints: [endpoint],
-          userAgent: buildGeminiCliUserAgent(),
-          timeoutMs: 10_000,
-          fetchVia,
-        }),
-      )
-      if (result.value !== undefined) {
-        return {
-          response: result.value,
-          ...(result.attribution ? { attribution: result.attribution } : {}),
-        }
-      }
-      errors.push(
-        result.error instanceof Error
-          ? result.error.message
-          : String(result.error),
-      )
-      if (result.refused) break
-    }
-    const error = errors.join('; ') || 'fetchGeminiCliQuota failed'
-    options.logger.debug('vault fetchGeminiCliQuota failed', { error })
-    return { response: { buckets: undefined }, error }
-  }
-
-  const [summary, cli] = await Promise.all([fetchSummary(), fetchGeminiCli()])
+  const summary = await fetchSummary()
   return {
     quota: summary.result,
-    geminiCliQuota: annotateGeminiCliQuota(cli.response, cli.error),
     fellBackToLegacy: summary.fellBackToLegacy,
     ...(summary.attribution ? { quotaAttribution: summary.attribution } : {}),
-    ...(cli.attribution ? { geminiCliAttribution: cli.attribution } : {}),
   }
 }
 
@@ -1161,7 +1040,6 @@ export function createAuthorizedFetchAccountQuota(
         status: 'ok',
         disabled: false,
         quota: payloads.quota,
-        geminiCliQuota: payloads.geminiCliQuota,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1248,7 +1126,6 @@ function makeFetchAccountQuota(
       })
       quotaResult = payloads.quota
       fellBackToLegacy = payloads.fellBackToLegacy
-      const annotated = payloads.geminiCliQuota
 
       for (const [family, groupQuota] of Object.entries(quotaResult.groups)) {
         const remainingPercent = (groupQuota.remainingFraction ?? 0) * 100
@@ -1264,7 +1141,6 @@ function makeFetchAccountQuota(
         status: 'ok',
         disabled: false,
         quota: quotaResult,
-        geminiCliQuota: annotated,
         updatedAccount,
       }
     } catch (error) {

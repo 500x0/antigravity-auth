@@ -230,7 +230,7 @@ describe('BackgroundVaultQuotaRefresh', () => {
     try {
       await f.poller.tick()
       expect(f.writes).toBe(2)
-      expect(f.physical).toBe(4)
+      expect(f.physical).toBe(2)
       expect(f.issued).toBe(f.physical)
       expect(f.publishes).toBe(1)
       expect(f.stored.accounts['identity-0']?.quota?.cachedQuotaUpdatedAt).toBe(
@@ -380,7 +380,7 @@ describe('vault poller fences and lifecycle', () => {
         )
       }
       await f.poller.tick()
-      expect(f.physical).toBe(4)
+      expect(f.physical).toBe(2)
       expect(f.writes).toBe(2)
       expect(f.publishes).toBe(1)
     } finally {
@@ -398,7 +398,7 @@ describe('vault poller fences and lifecycle', () => {
         { stateFile: f.stateFile },
       )
       await f.poller.tick()
-      expect(f.physical).toBe(4)
+      expect(f.physical).toBe(2)
       expect(f.writes).toBe(2)
     } finally {
       await f.cleanup()
@@ -454,7 +454,7 @@ describe('vault poller fences and lifecycle', () => {
           { stateFile: f.stateFile },
         )
         await f.poller.tick()
-        expect(f.physical).toBe(4)
+        expect(f.physical).toBe(2)
         expect(f.writes).toBe(2)
       } finally {
         await f.cleanup()

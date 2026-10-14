@@ -1598,7 +1598,7 @@ describe('fetchQuotaSummary', () => {
 
   it('fails over to the next endpoint when the first returns 500', async () => {
     // The legacy fetchers iterate the endpoint list per project attempt
-    // (fetchAvailableModels, fetchGeminiCliQuota). fetchQuotaSummary
+    // (fetchAvailableModels). fetchQuotaSummary
     // must match: a 500 on the primary endpoint should fall through
     // to the next entry in `options.endpoints`.
     const summary: RetrieveUserQuotaSummaryResponse = {

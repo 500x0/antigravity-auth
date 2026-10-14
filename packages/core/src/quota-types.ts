@@ -110,17 +110,6 @@ export interface QuotaSummary {
   error?: string
 }
 
-export interface GeminiCliQuotaModel {
-  modelId: string
-  remainingFraction: number
-  resetTime?: string
-}
-
-export interface GeminiCliQuotaSummary {
-  models: GeminiCliQuotaModel[]
-  error?: string
-}
-
 export type AccountQuotaStatus = 'ok' | 'disabled' | 'error'
 
 export interface AccountQuotaResult {
@@ -132,6 +121,5 @@ export interface AccountQuotaResult {
   quota?: QuotaSummary
   /** Timestamp when this account's successful fetch completed. */
   checkedAt?: number
-  geminiCliQuota?: GeminiCliQuotaSummary
   updatedAccount?: AccountMetadataV3
 }

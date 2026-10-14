@@ -12,9 +12,7 @@ import {
   CLAUDE_TOOL_SYSTEM_INSTRUCTION,
   EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
   EMPTY_SCHEMA_PLACEHOLDER_NAME,
-  GEMINI_CLI_ENDPOINT,
   getRandomizedHeaders,
-  type HeaderStyle,
   SKIP_THOUGHT_SIGNATURE,
 } from '../constants'
 import {
@@ -91,7 +89,7 @@ import {
   isClaudeThinkingModel,
   isGemini3Model,
   isImageGenerationModel,
-  resolveModelForHeaderStyle,
+  resolveAntigravityModel,
   type ThinkingTier,
 } from './transform'
 import { sanitizeCrossModelPayloadInPlace } from './transform/cross-model-sanitizer'
@@ -228,11 +226,7 @@ function getAgyMaxOutputTokens(model: string): number | undefined {
 function applyAgyGenerationDefaults(
   model: string,
   generationConfig: Record<string, unknown>,
-  headerStyle: HeaderStyle,
 ): void {
-  if (headerStyle !== 'antigravity') {
-    return
-  }
   if (getAgyNativeModel(model)) {
     applyAgyNativeGenerationConfig(model, generationConfig)
     return
@@ -1474,7 +1468,6 @@ function prepareAntigravityRequestIn(
   accessToken: string,
   projectId: string,
   endpointOverride?: string,
-  headerStyle: HeaderStyle = 'antigravity',
   forceThinkingRecovery = false,
   options?: PrepareRequestOptions,
 ): {
@@ -1490,7 +1483,7 @@ function prepareAntigravityRequestIn(
   toolDebugSummary?: string
   toolDebugPayload?: string
   needsSignedThinkingWarmup?: boolean
-  headerStyle: HeaderStyle
+  headerStyle: 'antigravity'
   thinkingRecoveryMessage?: string
 } {
   const baseInit: RequestInit = { ...init }
@@ -1508,7 +1501,7 @@ function prepareAntigravityRequestIn(
       request: input,
       init: { ...baseInit, headers },
       streaming: false,
-      headerStyle,
+      headerStyle: 'antigravity',
     }
   }
 
@@ -1522,8 +1515,10 @@ function prepareAntigravityRequestIn(
   headers.delete('x-opencode-parent-session-id')
   // Strip x-goog-user-project header to prevent 403 auth/license conflicts.
   // This header is added by OpenCode/AI SDK and can force project-level checks
-  // that are not required for Antigravity/Gemini CLI OAuth requests.
+  // that are not required for Antigravity OAuth requests.
   headers.delete('x-goog-user-project')
+  headers.delete('X-Goog-Api-Client')
+  headers.delete('Client-Metadata')
 
   const urlString = fetchInputToUrl(input)
   const match = urlString.match(/\/models\/([^:]+):(\w+)/)
@@ -1532,19 +1527,18 @@ function prepareAntigravityRequestIn(
       request: input,
       init: { ...baseInit, headers },
       streaming: false,
-      headerStyle,
+      headerStyle: 'antigravity',
     }
   }
 
   const [, rawModel = '', rawAction = ''] = match
   const requestedModel = rawModel
 
-  const resolved = resolveModelForHeaderStyle(rawModel, headerStyle)
+  const resolved = resolveAntigravityModel(rawModel)
   let effectiveModel = resolved.actualModel
 
   const streaming = rawAction === STREAM_ACTION
-  const defaultEndpoint =
-    headerStyle === 'gemini-cli' ? GEMINI_CLI_ENDPOINT : ANTIGRAVITY_ENDPOINT
+  const defaultEndpoint = ANTIGRAVITY_ENDPOINT
   const baseEndpoint = endpointOverride ?? defaultEndpoint
   const transformedUrl = `${baseEndpoint}/v1internal:${rawAction}${streaming ? '?alt=sse' : ''}`
 
@@ -1574,20 +1568,17 @@ function prepareAntigravityRequestIn(
           ...parsedBody,
           model: effectiveModel,
         } as Record<string, unknown>
-
-        if (headerStyle === 'antigravity') {
-          if (
-            typeof wrappedBody.userAgent !== 'string' ||
-            !wrappedBody.userAgent
-          ) {
-            wrappedBody.userAgent = 'antigravity'
-          }
-          if (
-            typeof wrappedBody.requestType !== 'string' ||
-            !wrappedBody.requestType
-          ) {
-            wrappedBody.requestType = 'agent'
-          }
+        if (
+          typeof wrappedBody.userAgent !== 'string' ||
+          !wrappedBody.userAgent
+        ) {
+          wrappedBody.userAgent = 'antigravity'
+        }
+        if (
+          typeof wrappedBody.requestType !== 'string' ||
+          !wrappedBody.requestType
+        ) {
+          wrappedBody.requestType = 'agent'
         }
 
         // Some callers may already send an Antigravity-wrapped body.
@@ -1668,40 +1659,30 @@ function prepareAntigravityRequestIn(
             // Step 3: Apply tool pairing fixes (ID assignment, response matching, orphan recovery)
             applyToolPairingFixes(req as Record<string, unknown>, true)
           }
-
-          if (headerStyle === 'antigravity') {
-            sanitizeRequestPayloadForAntigravity(req)
-            stripUnsupportedAntigravityFields(req)
-            configureAntigravityToolCalling(req, effectiveModel)
-            normalizeNativeFunctionResponseRoles(req)
-          }
+          sanitizeRequestPayloadForAntigravity(req)
+          stripUnsupportedAntigravityFields(req)
+          configureAntigravityToolCalling(req, effectiveModel)
+          normalizeNativeFunctionResponseRoles(req)
         }
-
-        // AGY rejects every request that ends with a model turn. Enforce this at
-        // the final wire boundary because host races, recovery, or sanitization can
-        // otherwise leave a model/assistant entry last. Claude fallback transports
-        // have the same assistant-prefill restriction.
-        if (headerStyle === 'antigravity' || isClaude) {
-          for (const req of requestObjects) {
-            if (Array.isArray((req as any).contents)) {
-              const contents = (req as any).contents
-              const lastContent = contents[contents.length - 1]
-              if (
-                lastContent?.role === 'model' ||
-                lastContent?.role === 'assistant'
-              ) {
-                contents.push({ role: 'user', parts: [{ text: '[Continue]' }] })
-              }
+        for (const req of requestObjects) {
+          if (Array.isArray((req as any).contents)) {
+            const contents = (req as any).contents
+            const lastContent = contents[contents.length - 1]
+            if (
+              lastContent?.role === 'model' ||
+              lastContent?.role === 'assistant'
+            ) {
+              contents.push({ role: 'user', parts: [{ text: '[Continue]' }] })
             }
-            if (Array.isArray((req as any).messages)) {
-              const messages = (req as any).messages
-              const lastMessage = messages[messages.length - 1]
-              if (
-                lastMessage?.role === 'model' ||
-                lastMessage?.role === 'assistant'
-              ) {
-                messages.push({ role: 'user', parts: [{ text: '[Continue]' }] })
-              }
+          }
+          if (Array.isArray((req as any).messages)) {
+            const messages = (req as any).messages
+            const lastMessage = messages[messages.length - 1]
+            if (
+              lastMessage?.role === 'model' ||
+              lastMessage?.role === 'assistant'
+            ) {
+              messages.push({ role: 'user', parts: [{ text: '[Continue]' }] })
             }
           }
         }
@@ -1737,7 +1718,7 @@ function prepareAntigravityRequestIn(
 
         const wireRequest = requestObjects.at(-1)
         if (wireRequest) {
-          if (headerStyle === 'antigravity') {
+          {
             const generationConfig = wireRequest.generationConfig
             const config =
               generationConfig &&
@@ -1758,20 +1739,13 @@ function prepareAntigravityRequestIn(
             wireRequest.sessionId = metadata.sessionId
             wireRequest.labels = metadata.labels
             orderAgyRequestPayloadInPlace(wireRequest)
-          } else {
-            wireRequest.sessionId = signatureSessionKey
           }
         }
 
-        body = safeStringify(
-          headerStyle === 'antigravity'
-            ? orderAntigravityEnvelope(wrappedBody)
-            : wrappedBody,
-        )
+        body = safeStringify(orderAntigravityEnvelope(wrappedBody))
       } else {
         const requestPayload: Record<string, unknown> = { ...parsedBody }
         if (
-          headerStyle === 'antigravity' &&
           isImageGenerationModel(effectiveModel) &&
           isOpenCodeTitleGenerationRequest(requestPayload)
         ) {
@@ -1813,9 +1787,8 @@ function prepareAntigravityRequestIn(
             .replace(/-preview-customtools$/i, '')
             .replace(/-preview$/i, '')
             .replace(/-(minimal|low|medium|high)$/i, '')
-          const variantResolved = resolveModelForHeaderStyle(
+          const variantResolved = resolveAntigravityModel(
             `${variantModelBase}-${variantConfig.thinkingLevel}`,
-            headerStyle,
           )
 
           effectiveModel = variantResolved.actualModel
@@ -1938,15 +1911,7 @@ function prepareAntigravityRequestIn(
             // Build thinking config based on model type
             let thinkingConfig: Record<string, unknown>
 
-            if (isClaudeThinking && headerStyle !== 'antigravity') {
-              // Claude-on-Gemini fallback uses snake_case keys.
-              thinkingConfig = {
-                include_thoughts: normalizedThinking.includeThoughts ?? true,
-                ...(typeof thinkingBudget === 'number' && thinkingBudget > 0
-                  ? { thinking_budget: thinkingBudget }
-                  : {}),
-              }
-            } else if (tierThinkingLevel) {
+            if (tierThinkingLevel) {
               // Gemini 3 uses thinkingLevel string (low/medium/high)
               thinkingConfig = {
                 includeThoughts: normalizedThinking.includeThoughts,
@@ -1965,11 +1930,7 @@ function prepareAntigravityRequestIn(
 
             if (rawGenerationConfig) {
               rawGenerationConfig.thinkingConfig = thinkingConfig
-              applyAgyGenerationDefaults(
-                effectiveModel,
-                rawGenerationConfig,
-                headerStyle,
-              )
+              applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig)
 
               if (
                 isClaudeThinking &&
@@ -1978,7 +1939,7 @@ function prepareAntigravityRequestIn(
               ) {
                 const currentMax = (rawGenerationConfig.maxOutputTokens ??
                   rawGenerationConfig.max_output_tokens) as number | undefined
-                if (headerStyle === 'antigravity' && !currentMax) {
+                if (!currentMax) {
                   rawGenerationConfig.maxOutputTokens = 64000
                 } else if (!currentMax || currentMax <= thinkingBudget) {
                   rawGenerationConfig.maxOutputTokens =
@@ -1999,32 +1960,17 @@ function prepareAntigravityRequestIn(
                 typeof thinkingBudget === 'number' &&
                 thinkingBudget > 0
               ) {
-                generationConfig.maxOutputTokens =
-                  headerStyle === 'antigravity'
-                    ? 64000
-                    : computeClaudeMaxOutputTokens(thinkingBudget)
+                generationConfig.maxOutputTokens = 64000
               }
-              applyAgyGenerationDefaults(
-                effectiveModel,
-                generationConfig,
-                headerStyle,
-              )
+              applyAgyGenerationDefaults(effectiveModel, generationConfig)
               requestPayload.generationConfig = generationConfig
             }
           } else if (rawGenerationConfig?.thinkingConfig) {
             delete rawGenerationConfig.thinkingConfig
-            applyAgyGenerationDefaults(
-              effectiveModel,
-              rawGenerationConfig,
-              headerStyle,
-            )
+            applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig)
             requestPayload.generationConfig = rawGenerationConfig
           } else if (rawGenerationConfig) {
-            applyAgyGenerationDefaults(
-              effectiveModel,
-              rawGenerationConfig,
-              headerStyle,
-            )
+            applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig)
             requestPayload.generationConfig = rawGenerationConfig
           }
         } // End of else block for non-image models
@@ -2042,43 +1988,6 @@ function prepareAntigravityRequestIn(
           delete requestPayload.system_instruction
         }
 
-        if (headerStyle !== 'antigravity') {
-          // Gemini CLI accepts explicit cachedContent references. Normalize its
-          // snake_case aliases only on that transport; agy relies on implicit
-          // prefix caching and does not send any of these fields.
-          const cachedContentFromExtra =
-            typeof requestPayload.extra_body === 'object' &&
-            requestPayload.extra_body
-              ? ((requestPayload.extra_body as Record<string, unknown>)
-                  .cached_content ??
-                (requestPayload.extra_body as Record<string, unknown>)
-                  .cachedContent)
-              : undefined
-          const cachedContent =
-            (requestPayload.cached_content as string | undefined) ??
-            (requestPayload.cachedContent as string | undefined) ??
-            (cachedContentFromExtra as string | undefined)
-          if (cachedContent) {
-            requestPayload.cachedContent = cachedContent
-          }
-
-          delete requestPayload.cached_content
-          if (
-            requestPayload.extra_body &&
-            typeof requestPayload.extra_body === 'object'
-          ) {
-            delete (requestPayload.extra_body as Record<string, unknown>)
-              .cached_content
-            delete (requestPayload.extra_body as Record<string, unknown>)
-              .cachedContent
-            if (
-              Object.keys(requestPayload.extra_body as Record<string, unknown>)
-                .length === 0
-            ) {
-              delete requestPayload.extra_body
-            }
-          }
-        }
         // Normalize tools. For Claude models, keep full function declarations (names + schemas).
         const hasTools =
           Array.isArray(requestPayload.tools) && requestPayload.tools.length > 0
@@ -2483,39 +2392,32 @@ function prepareAntigravityRequestIn(
             wire.signatures.signatureStore.delete(signatureSessionKey)
           }
         }
-
-        // AGY rejects every request that ends with a model turn. Enforce this at
-        // the final wire boundary because host races, recovery, or sanitization can
-        // otherwise leave a model/assistant entry last. Claude fallback transports
-        // have the same assistant-prefill restriction.
-        if (headerStyle === 'antigravity' || isClaude) {
-          if (Array.isArray(requestPayload.contents)) {
-            const lastContent = requestPayload.contents[
-              requestPayload.contents.length - 1
-            ] as any
-            if (
-              lastContent?.role === 'model' ||
-              lastContent?.role === 'assistant'
-            ) {
-              requestPayload.contents.push({
-                role: 'user',
-                parts: [{ text: '[Continue]' }],
-              })
-            }
+        if (Array.isArray(requestPayload.contents)) {
+          const lastContent = requestPayload.contents[
+            requestPayload.contents.length - 1
+          ] as any
+          if (
+            lastContent?.role === 'model' ||
+            lastContent?.role === 'assistant'
+          ) {
+            requestPayload.contents.push({
+              role: 'user',
+              parts: [{ text: '[Continue]' }],
+            })
           }
-          if (Array.isArray(requestPayload.messages)) {
-            const lastMessage = (requestPayload.messages as any[])[
-              requestPayload.messages.length - 1
-            ]
-            if (
-              lastMessage?.role === 'model' ||
-              lastMessage?.role === 'assistant'
-            ) {
-              ;(requestPayload.messages as any[]).push({
-                role: 'user',
-                parts: [{ text: '[Continue]' }],
-              })
-            }
+        }
+        if (Array.isArray(requestPayload.messages)) {
+          const lastMessage = (requestPayload.messages as any[])[
+            requestPayload.messages.length - 1
+          ]
+          if (
+            lastMessage?.role === 'model' ||
+            lastMessage?.role === 'assistant'
+          ) {
+            ;(requestPayload.messages as any[]).push({
+              role: 'user',
+              parts: [{ text: '[Continue]' }],
+            })
           }
         }
 
@@ -2525,7 +2427,7 @@ function prepareAntigravityRequestIn(
 
         stripInjectedDebugFromRequestPayload(requestPayload)
         sanitizeRequestPayloadForAntigravity(requestPayload)
-        if (headerStyle === 'antigravity') {
+        {
           const generationConfig = requestPayload.generationConfig
           const config =
             generationConfig &&
@@ -2559,48 +2461,33 @@ function prepareAntigravityRequestIn(
         // fragments server-side quota/session state. ensureProjectContext
         // already floors empty cases to this default; this is defense in depth.
         const effectiveProjectId =
-          projectId?.trim() ||
-          (headerStyle === 'antigravity' ? ANTIGRAVITY_DEFAULT_PROJECT_ID : '')
+          projectId?.trim() || ANTIGRAVITY_DEFAULT_PROJECT_ID
         resolvedProjectId = effectiveProjectId
 
         // Keep internal signature-cache identity separate from AGY wire session metadata.
         sessionId = signatureSessionKey
-        const agyMetadata =
-          headerStyle === 'antigravity'
-            ? buildAgyAgentRequestMetadata(
-                options?.agySession ?? DEFAULT_AGY_REQUEST_SESSION,
-                requestPayload,
-                effectiveModel,
-                options?.agyRequestTimestamp,
-              )
-            : null
+        const agyMetadata = buildAgyAgentRequestMetadata(
+          options?.agySession ?? DEFAULT_AGY_REQUEST_SESSION,
+          requestPayload,
+          effectiveModel,
+          options?.agyRequestTimestamp,
+        )
         requestPayload.sessionId = agyMetadata?.sessionId ?? signatureSessionKey
         if (agyMetadata) {
           requestPayload.labels = agyMetadata.labels
           orderAgyRequestPayloadInPlace(requestPayload)
         }
 
-        const wrappedBody: Record<string, unknown> =
-          headerStyle === 'antigravity'
-            ? {
-                project: effectiveProjectId,
-                requestId: agyMetadata?.requestId,
-                request: requestPayload,
-                model: effectiveModel,
-                userAgent: 'antigravity',
-                requestType: 'agent',
-              }
-            : {
-                project: effectiveProjectId,
-                model: effectiveModel,
-                request: requestPayload,
-              }
+        const wrappedBody: Record<string, unknown> = {
+          project: effectiveProjectId,
+          requestId: agyMetadata?.requestId,
+          request: requestPayload,
+          model: effectiveModel,
+          userAgent: 'antigravity',
+          requestType: 'agent',
+        }
 
-        body = safeStringify(
-          headerStyle === 'antigravity'
-            ? orderAntigravityEnvelope(wrappedBody)
-            : wrappedBody,
-        )
+        body = safeStringify(orderAntigravityEnvelope(wrappedBody))
       }
     } catch {
       throw new Error('Failed to build Antigravity request body')
@@ -2624,9 +2511,9 @@ function prepareAntigravityRequestIn(
     }
   }
 
-  if (headerStyle === 'antigravity') {
+  {
     // Use randomized headers as the fallback pool for Antigravity mode
-    const selectedHeaders = getRandomizedHeaders('antigravity', requestedModel)
+    const selectedHeaders = getRandomizedHeaders()
 
     // Antigravity mode: Match Antigravity Manager behavior
     // AM only sends User-Agent on content requests — no X-Goog-Api-Client, no Client-Metadata header
@@ -2639,14 +2526,6 @@ function prepareAntigravityRequestIn(
       fingerprintHeaders['User-Agent'] || selectedHeaders['User-Agent'],
     )
     headers.set('Accept-Encoding', 'gzip')
-  } else {
-    // Gemini CLI mode: match official google-gemini/gemini-cli User-Agent format
-    const geminiCliHeaders = getRandomizedHeaders('gemini-cli', requestedModel)
-    headers.set('User-Agent', geminiCliHeaders['User-Agent'])
-    if (geminiCliHeaders['X-Goog-Api-Client'])
-      headers.set('X-Goog-Api-Client', geminiCliHeaders['X-Goog-Api-Client'])
-    if (geminiCliHeaders['Client-Metadata'])
-      headers.set('Client-Metadata', geminiCliHeaders['Client-Metadata'])
   }
   return {
     request: transformedUrl,
@@ -2665,7 +2544,7 @@ function prepareAntigravityRequestIn(
     toolDebugSummary: toolDebugSummaries.slice(0, 20).join(' | '),
     toolDebugPayload,
     needsSignedThinkingWarmup,
-    headerStyle,
+    headerStyle: 'antigravity',
     thinkingRecoveryMessage,
   }
 }

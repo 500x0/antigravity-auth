@@ -35,7 +35,6 @@ import type {
   AccountStorageV4,
   AnyAccountStorage,
   CooldownReason,
-  HeaderStyle,
   RateLimitStateV2,
   RateLimitStateV3,
 } from '@cortexkit/antigravity-auth-core'
@@ -86,7 +85,6 @@ export type {
   AccountStorageV4,
   AnyAccountStorage,
   CooldownReason,
-  HeaderStyle,
   RateLimitStateV2,
   RateLimitStateV3,
 }

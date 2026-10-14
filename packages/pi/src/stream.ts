@@ -14,7 +14,7 @@ import {
   RETIRED_AGY_MODEL_MESSAGE,
   redactCredentialError,
   redactCredentialText,
-  resolveModelForHeaderStyle,
+  resolveAntigravityModel,
 } from '@cortexkit/antigravity-auth-core'
 import {
   type Api,
@@ -342,13 +342,13 @@ export function resolvePiAntigravityModel(
         (lower.includes('thinking') || /claude-(opus|sonnet)-5-5/.test(lower))))
 
   if (!supportsAgyTiers || !reasoning) {
-    return resolveModelForHeaderStyle(model.id, 'antigravity')
+    return resolveAntigravityModel(model.id)
   }
 
   const tier =
     reasoning === 'minimal' ? 'low' : reasoning === 'xhigh' ? 'high' : reasoning
   const baseModel = model.id.replace(/-(minimal|low|medium|high|xhigh)$/i, '')
-  return resolveModelForHeaderStyle(`${baseModel}-${tier}`, 'antigravity')
+  return resolveAntigravityModel(`${baseModel}-${tier}`)
 }
 
 /** A request body built once per logical request, before any credential is chosen. */

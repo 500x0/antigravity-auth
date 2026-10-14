@@ -61,7 +61,6 @@ interface AntigravityTieredRouteMetadata {
 
 interface GeminiFlashRouteMetadata {
   antigravity: AntigravityTieredRouteMetadata
-  geminiCliFallbackModel: string
 }
 
 const DEFAULT_MODALITIES: ModelModalities = {
@@ -101,7 +100,7 @@ export interface AgyNativeModelDefinition {
   vertexModelId?: string
 }
 
-// Keep server wire IDs exact; grouped picker names and Gemini CLI fallback names resolve separately.
+// Keep server wire IDs exact; grouped picker names resolve separately.
 export const AGY_NATIVE_MODEL_DEFINITIONS: Readonly<
   Record<string, AgyNativeModelDefinition>
 > = {
@@ -270,6 +269,7 @@ export function isRetiredAgyModel(model: string): boolean {
     .toLowerCase()
     .replace(/^antigravity-/, '')
     .replace(/^gemini-(?=claude-)/, '')
+    .replace(/-preview(?:-customtools)?$/, '')
   return (
     (/^claude-(opus|sonnet)-4-6(?:-thinking)?(?:-(?:minimal|low|medium|high))?$/.test(
       route,
@@ -358,66 +358,6 @@ const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       modalities: DEFAULT_MODALITIES,
     },
   ),
-  'gemini-2.5-flash': defineModel('gemini-2.5-flash', {
-    name: 'Gemini 2.5 Flash (Gemini CLI)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-  }),
-  'gemini-2.5-pro': defineModel('gemini-2.5-pro', {
-    name: 'Gemini 2.5 Pro (Gemini CLI)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-  }),
-  'gemini-3-flash-preview': defineModel('gemini-3-flash-preview', {
-    name: 'Gemini 3 Flash Preview (Gemini CLI)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-  }),
-  'gemini-3.1-pro-preview': defineModel('gemini-3.1-pro-preview', {
-    name: 'Gemini 3.1 Pro Preview (Gemini CLI)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65535 },
-    modalities: DEFAULT_MODALITIES,
-  }),
-  'gemini-3.5-flash-preview': defineModel('gemini-3.5-flash-preview', {
-    name: 'Gemini 3.5 Flash Preview (Gemini CLI)',
-    reasoning: true,
-    limit: { context: 1048576, output: 65536 },
-    modalities: DEFAULT_MODALITIES,
-  }),
-  'gemini-3.1-flash-image': defineModel('gemini-3.1-flash-image', {
-    name: 'Gemini 3.1 Flash Image (Gemini CLI)',
-    reasoning: false,
-    limit: { context: 66000, output: 33000 },
-    modalities: {
-      input: ['text', 'image'],
-      output: ['text', 'image'],
-    },
-  }),
-  'gemini-3.1-flash-image-preview': defineModel(
-    'gemini-3.1-flash-image-preview',
-    {
-      name: 'Gemini 3.1 Flash Image Preview (Gemini CLI)',
-      reasoning: false,
-      limit: { context: 66000, output: 33000 },
-      modalities: {
-        input: ['text', 'image'],
-        output: ['text', 'image'],
-      },
-    },
-  ),
-  'gemini-3.1-pro-preview-customtools': defineModel(
-    'gemini-3.1-pro-preview-customtools',
-    {
-      name: 'Gemini 3.1 Pro Preview Custom Tools (Gemini CLI)',
-      reasoning: true,
-      limit: { context: 1048576, output: 65535 },
-      modalities: DEFAULT_MODALITIES,
-    },
-  ),
 }
 
 const RESOLVER_ALIASES: Record<string, string> = {
@@ -465,7 +405,6 @@ const GEMINI_35_FLASH_ROUTES: GeminiFlashRouteMetadata = {
       high: 'gemini-3-flash-agent',
     },
   },
-  geminiCliFallbackModel: 'gemini-3-flash-preview',
 }
 
 const GEMINI_36_FLASH_ROUTES: AntigravityTieredRouteMetadata = {
@@ -565,10 +504,6 @@ export function getGemini35FlashAntigravityModel(tier?: ThinkingTier): string {
     GEMINI_35_FLASH_ROUTES.antigravity.byTier[tier] ??
     GEMINI_35_FLASH_ROUTES.antigravity.defaultModel
   )
-}
-
-export function getGemini35FlashGeminiCliFallbackModel(): string {
-  return GEMINI_35_FLASH_ROUTES.geminiCliFallbackModel
 }
 
 function getTieredAntigravityModel(

@@ -1,5 +1,3 @@
-import type { HeaderStyle } from '../constants.ts'
-
 export type ModelFamily = 'claude' | 'gemini-flash' | 'gemini-pro'
 
 export type ThinkingTier = 'low' | 'medium' | 'high'
@@ -108,10 +106,6 @@ export interface ResolvedModel {
   isThinkingModel?: boolean
   /** Whether this is an image generation model */
   isImageModel?: boolean
-  /** Quota preference - all models default to antigravity, with CLI as fallback */
-  quotaPreference?: HeaderStyle
-  /** Whether user explicitly specified quota via suffix (vs default selection) */
-  explicitQuota?: boolean
   /** Source of thinking config: "variant" (providerOptions) or "tier" (model suffix) */
   configSource?: 'variant' | 'tier'
   /** Google Search configuration from variant or global config */

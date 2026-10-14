@@ -12,32 +12,16 @@ opencode auth login  # Run again to add more accounts
 
 - **Sticky account selection** — Sticks to the same account until rate-limited (preserves Anthropic's prompt cache)
 - **Per-model-family limits** — Rate limits tracked separately for Claude and Gemini models
-- **Antigravity-first for Gemini** — All Gemini requests use Antigravity quota first, then automatically fall back to Gemini CLI when exhausted across all accounts
 - **Smart retry threshold** — Short rate limits (≤5s) are retried on same account
 - **Exponential backoff** — Increasing delays for consecutive rate limits
 
 ---
 
-## Dual Quota Pools
+## Antigravity requests
 
-For Gemini models, the plugin accesses **two independent quota pools** per account:
+Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
 
-| Quota Pool | When Used |
-|------------|-----------|
-| **Antigravity** | Default for all requests |
-| **Gemini CLI** | Automatic fallback between Antigravity and Gemini CLI in both directions |
-
-This effectively **doubles your Gemini quota** through automatic fallback between Antigravity and Gemini CLI pools.
-
-### How Quota Fallback Works
-
-1. Request uses Antigravity quota on current account
-2. If rate-limited, plugin checks if ANY other account has Antigravity available
-3. If yes → switch to that account (stay on Antigravity)
-4. If no (all accounts exhausted) → fall back to Gemini CLI quota on current account
-5. Model names are automatically transformed (e.g., `gemini-3-flash` → `gemini-3-flash-preview`)
-
-Automatic fallback between pools is always enabled for Gemini requests.
+Rate limits apply to an account, model family and model. A rate-limited request rotates to another eligible account or waits for the current limits to expire.
 
 ---
 
@@ -138,7 +122,7 @@ Accounts are stored in `~/.config/opencode/antigravity-accounts.json`:
 |-------|-------------|
 | `email` | Google account email |
 | `refreshToken` | OAuth refresh token (auto-managed) |
-| `projectId` | Optional. Required for Gemini CLI models. See [Troubleshooting](TROUBLESHOOTING.md#gemini-cli-permission-error). |
+| `projectId` | Optional. Antigravity project context. |
 | `enabled` | Optional. Set to `false` to disable account rotation. Defaults to `true`. |
 | `activeIndex` | Currently active account index |
 | `activeIndexByFamily` | Per-model-family active account (claude/gemini tracked separately) |

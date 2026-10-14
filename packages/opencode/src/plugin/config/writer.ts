@@ -1,7 +1,7 @@
 /**
  * Lock-held config writer for operator-controlled settings.
  *
- * The /antigravity-quota, /antigravity-account, /antigravity-routing,
+ * The /antigravity-quota, /antigravity-account,
  * /antigravity-killswitch, /antigravity-dump, and /antigravity-logging
  * slash commands all mutate a small slice of the persisted
  * `antigravity.json`. This writer:

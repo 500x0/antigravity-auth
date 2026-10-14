@@ -242,7 +242,7 @@ export interface AntigravityAccountDto {
 export interface AntigravityRouteDto {
   readonly accountId: string
   readonly modelFamily: 'claude' | 'gemini'
-  readonly headerStyle: 'antigravity' | 'gemini-cli'
+  readonly headerStyle: 'antigravity'
   readonly strategy: 'sticky' | 'round-robin' | 'hybrid' | null
   readonly updatedAt: number
 }
@@ -261,10 +261,7 @@ export interface AntigravityStatusDto {
  * refresh tokens.
  */
 export interface AntigravitySettingsDto {
-  readonly routing: {
-    readonly cliFirst: boolean
-    readonly quotaStyleFallback: boolean
-  }
+  readonly selectionStrategy: 'sticky' | 'round-robin' | 'hybrid' | 'vault'
   readonly killswitch: {
     readonly enabled: boolean
     readonly minimumRemainingPercent: number
@@ -817,7 +814,7 @@ function checkRoute(value: unknown, path: Path, issues: Issues): void {
   )
   checkLiteral(
     value.headerStyle,
-    ['antigravity', 'gemini-cli'],
+    ['antigravity'],
     [...path, 'headerStyle'],
     issues,
   )
@@ -1575,7 +1572,7 @@ function checkAccountsStatus(value: unknown, path: Path, issues: Issues): void {
 function checkSettings(value: unknown, path: Path, issues: Issues): void {
   if (
     !checkRecord(value, path, issues, [
-      'routing',
+      'selectionStrategy',
       'killswitch',
       'logLevel',
       'dump',
@@ -1583,21 +1580,12 @@ function checkSettings(value: unknown, path: Path, issues: Issues): void {
   ) {
     return
   }
-  const routingPath = [...path, 'routing']
-  if (
-    present(value, 'routing') &&
-    checkRecord(value.routing, routingPath, issues, [
-      'cliFirst',
-      'quotaStyleFallback',
-    ])
-  ) {
-    checkBoolean(value.routing.cliFirst, [...routingPath, 'cliFirst'], issues)
-    checkBoolean(
-      value.routing.quotaStyleFallback,
-      [...routingPath, 'quotaStyleFallback'],
-      issues,
-    )
-  }
+  checkLiteral(
+    value.selectionStrategy,
+    ['sticky', 'round-robin', 'hybrid', 'vault'],
+    [...path, 'selectionStrategy'],
+    issues,
+  )
   const killswitchPath = [...path, 'killswitch']
   if (
     present(value, 'killswitch') &&
@@ -1946,8 +1934,8 @@ export const ANTIGRAVITY_RPC_CONTRACT = {
       'over-limit': ['kind', 'count', 'limit'],
     },
     settings: {
-      root: ['routing', 'killswitch', 'logLevel', 'dump'],
-      routing: ['cliFirst', 'quotaStyleFallback'],
+      root: ['selectionStrategy', 'killswitch', 'logLevel', 'dump'],
+      selectionStrategy: 'enum',
       killswitch: ['enabled', 'minimumRemainingPercent'],
       dump: ['enabled'],
     },

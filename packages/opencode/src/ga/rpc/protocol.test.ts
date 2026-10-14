@@ -150,7 +150,7 @@ const SNAPSHOT: AntigravityStateSnapshot = {
     routingAuthoritative: false,
   },
   settings: {
-    routing: { cliFirst: false, quotaStyleFallback: true },
+    selectionStrategy: 'hybrid',
     killswitch: { enabled: false, minimumRemainingPercent: 5 },
     logLevel: 'info',
     dump: { enabled: false },
@@ -215,7 +215,7 @@ describe('antigravity-auth RPC identity', () => {
       .update(JSON.stringify(ANTIGRAVITY_RPC_CONTRACT))
       .digest('hex')
     expect(hash).toBe(
-      '8c6084fd187e9aca6c1f8b1740cfcc6f6effe8f8c11ca7ee7e90be8efe19b532',
+      '375d1048f1d6a23438d2eb0b46d11cfb8f5385555c79bb948ae1bffdae2eab56',
     )
   })
 

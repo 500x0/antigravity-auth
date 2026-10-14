@@ -212,7 +212,7 @@ export interface StoredDailyRequestCounts {
 
 /**
  * When each rate limit on the account ends, in epoch milliseconds, keyed by
- * quota pool (`claude`, `gemini-antigravity`, `gemini-cli`) or by a
+ * model family (`claude`, `gemini`) or by a
  * model-specific key; `null` where an older writer stored one. Every key is
  * kept as stored.
  */

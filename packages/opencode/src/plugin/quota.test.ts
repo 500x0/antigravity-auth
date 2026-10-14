@@ -202,123 +202,6 @@ describe('pushSidebarQuotaSnapshot', () => {
     expect(state.accounts).toEqual([])
   })
 
-  it('runs the windowed summary and gemini-cli quota fetch concurrently', async () => {
-    // The summary fetch and the gemini-CLI quota fetch previously
-    // ran sequentially — two 10s timeouts back-to-back. Run them
-    // concurrently instead. We assert by recording the sequence
-    // numbers of each fetch via a gate so the test is
-    // deterministic across runtimes.
-    const summarySeq: { seq: number } = { seq: 0 }
-    const cliSeq: { seq: number } = { seq: 0 }
-    let releaseSummary!: () => void
-    let releaseCli!: () => void
-    const summaryGate = new Promise<void>((resolve) => {
-      releaseSummary = resolve
-    })
-    const cliGate = new Promise<void>((resolve) => {
-      releaseCli = resolve
-    })
-    const owner = hooks.lifetime
-    owner.unpark(releaseSummary)
-    owner.unpark(releaseCli)
-
-    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (
-      input: unknown,
-    ) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : (input as Request).url
-      if (url.includes('retrieveUserQuotaSummary')) {
-        summarySeq.seq += 1
-        await summaryGate
-        owner.signal.throwIfAborted()
-        summarySeq.seq += 1
-        return new Response(
-          JSON.stringify({
-            groups: [
-              {
-                displayName: 'Gemini Models',
-                buckets: [
-                  {
-                    bucketId: 'gemini-weekly',
-                    displayName: 'Weekly',
-                    window: 'weekly',
-                    resetTime: '2026-01-08T00:00:00Z',
-                    remainingFraction: 0.7,
-                  },
-                ],
-              },
-            ],
-          }),
-          { status: 200 },
-        )
-      }
-      if (url.includes('retrieveUserQuota')) {
-        cliSeq.seq += 1
-        await cliGate
-        owner.signal.throwIfAborted()
-        cliSeq.seq += 1
-        return new Response(JSON.stringify({ buckets: [] }), { status: 200 })
-      }
-      // Token refresh and every other request: a successful answer carrying
-      // an access token, so token refresh and project lookup succeed and
-      // the quota pipeline carries on.
-      return new Response(
-        JSON.stringify({
-          access_token: 'access-token',
-          expires_in: 3600,
-        }),
-        { status: 200 },
-      )
-    }) as unknown as typeof fetch)
-
-    const client = {
-      auth: { set: mock(async () => {}) },
-    } as unknown as PluginClient
-    // Use a UNIQUE refresh token per test run so the QuotaManager's
-    // singleton cache / backoff state from earlier tests in the
-    // same run can't skip the fetch behind our spy.
-    const account: AccountMetadataV3 = {
-      refreshToken: `concurrent-fetch-${Date.now()}-${Math.random()}`,
-      managedProjectId: 'managed-project',
-      projectId: 'project-id',
-      addedAt: 0,
-      lastUsed: 0,
-    }
-    const manager = createOpenCodeQuotaManager(client, 'google')
-
-    try {
-      const refresh = manager.refreshAccounts([account], {
-        indexFor: () => 0,
-        force: true,
-      })
-      // Yield until both fetches have started (seq=1).
-      const deadline = Date.now() + 5_000
-      while ((summarySeq.seq < 1 || cliSeq.seq < 1) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 1))
-      }
-      // Both fetches started before either finished. If they ran
-      // sequentially, the cli fetch would not have started yet.
-      expect(summarySeq.seq).toBe(1)
-      expect(cliSeq.seq).toBe(1)
-      releaseSummary()
-      releaseCli()
-      await refresh
-
-      // Both fetches completed (seq=2).
-      expect(summarySeq.seq).toBe(2)
-      expect(cliSeq.seq).toBe(2)
-    } finally {
-      fetchSpy.mockRestore()
-      // Yield once more so the spy is fully torn down before the
-      // next test's bun event loop watches see the partial state.
-      await new Promise((resolve) => setImmediate(resolve))
-    }
-  })
-
   it('marks the active claude account as current when getActiveIndexByFamily is passed', async () => {
     const getAccounts = (): QuotaSnapshotAccount[] => [
       {
@@ -477,10 +360,6 @@ describe('pushSidebarQuotaSnapshot', () => {
         'fetch:start',
         'fetch:start',
         'fetch:start',
-        // The Gemini CLI quota's two endpoint requests go through the same
-        // injected transport (FetchGeminiCliQuotaOptions.fetchVia).
-        'fetch:start',
-        'fetch:start',
         'sidebar:write-start',
         'lifecycle:drain',
         'drain:sees-sidebar-write',
@@ -493,167 +372,6 @@ describe('pushSidebarQuotaSnapshot', () => {
       setSidebarMergeHooks(null)
       fetchSpy.mockRestore()
     }
-  })
-
-  it('CLI rejection carries the real error message instead of the generic no-CLI-configured string', async () => {
-    // The injected transport (FetchGeminiCliQuotaOptions.fetchVia) carries
-    // both Gemini CLI endpoint requests and throws on each. fetchGeminiCliQuota
-    // collects those errors and throws when every endpoint fails, and the
-    // .catch() in quota.ts records the original transport error on the CLI
-    // quota summary instead of the generic "no Gemini CLI quota" text.
-    const CLI_THROW_MSG = 'socket hang up'
-
-    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (
-      input: unknown,
-    ) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : (input as Request).url
-
-      if (url.includes('retrieveUserQuotaSummary')) {
-        return new Response(
-          JSON.stringify({
-            groups: [
-              {
-                displayName: 'Gemini Models',
-                buckets: [
-                  {
-                    bucketId: 'gemini-weekly',
-                    displayName: 'Weekly',
-                    window: 'weekly',
-                    resetTime: '2026-01-08T00:00:00Z',
-                    remainingFraction: 0.6,
-                  },
-                ],
-              },
-            ],
-          }),
-          { status: 200 },
-        )
-      }
-      if (url.includes('retrieveUserQuota')) {
-        // Simulate a transport-level rejection (socket hang up).
-        // fetchGeminiCliQuota collects this as an error and re-throws
-        // at end-of-loop, triggering the outer .catch() in quota.ts.
-        throw new Error(CLI_THROW_MSG)
-      }
-      return new Response(
-        JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
-        { status: 200 },
-      )
-    }) as unknown as typeof fetch)
-
-    const client = {
-      auth: { set: mock(async () => {}) },
-    } as unknown as PluginClient
-    const account: AccountMetadataV3 = {
-      refreshToken: `n2-rejection-${Date.now()}-${Math.random()}`,
-      managedProjectId: 'managed-n2',
-      projectId: 'project-n2',
-      addedAt: 0,
-      lastUsed: 0,
-    }
-    const manager = createOpenCodeQuotaManager(client, 'google')
-    let result: import('./quota.ts').AccountQuotaResult | undefined
-    try {
-      const results = await manager.refreshAccounts([account], {
-        indexFor: () => 0,
-        force: true,
-      })
-      result = results[0]
-    } finally {
-      fetchSpy.mockRestore()
-    }
-
-    // Summary succeeded — overall status must stay 'ok'.
-    expect(result?.status).toBe('ok')
-    if (result?.status !== 'ok') return
-
-    // Summary groups must survive the CLI rejection.
-    expect(result.quota?.groups).toBeDefined()
-
-    // The annotation must carry the REAL thrown message, not the generic
-    // 'No Gemini CLI quota available' that indicates a permanent absence.
-    // Multiple endpoints may each contribute the message (joined by '; ').
-    expect(result.geminiCliQuota?.error).toContain(CLI_THROW_MSG)
-    expect(result.geminiCliQuota?.error).not.toBe(
-      'No Gemini CLI quota available',
-    )
-  })
-
-  it('HTTP-500 on CLI endpoint does NOT kill the summary (parallel-fetch isolation)', async () => {
-    // fetchGeminiCliQuota treats an HTTP 500 from a CLI endpoint as a failed
-    // endpoint, so the CLI quota carries an error while the quota summary,
-    // fetched in parallel, is still returned.
-    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (
-      input: unknown,
-    ) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : (input as Request).url
-
-      if (url.includes('retrieveUserQuotaSummary')) {
-        return new Response(
-          JSON.stringify({
-            groups: [
-              {
-                displayName: 'Gemini Models',
-                buckets: [
-                  {
-                    bucketId: 'gemini-weekly',
-                    displayName: 'Weekly',
-                    window: 'weekly',
-                    resetTime: '2026-01-08T00:00:00Z',
-                    remainingFraction: 0.6,
-                  },
-                ],
-              },
-            ],
-          }),
-          { status: 200 },
-        )
-      }
-      if (url.includes('retrieveUserQuota')) {
-        return new Response('internal error', { status: 500 })
-      }
-      return new Response(
-        JSON.stringify({ access_token: 'access-token', expires_in: 3600 }),
-        { status: 200 },
-      )
-    }) as unknown as typeof fetch)
-
-    const client = {
-      auth: { set: mock(async () => {}) },
-    } as unknown as PluginClient
-    const account: AccountMetadataV3 = {
-      refreshToken: `n2-500-${Date.now()}-${Math.random()}`,
-      managedProjectId: 'managed-n2b',
-      projectId: 'project-n2b',
-      addedAt: 0,
-      lastUsed: 0,
-    }
-    const manager = createOpenCodeQuotaManager(client, 'google')
-    let result: import('./quota.ts').AccountQuotaResult | undefined
-    try {
-      const results = await manager.refreshAccounts([account], {
-        indexFor: () => 0,
-        force: true,
-      })
-      result = results[0]
-    } finally {
-      fetchSpy.mockRestore()
-    }
-
-    expect(result?.status).toBe('ok')
-    if (result?.status !== 'ok') return
-    expect(result.quota?.groups).toBeDefined()
-    expect(result.geminiCliQuota?.error).toBeTruthy()
   })
 })
 
@@ -825,10 +543,7 @@ describe('authorized local quota fetcher', () => {
   }
 
   /** A transport that records every physical request and answers it. */
-  function recordingTransport(
-    requests: SentRequest[],
-    cli: 'ok' | 'fail' = 'ok',
-  ): Transport {
+  function recordingTransport(requests: SentRequest[]): Transport {
     return () => async (url, init, extra) => {
       const headers = new Headers(init.headers)
       requests.push({
@@ -850,7 +565,6 @@ describe('authorized local quota fetcher', () => {
           { status: 200 },
         )
       }
-      if (cli === 'fail') throw new Error('fake cli transport failure')
       return new Response(JSON.stringify({ buckets: [] }), { status: 200 })
     }
   }
@@ -1033,20 +747,6 @@ describe('authorized local quota fetcher', () => {
       disabled: false,
       error: 'quota check refused (stale grant: credential replaced)',
     })
-  })
-
-  it('keeps the summary when the Gemini CLI request fails, carrying the real error', async () => {
-    const requests: SentRequest[] = []
-    const fetchQuota = createAuthorizedFetchAccountQuota({
-      authorize: async () => authorized(),
-      logger: silent,
-      transport: recordingTransport(requests, 'fail'),
-    })
-    const result = await fetchQuota(ACCOUNT, new AbortController().signal)
-    expect(result.status).toBe('ok')
-    if (result.status !== 'ok') return
-    expect(result.quota).toBeDefined()
-    expect(result.geminiCliQuota?.error).toContain('fake cli transport failure')
   })
 
   it('stops after authorization when the check was aborted meanwhile', async () => {
@@ -1385,7 +1085,7 @@ describe('account-store quota service', () => {
     let sends = 0
     const store = await storeService(
       () => {
-        if (++sends === 2) local = false
+        if (++sends === 1) local = false
       },
       { mayRun: async () => local },
     )
@@ -1395,7 +1095,7 @@ describe('account-store quota service', () => {
       const outcome = await store.service.refreshAccount(target, {
         force: true,
       })
-      expect(sends).toBe(2)
+      expect(sends).toBe(1)
       expect(outcome.status).toBe('discarded')
       expect(update).not.toHaveBeenCalled()
       const row = (await store.rows())[0]
@@ -1812,7 +1512,6 @@ describe('vault quota check', () => {
     expectOneAdmissionPerRequest(sent, vault.issued)
     expect(reading.quota.error).toBe('Failed to fetch Antigravity quota')
     expect(reading.quotaAttribution).toBeUndefined()
-    expect(reading.geminiCliQuota.error).toBeDefined()
   })
 
   it('hands a 401 to the source with its own admission and builds the retry from the retry admission', async () => {
@@ -1870,76 +1569,6 @@ describe('vault quota check', () => {
     expect(models[1]?.bearer).not.toBe(models[0]?.bearer)
     expectOneAdmissionPerRequest(sent, vault.issued)
     expect(reading.fellBackToLegacy).toBe(true)
-  })
-
-  it('sends nothing for a receipt served after the other half of the check was refused', async () => {
-    // Hold the quota-summary authorization and reject the Gemini CLI
-    // authorization before releasing it.
-    let releaseSummary: () => void = () => {}
-    const summaryHeld = new Promise<void>((resolve) => {
-      releaseSummary = resolve
-    })
-    let refusalSeen: () => void = () => {}
-    const refused = new Promise<void>((resolve) => {
-      refusalSeen = resolve
-    })
-    const owner = hooks.lifetime
-    owner.unpark(releaseSummary)
-    owner.unpark(refusalSeen)
-    let calls = 0
-    const issued: Admission[] = []
-    const source: VaultQuotaSource = {
-      async send(_ref, dispatch, sendOptions) {
-        calls += 1
-        const call = calls
-        if (call === 1) {
-          await summaryHeld
-          owner.signal.throwIfAborted()
-        } else {
-          refusalSeen()
-          throw new Error('the vault refused to admit this account')
-        }
-        const admission = {
-          routeId: ref.routeId,
-          credentialId: ref.credentialId,
-          accountIdentity: ref.accountIdentity,
-          recordVersion: call,
-          projectId: `vault-project-${call}`,
-          accessToken: `vault-token-${call}`,
-          expiresAtMs: null,
-        }
-        issued.push(admission)
-        return dispatch(admission, sendOptions.signal)
-      },
-      attribution: (admission) => ({
-        routeId: admission.routeId,
-        credentialId: admission.credentialId,
-        accountIdentity: admission.accountIdentity,
-        recordVersion: admission.recordVersion,
-      }),
-    }
-    const sent: Sent[] = []
-    const checking = owner.operation(
-      fetchVaultAccountQuota({
-        source,
-        ref,
-        signal: owner.signal,
-        logger: silent,
-        transport: recordingTransport(sent, () => summaryOk()),
-      }),
-    )
-
-    await refused
-    // Allow the Gemini CLI refusal to stop the quota check before
-    // authorizing the held summary request.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    releaseSummary()
-    const reading = await checking
-
-    expect(issued).toHaveLength(1)
-    expect(sent).toEqual([])
-    expect(reading.quotaAttribution).toBeUndefined()
-    expect(reading.quota.error).toBe('Failed to fetch Antigravity quota')
   })
 
   it('never exchanges a refresh token or sends outside the injected transport', async () => {

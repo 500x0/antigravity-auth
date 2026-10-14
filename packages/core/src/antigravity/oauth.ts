@@ -8,11 +8,11 @@ import {
   ANTIGRAVITY_LOAD_ENDPOINTS,
   ANTIGRAVITY_REDIRECT_URI,
   ANTIGRAVITY_SCOPES,
-  GEMINI_CLI_HEADERS,
 } from '../constants.ts'
 import { fetchWithActiveTimeout } from '../fetch-timeout.ts'
 import {
   buildAntigravityHarnessBootstrapHeaders,
+  buildAntigravityHarnessUserAgent,
   buildAntigravityLoadCodeAssistMetadata,
 } from '../fingerprint.ts'
 import { createLogger } from '../logger.ts'
@@ -269,7 +269,7 @@ export async function exchangeAntigravity(
           'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
           Accept: '*/*',
           'Accept-Encoding': 'gzip, deflate, br',
-          'User-Agent': GEMINI_CLI_HEADERS['User-Agent'],
+          'User-Agent': buildAntigravityHarnessUserAgent(),
         },
         body: new URLSearchParams({
           client_id: ANTIGRAVITY_CLIENT_ID,
@@ -295,7 +295,7 @@ export async function exchangeAntigravity(
       {
         headers: {
           Authorization: `Bearer ${tokenPayload.access_token}`,
-          'User-Agent': GEMINI_CLI_HEADERS['User-Agent'],
+          'User-Agent': buildAntigravityHarnessUserAgent(),
         },
       },
     )

@@ -84,15 +84,7 @@ export interface QuotaSummaryFixture extends BaseFixture {
 }
 
 /** Gemini-CLI bucket quota envelope. */
-export interface GeminiCliQuotaFixture extends BaseFixture {
-  kind: 'geminiCliQuota'
-  buckets: Array<{ model: string; remainingFraction: number }>
-}
 
-/**
- * Quota summary response with per-window remaining fractions and reset
- * times, as `retrieveUserQuotaSummary` parses it.
- */
 export interface QuotaSummaryWindowFixture extends BaseFixture {
   kind: 'quotaSummaryWindow'
   /**
@@ -184,7 +176,6 @@ export type Fixture =
   | ProjectDiscoveryFixture
   | QuotaSummaryFixture
   | QuotaSummaryWindowFixture
-  | GeminiCliQuotaFixture
   | StreamChunkedFixture
   | TokenExpiryFixture
   | RateLimitFixture
@@ -403,12 +394,7 @@ export async function startMockAntigravityServer(): Promise<MockServerHandle> {
         })
         return
       }
-      case 'geminiCliQuota': {
-        sendJson(response, fixture.status ?? 200, {
-          buckets: fixture.buckets,
-        })
-        return
-      }
+
       case 'quotaSummaryWindow': {
         // When the fixture sets managedProjectId and the request posts a
         // different project, answer 403 PERMISSION_DENIED so the test covers

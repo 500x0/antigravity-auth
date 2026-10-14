@@ -253,6 +253,7 @@ export function signInMenuSection(
  */
 export async function createOpenCodeAntigravityMenu(options: {
   readonly accounts: AntigravityMenuAccounts
+  readonly selectionStrategy: () => 'sticky' | 'round-robin' | 'hybrid'
   readonly settings: Pick<OperatorSettingsController, 'get' | 'update'>
   readonly dump: { isEnabled(): boolean; setEnabled(enabled: boolean): void }
   readonly applyLogLevel: (level: OperatorSettings['log_level']) => void
@@ -269,7 +270,7 @@ export async function createOpenCodeAntigravityMenu(options: {
     source: 'repository',
     commands: options.commands ?? (await loadCommonAuthCommands()),
     accounts: options.accounts,
-    settings: operatorMenuSettings(options.settings),
+    settings: operatorMenuSettings(options.settings, options.selectionStrategy),
     diagnostics: diagnosticsMenuSection(options),
     ...(options.refreshQuota ? { refreshQuota: options.refreshQuota } : {}),
     ...(options.accountLimits ? { accountLimits: options.accountLimits } : {}),
@@ -437,7 +438,9 @@ export async function createOpenCodeVaultAntigravityMenu(
     commands: options.commands ?? (await loadCommonAuthCommands()),
     sections: {
       ...options.sections,
-      ...antigravitySettingsSections(operatorMenuSettings(options.settings)),
+      ...antigravitySettingsSections(
+        operatorMenuSettings(options.settings, () => 'vault'),
+      ),
     },
     diagnostics: diagnosticsMenuSection(options),
     extras: options.vault ? [options.vault] : [],

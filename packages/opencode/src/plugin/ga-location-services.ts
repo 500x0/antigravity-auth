@@ -419,12 +419,10 @@ function redactionInputOf(
 export function gaSettingsOf(
   settings: OperatorSettings,
   dump: Pick<GeminiDumpState, 'isEnabled'>,
+  selectionStrategy: AntigravitySettingsDto['selectionStrategy'],
 ): AntigravitySettingsDto {
   return {
-    routing: {
-      cliFirst: settings.routing.cli_first,
-      quotaStyleFallback: settings.routing.quota_style_fallback,
-    },
+    selectionStrategy,
     killswitch: {
       enabled: settings.killswitch.enabled,
       minimumRemainingPercent: settings.killswitch.minimum_remaining_percent,
@@ -610,7 +608,7 @@ export function createGaLocationMenu(input: {
     Pick<AccountRepository, 'updateMetadata'>
   readonly runtime: Pick<
     LocationRuntime,
-    'operatorSettings' | 'dump' | 'applyOperatorSettings'
+    'operatorSettings' | 'dump' | 'applyOperatorSettings' | 'config'
   >
   readonly refreshQuota?: AntigravityRepositoryMenuOptions['refreshQuota']
   readonly reauthorize?: AntigravityRepositoryMenuOptions['reauthorize']
@@ -622,7 +620,10 @@ export function createGaLocationMenu(input: {
     source: 'repository',
     commands: input.commands,
     accounts: input.repository,
-    settings: operatorMenuSettings(runtime.operatorSettings),
+    settings: operatorMenuSettings(
+      runtime.operatorSettings,
+      () => runtime.config.config.account_selection_strategy,
+    ),
     diagnostics: diagnosticsMenuSection({
       settings: runtime.operatorSettings,
       dump: runtime.dump,
@@ -1463,8 +1464,6 @@ function gaEngineCollaborators(input: {
       }
       return fetchWithAgyCliTransport(url, init, transportOptions)
     },
-    fetchImpl: (request: RequestInfo | URL, init?: RequestInit) =>
-      fetch(request, init),
     wire: {
       prepare: prepareAntigravityRequest,
       transformResponse: transformAntigravityResponse,
@@ -1828,7 +1827,10 @@ async function createGaVaultLocationServices(input: {
             })
         : undefined
       const started = pipeline
-      const settings = operatorMenuSettings(location.operatorSettings)
+      const settings = operatorMenuSettings(
+        location.operatorSettings,
+        () => 'vault',
+      )
       const menu = createAntigravityCommandMenu({
         source: 'sections',
         commands: await loadCommonAuthCommands(),
@@ -1852,7 +1854,11 @@ async function createGaVaultLocationServices(input: {
           ...(input.nextReadSeq ? { nextReadSeq: input.nextReadSeq } : {}),
           generation: start.generation,
           settings: () =>
-            gaSettingsOf(location.operatorSettings.get(), location.dump),
+            gaSettingsOf(
+              location.operatorSettings.get(),
+              location.dump,
+              'vault',
+            ),
           route: (scope) => routes.route(scope),
           ...(overrides.observeAccountSnapshot
             ? { observe: overrides.observeAccountSnapshot }
@@ -2037,7 +2043,10 @@ export function createGaLocationServicesFactory(
         if (started) throw new Error('The location services already started')
         started = true
         const location = input.runtime
-        const settings = operatorMenuSettings(location.operatorSettings)
+        const settings = operatorMenuSettings(
+          location.operatorSettings,
+          () => location.config.config.account_selection_strategy,
+        )
         const recoveryMenu = createAntigravityCommandMenu({
           source: 'sections',
           commands: await loadCommonAuthCommands(),
@@ -2088,6 +2097,7 @@ export function createGaLocationServicesFactory(
                 settings: gaSettingsOf(
                   location.operatorSettings.get(),
                   location.dump,
+                  location.config.config.account_selection_strategy,
                 ),
               }
             },
@@ -2159,6 +2169,7 @@ export function createGaLocationServicesFactory(
                     gaSettingsOf(
                       location.operatorSettings.get(),
                       location.dump,
+                      location.config.config.account_selection_strategy,
                     ),
                   status: () => ({
                     checkedAt: null,

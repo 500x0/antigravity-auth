@@ -83,7 +83,7 @@ The window keys **`5h` and `weekly` are stable machine keys**. Display text such
 as `7d` is presentation only; consumers must not substitute it for `weekly`.
 
 Each `activeRouting` entry has `accountId` (one of the account positional keys),
-`modelFamily` (`claude` or `gemini`), `headerStyle` (`antigravity` or `gemini-cli`),
+`modelFamily` (`claude` or `gemini`), `headerStyle` (always `antigravity`),
 optional `strategy` (`sticky`, `round-robin`, or `hybrid`), and `updatedAt` (routing
 observation time). Routing timestamps do not date quota readings.
 
@@ -118,3 +118,5 @@ from provider state indexed by the row's account identity, only when the stored
 observation's route and credential IDs also match the current row. Readings
 written by another process therefore appear even when an existing selector row
 has an older in-memory cache.
+
+The v2 `headerStyle` field is retained for QTA readers and is always `"antigravity"`. Old snapshots containing `"gemini-cli"` normalize to `"antigravity"`; they cannot select a request path.

@@ -85,9 +85,11 @@ async function menu(
   refreshQuota?: AntigravityRepositoryMenuOptions['refreshQuota'],
   accountLimits?: AntigravityRepositoryMenuOptions['accountLimits'],
   reauthorize?: AntigravityRepositoryMenuOptions['reauthorize'],
+  selectionStrategy: () => AntigravityMenuSettings['selectionStrategy'] = () =>
+    'hybrid',
 ) {
   let settings: AntigravityMenuSettings = {
-    routing: { cliFirst: false, quotaStyleFallback: false },
+    selectionStrategy: 'hybrid',
     killswitch: { enabled: false, minimumRemainingPercent: 5 },
   }
   return createAntigravityCommandMenu({
@@ -95,11 +97,7 @@ async function menu(
     commands: await loadCommonAuthCommands(),
     accounts: repository,
     settings: {
-      read: () => settings,
-      updateRouting: async (routing) => {
-        settings = { ...settings, routing }
-        settingsLog.push(settings)
-      },
+      read: () => ({ ...settings, selectionStrategy: selectionStrategy() }),
       updateKillswitch: async (killswitch) => {
         settings = { ...settings, killswitch }
         settingsLog.push(settings)
@@ -215,24 +213,29 @@ describe('createAntigravityCommandMenu', () => {
     expect(await readyRows()).toHaveLength(1)
   })
 
-  it('reads routing fresh and writes it only through the settings source', async () => {
-    const log: AntigravityMenuSettings[] = []
-    const built = await menu(log)
-    const result = await built.apply(
+  it('shows read-only account routing without header-style controls', async () => {
+    const built = await menu()
+    const result = await built.open(invocation)
+    const routing = result.menu.sections.find(
+      (section) => section.id === 'routing',
+    )
+    expect(routing?.lines).toEqual([
+      'Account selection strategy: hybrid',
+      'Choose available accounts using health and quota signals.',
+      'Configured in antigravity.json: account_selection_strategy',
+    ])
+    expect(routing?.actions).toEqual([])
+    expect(JSON.stringify(routing)).not.toMatch(/Gemini CLI|header.style/i)
+    const stale = await built.apply(
       {
         command: 'antigravity',
         sectionId: 'routing',
         actionId: 'set',
-        values: { cliFirst: true },
+        values: {},
       },
       invocation,
     )
-    expect(result.ok).toBe(true)
-    expect(log).toHaveLength(1)
-    const routing = result.menu.sections.find(
-      (section) => section.id === 'routing',
-    )
-    expect(routing?.lines[0]).toBe('Gemini CLI headers first: on')
+    expect(stale.ok).toBe(false)
   })
 })
 
@@ -451,4 +454,29 @@ describe('createAntigravityCommandMenu sections mode', () => {
       ]),
     ).toThrow('repository or sections')
   })
+})
+
+it('reads each account strategy fresh and explains vault selection without inventing a strategy', async () => {
+  let strategy: AntigravityMenuSettings['selectionStrategy'] = 'sticky'
+  const built = await menu([], undefined, undefined, undefined, () => strategy)
+  for (const current of ['sticky', 'round-robin', 'hybrid', 'vault'] as const) {
+    strategy = current
+    const payload = await built.open(invocation)
+    const routing = payload.menu.sections.find(
+      (section) => section.id === 'routing',
+    )
+    expect(routing?.actions).toEqual([])
+    expect(JSON.stringify(routing)).not.toMatch(/Gemini CLI|header.style/i)
+    if (current === 'vault') {
+      expect(routing?.lines).toEqual([
+        "Selection follows the vault's served accounts.",
+      ])
+    } else {
+      expect(routing?.lines[0]).toBe(`Account selection strategy: ${current}`)
+      expect(routing?.lines).toHaveLength(3)
+      expect(routing?.lines[2]).toBe(
+        'Configured in antigravity.json: account_selection_strategy',
+      )
+    }
+  }
 })

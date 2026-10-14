@@ -317,7 +317,7 @@ it('preserves the plugin hook mutation sequence across extraction', async () => 
         throw new Error('account A metadata missing before B transport')
       }
       expect(accountA.metadata.metadata.rateLimitResetTimes).toEqual({
-        'gemini-antigravity:gemini-3-flash': FIXED_NOW + 60_000,
+        'gemini:gemini-3-flash': FIXED_NOW + 60_000,
       })
       events.push(
         'rate-limit A persisted',
@@ -409,7 +409,7 @@ it('preserves the plugin hook mutation sequence across extraction', async () => 
       accountA: {
         id: 'A',
         rateLimit: {
-          key: 'gemini-antigravity:gemini-3-flash',
+          key: 'gemini:gemini-3-flash',
           resetAt: FIXED_NOW + 60_000,
         },
       },

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 import { getEventListeners } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   type AccountStorageStore,
@@ -19,6 +19,7 @@ import { startGaLoopbackBridge } from '../../ga/server/index'
 import { extractAccountAccessErrorDetails } from '../account-access'
 import { createAuthLoader } from '../auth-loader'
 import { DEFAULT_CONFIG } from '../config'
+import { createLocationConfig } from '../config/loader'
 import { createLocationDebug } from '../debug'
 import { createGaJobExecutor } from '../ga-location-services'
 import { createGeminiDumpState } from '../gemini-dump'
@@ -113,7 +114,7 @@ function prepareEnvelope(
     accessToken: 'access-token',
     projectId: 'request-test-project',
     endpoint: ANTIGRAVITY_ENDPOINT_FALLBACKS[0],
-    headerStyle: 'antigravity',
+
     options: {
       agySession: scope.session,
       agyRequestTimestamp: scope.timestamp,
@@ -379,7 +380,7 @@ describe('prepareAgyWireRequest against the frozen agy CLI 1.1.24 capture', () =
       accessToken: 'token',
       projectId: 'project',
       endpoint: ANTIGRAVITY_ENDPOINT_FALLBACKS[0],
-      headerStyle: 'antigravity',
+
       options: {
         agySession: scope.session,
         agyRequestTimestamp: scope.timestamp,
@@ -574,9 +575,6 @@ function harness(
       calls.push(call)
       if (!options.respond) throw new Error('transport not configured')
       return options.respond(call, calls.length - 1)
-    },
-    fetchImpl: async () => {
-      throw new Error('gemini-cli fetch must not be used in these tests')
     },
     wire: WIRE,
     debug,
@@ -1786,7 +1784,6 @@ describe('createRequestWire location state', () => {
 describe('Antigravity-owned selection policy', () => {
   const killswitchOn = {
     get: () => ({
-      routing: { cli_first: false, quota_style_fallback: false },
       killswitch: { enabled: true, minimum_remaining_percent: 50 },
       log_level: 'info' as const,
     }),
@@ -1842,13 +1839,7 @@ describe('Antigravity-owned selection policy', () => {
       config: { max_rate_limit_wait_seconds: 1 },
     })
     const account = pool.getAccounts()[0] as ManagedAccount
-    pool.markRateLimited(
-      account,
-      600_000,
-      'claude',
-      'antigravity',
-      'claude-sonnet-4-6',
-    )
+    pool.markRateLimited(account, 600_000, 'claude', 'claude-sonnet-5-5-low')
     const executor = createRequestExecutor(h.deps)
     try {
       const gemini = await executor.execute(NON_STREAM_URL, CHAT_INIT())
@@ -3014,6 +3005,74 @@ describe('shared executor tool schema normalization', () => {
           count: { type: 'INTEGER', minimum: 1, description: 'Must be 3.' },
         },
       })
+    } finally {
+      await executor.dispose()
+    }
+  })
+})
+
+describe('single Antigravity request path', () => {
+  it('legacy CLI routing config sends Gemini through Antigravity only', async () => {
+    const directory = join(testRoot(), 'legacy-routing')
+    mkdirSync(join(directory, '.opencode'), { recursive: true })
+    const path = join(directory, '.opencode', 'antigravity.json')
+    const raw = {
+      cli_first: true,
+      quota_fallback: true,
+      quota_style_fallback: true,
+      operator: {
+        routing: { cli_first: true, quota_style_fallback: true },
+        log_level: 'debug',
+      },
+      keep_thinking: true,
+      account_selection_strategy: 'round-robin',
+    }
+    const bytes = JSON.stringify(raw)
+    writeFileSync(path, bytes)
+    const warn = mock(() => {})
+    const { config } = createLocationConfig(directory, { logger: { warn } })
+    expect(warn).not.toHaveBeenCalled()
+    expect(config.keep_thinking).toBe(true)
+    expect(config.account_selection_strategy).toBe('round-robin')
+    expect(config.operator?.log_level).toBe('debug')
+    for (const key of ['cli_first', 'quota_fallback', 'quota_style_fallback']) {
+      expect(config).not.toHaveProperty(key)
+    }
+    expect(config.operator).not.toHaveProperty('routing')
+    expect(readFileSync(path, 'utf8')).toBe(bytes)
+    const h = harness({
+      config: {
+        ...config,
+        cache_warmup_on_switch: false,
+        thinking_warmup: false,
+      },
+      respond: async () => okJson(),
+    })
+    const executor = createRequestExecutor(h.deps)
+    try {
+      const response = await executor.execute(
+        modelUrl('gemini-4-argon', 'generateContent'),
+        {
+          ...CHAT_INIT(),
+          headers: {
+            'X-Goog-Api-Client': 'legacy-client',
+            'Client-Metadata': 'legacy-metadata',
+            'User-Agent': 'GeminiCLI/retired',
+          },
+        },
+      )
+      expect(response.status).toBe(200)
+      expect(h.calls).toHaveLength(1)
+      const call = h.calls[0]!
+      expect(call.url).toStartWith(`${ANTIGRAVITY_ENDPOINT_FALLBACKS[0]}/`)
+      const headers = new Headers(call.init?.headers)
+      expect(headers.get('User-Agent')).toMatch(/^antigravity\/cli\//)
+      expect(headers.has('X-Goog-Api-Client')).toBe(false)
+      expect(headers.has('Client-Metadata')).toBe(false)
+      const body = JSON.parse(call.init?.body as string)
+      expect(body.userAgent).toBe('antigravity')
+      expect(body.requestType).toBe('agent')
+      expect(body.model).toBe('gemini-4-argon-medium')
     } finally {
       await executor.dispose()
     }

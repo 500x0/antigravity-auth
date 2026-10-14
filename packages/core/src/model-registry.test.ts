@@ -5,7 +5,6 @@ import { getAgyModelEnum } from './agy-request-metadata.ts'
 import {
   AGY_NATIVE_MODEL_DEFINITIONS,
   getGemini35FlashAntigravityModel,
-  getGemini35FlashGeminiCliFallbackModel,
   getGemini36FlashAntigravityModel,
   getGemini37FlashAntigravityModel,
   getGemini38FlashAntigravityModel,
@@ -50,7 +49,7 @@ describe('model registry', () => {
     }
   })
 
-  it('preserves server-offered Gemini 3.5 routes and their separate CLI fallback', () => {
+  it('preserves server-offered Gemini 3.5 routes', () => {
     expect(getGemini35FlashAntigravityModel()).toBe('gemini-3-flash-agent')
     expect(getGemini35FlashAntigravityModel('high')).toBe(
       'gemini-3-flash-agent',
@@ -60,9 +59,6 @@ describe('model registry', () => {
     )
     expect(getGemini35FlashAntigravityModel('low')).toBe(
       'gemini-3.5-flash-extra-low',
-    )
-    expect(getGemini35FlashGeminiCliFallbackModel()).toBe(
-      'gemini-3-flash-preview',
     )
   })
 
@@ -242,10 +238,9 @@ describe('server catalog authority', () => {
         resolveModelWithTier(`antigravity-gemini-4-argon-${effort}`)
           .actualModel,
       ).toBe(`gemini-4-argon-${effort}`)
-      expect(
-        resolveModelWithTier(`gemini-4-argon-${effort}`, { cli_first: true })
-          .quotaPreference,
-      ).toBe('antigravity')
+      expect(resolveModelWithTier(`gemini-4-argon-${effort}`).actualModel).toBe(
+        `gemini-4-argon-${effort}`,
+      )
     }
   })
   it('keeps every public selector and effort on a server-listed route', () => {
@@ -264,6 +259,12 @@ describe('server catalog authority', () => {
     expect(
       resolveModelWithTier('antigravity-gemini-3.1-pro-high').actualModel,
     ).toBe('gemini-3.1-pro-high')
+  })
+
+  it('applies Antigravity admission to historical preview aliases', () => {
+    expect(isRetiredAgyModel('gemini-3.1-pro-preview')).toBe(true)
+    expect(isRetiredAgyModel('gemini-3.1-pro-preview-customtools')).toBe(true)
+    expect(isRetiredAgyModel('gemini-3.5-flash-preview')).toBe(false)
   })
 
   it('refuses absent historical Claude routes without treating offered Gemini routes as retired', () => {
