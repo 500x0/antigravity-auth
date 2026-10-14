@@ -338,6 +338,80 @@ describe('upsertSidebarActiveRouting / removeSidebarActiveRouting', () => {
   })
 })
 
+describe('sidebar state writer version policy', () => {
+  let fixture: Fixture
+
+  beforeEach(() => {
+    fixture = makeFixture()
+  })
+
+  afterEach(async () => {
+    setSidebarMergeHooks(null)
+    fixture.cleanup()
+  })
+
+  it('newer major version stays byte-identical after machine and routing writes while later writes still succeed', async () => {
+    const newerState = '{\n  "version": 3,\n  "futureField": "keep me"\n}\n'
+    writeFileSync(fixture.stateFile, newerState)
+
+    const results = await Promise.allSettled([
+      setSidebarMachineState(
+        { checkedAt: Date.now(), accounts: [makeAccount()] },
+        { stateFile: fixture.stateFile },
+      ),
+      upsertSidebarActiveRouting('sess-future', makeRouting(), {
+        stateFile: fixture.stateFile,
+      }),
+    ])
+
+    expect(results.map((result) => result.status)).toEqual([
+      'fulfilled',
+      'fulfilled',
+    ])
+    expect(readFileSync(fixture.stateFile, 'utf-8')).toBe(newerState)
+
+    writeFileSync(
+      fixture.stateFile,
+      JSON.stringify({
+        version: 1,
+        checkedAt: 50,
+        accounts: [],
+        activeRouting: {},
+        routingAuthoritative: false,
+      }),
+    )
+    await setSidebarMachineState(
+      { checkedAt: 75, accounts: [makeAccount()] },
+      { stateFile: fixture.stateFile },
+    )
+
+    expect(readSidebarState(fixture.stateFile).checkedAt).toBe(75)
+  })
+
+  it('upgrades a version 1 file to version 2', async () => {
+    writeFileSync(
+      fixture.stateFile,
+      JSON.stringify({
+        version: 1,
+        checkedAt: 50,
+        accounts: [],
+        activeRouting: {},
+        routingAuthoritative: false,
+      }),
+    )
+
+    await setSidebarMachineState(
+      { checkedAt: 75, accounts: [makeAccount()] },
+      { stateFile: fixture.stateFile },
+    )
+
+    expect(readSidebarState(fixture.stateFile).version).toBe(
+      SIDEBAR_STATE_VERSION,
+    )
+    expect(readSidebarState(fixture.stateFile).checkedAt).toBe(75)
+  })
+})
+
 describe('readSidebarState — malformed/missing normalization', () => {
   let fixture: Fixture
 

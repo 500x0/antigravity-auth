@@ -256,6 +256,17 @@ export function readSidebarState(
   return normalizeSidebarState(parsed)
 }
 
+function readSidebarStateVersion(path: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'))
+    if (!isObject(parsed)) return
+    const version = (parsed as Record<string, unknown>).version
+    return typeof version === 'number' ? version : undefined
+  } catch {
+    return
+  }
+}
+
 function normalizeSidebarState(input: unknown): SidebarStateV1 {
   if (!isObject(input)) {
     return { ...DEFAULT_SIDEBAR_STATE, lastError: 'shape' }
@@ -855,6 +866,20 @@ interface SidebarStateWriteOptions {
 }
 
 let sidebarWriteChain: Promise<void> = Promise.resolve()
+let hasLoggedNewerSidebarVersion = false
+
+function logNewerSidebarVersion(version: number): void {
+  if (hasLoggedNewerSidebarVersion) return
+  hasLoggedNewerSidebarVersion = true
+  try {
+    console.debug(
+      '[antigravity.sidebar-state] a newer writer owns the file; skipping write',
+      { version, writerVersion: SIDEBAR_STATE_VERSION },
+    )
+  } catch {
+    // Logging must not turn a skipped write into a failed producer update.
+  }
+}
 
 function enqueueSidebarWrite<T>(work: () => Promise<T>): Promise<T> {
   // Always run `work` regardless of whether the prior link resolved or
@@ -923,6 +948,11 @@ async function performSidebarWrite(
     const lock = await acquireSidebarLockWithRetry(stateFile)
     try {
       await lock.assertOwned()
+      const version = readSidebarStateVersion(stateFile)
+      if (version !== undefined && version > SIDEBAR_STATE_VERSION) {
+        logNewerSidebarVersion(version)
+        return
+      }
       const existing = readSidebarState(stateFile)
       await emitMergeStep('read-state')
       const merged = merge(existing)

@@ -30,6 +30,8 @@ empty, not a fallback to local accounts.
 `version` is the integer major contract version. Writers emit **2**. Consumers
 must refuse an unknown major version rather than interpret it as a known schema.
 Unknown additive fields within a supported version may be ignored.
+A writer never replaces a file with a newer major version; it skips its write
+instead.
 
 The V1 reader accepts both 1 and 2, normalizing them to an in-memory version 2
 state. A pre-upgrade version 1 file is therefore readable without a crash. Missing
