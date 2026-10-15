@@ -518,11 +518,17 @@ describe('hook bodies', () => {
 
   it('leaves prepared real keys and native OAuth untouched before title or model handling', async () => {
     const active = await startBridge()
-    for (const key of [
-      'synthetic-ga-key',
-      'native-google-oauth-access',
-      `${placeholderSecret('google')}-not-exact`,
-    ]) {
+    const preparedCredentials: Record<string, string>[] = [
+      { 'x-goog-api-key': 'synthetic-ga-key' },
+      { 'x-goog-api-key': 'native-google-oauth-access' },
+      { 'x-goog-api-key': `${placeholderSecret('google')}-not-exact` },
+      { 'x-goog-api-key': `Bearer ${placeholderSecret('google')}` },
+      { 'x-goog-api-key': `x-${placeholderSecret('google')}` },
+      { 'x-goog-api-key': placeholderSecret('google').toUpperCase() },
+      {},
+      { authorization: 'Bearer native-google-oauth-access' },
+    ]
+    for (const credentialHeaders of preparedCredentials) {
       for (const [kind, id] of [
         ['title', 'gemini-off-catalog-title-model'],
         ['primary', 'antigravity-gemini-3.5-flash'],
@@ -530,7 +536,7 @@ describe('hook bodies', () => {
       ] as const) {
         const original = new Request(JOB.url, {
           method: 'POST',
-          headers: { 'x-goog-api-key': key, 'x-native-header': 'preserve' },
+          headers: { ...credentialHeaders, 'x-native-header': 'preserve' },
           body: '{ "native" : "bytes é" }',
         })
         const headers = [...original.headers]
