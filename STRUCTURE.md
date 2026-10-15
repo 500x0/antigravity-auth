@@ -155,7 +155,7 @@ packages/opencode/
 - `packages/opencode/src/plugin/types.ts` — `PluginInput`, `PluginContext`, `PluginResult`, `GetAuth`, host types.
 - `packages/opencode/src/plugin/dependencies.ts` — `PluginDependencyOverrides` (the seam the e2e workspace uses to swap `fetchImpl`, `agyTransport`, `filesystemRoots`, `oauth`, `clock`) + `resolvePluginDependencies` default-resolver.
 - `packages/opencode/src/plugin/lifecycle.ts` — tracked retirement keeps old managers until admitted refresh/request/body work drains. Final disposal publishes closing and a shared completion promise synchronously before hooks can reenter, aborts live/retiring work, stops producers, drains sidebar writes and then tears down consumers.
-- `packages/opencode/src/plugin/auth-loader.ts` — fresh enrollment selects local/vault runtime; only authorized local work reads host auth/repairs drift/opens the repository. In V1, a native `google` auth record is only the host's pre-loader prerequisite: foreign tombstones (placeholders tied to another enrollment) and ordinary OAuth stay unread/unvalidated/unrefreshed while vault credentials serve. GA connection-ownership checks do not apply here.
+- `packages/opencode/src/plugin/auth-loader.ts` — fresh enrollment selects local/vault runtime; only authorized local work reads host auth/repairs drift/opens the repository. In V1, a native `google` auth record is only the host's pre-loader prerequisite: foreign tombstones (placeholders tied to another enrollment) and ordinary OAuth stay unread/unvalidated/unrefreshed while vault credentials serve. GA prepared-placeholder ownership checks do not apply here.
 - `packages/opencode/src/plugin/auth.ts` — token validation helpers used by the loader (refresh-parts checks, expiry buffer).
 - `packages/opencode/src/plugin/auth-doctor.ts` — self-healing diagnostics for an unrecoverable auth store.
 - `packages/opencode/src/plugin/auth-drift.ts` — `detectAuthStorageDrift`: compares the host's `getAuth()` result against the on-disk pool and surfaces a `restorable` path.
@@ -284,7 +284,7 @@ The V1 TUI polls a redacted snapshot and private loopback RPC; GA uses its locat
 ## GA sources within `packages/opencode`
 
 - `packages/opencode/src/ga/server/index.ts` — `createGaAntigravityPlugin`, request-hook/loopback job bridge, location lifetime and cleanup.
-- `packages/opencode/src/ga/server/auth.ts` — plugin-owned vault activation method added to `google`; GA native-connection ownership is distinct from V1's enrollment-only serving rule.
+- `packages/opencode/src/ga/server/auth.ts` — pool browser login and approved-vault registration under the saved `Antigravity` connection label. GA request ownership uses the prepared common-auth Google placeholder, not connection metadata; see [OpenCode 2](packages/opencode/docs/OPENCODE-2.md). V1's enrollment-only serving rule remains distinct.
 - `packages/opencode/src/ga/proxy-guard.ts` — guarded loopback request boundary.
 - `packages/opencode/src/ga/rpc/protocol.ts` — location-scoped snapshot/menu RPC.
 - `packages/opencode/src/ga/tui/host-ga.tsx` — real GA renderer loaded by the hybrid TUI entry's `setup` arm.

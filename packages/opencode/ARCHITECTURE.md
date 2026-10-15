@@ -1,5 +1,7 @@
 # Architecture
 
+The fetch-interceptor details below describe the legacy OpenCode 1 arm. The unified package also has a GA server/TUI arm: see the [current root architecture](../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services) and [OpenCode 2 guide](docs/OPENCODE-2.md). GA registers pool-browser and approved-vault login methods under a saved `Antigravity` connection; ownership uses the host-prepared common-auth Google placeholder, not active connection metadata. Real Google keys/native credentials pass through unchanged.
+
 ## Pattern Overview
 
 **Overall:** OpenCode plugin — fetch-interceptor that transforms Gemini API requests into Antigravity (Cloud Code Assist) format, with OAuth multi-account rotation, quota management, session recovery, and cross-model compatibility.

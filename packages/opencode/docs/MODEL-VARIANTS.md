@@ -4,6 +4,20 @@ OpenCode variants select the model's supported effort without adding a separate
 picker entry for every tier. Use the plugin's current catalog rather than copying
 an older model list into configuration.
 
+The canonical [model registry](../../core/src/model-registry.ts) is re-exported by OpenCode as `getAntigravityOpencodeModelIds()`:
+
+| Model ID (under `google/`) | Variants | Quota |
+| --- | --- | --- |
+| `antigravity-gemini-4-argon` | `low`, `medium` (default), `high` | Per-model; weekly pool attribution unverified |
+| `antigravity-gemini-3.8-flash` | `low`, `medium`, `high` | `gemini-flash` |
+| `antigravity-gemini-3.5-flash` | `low`, `medium`, `high` | `gemini-flash` |
+| `antigravity-gemini-3.1-flash-image` | — | `gemini-flash` |
+| `antigravity-claude-sonnet-5-5` | `low`, `medium`, `high` | `claude` |
+| `antigravity-claude-opus-5-5` | `low`, `medium`, `high` | `claude` |
+| `antigravity-gpt-oss-120b-medium` | — | `gpt-oss` |
+
+Gemini 3.8 Flash Cyber is absent from the captured AGY 1.3.5 server catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
+
 ## Claude 5.5
 
 Both `google/antigravity-claude-opus-5-5` and

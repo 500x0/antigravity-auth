@@ -1,0 +1,43 @@
+# Migration and rollback
+
+This guide describes the current source tree, not a claim that an unreleased major version is available on npm. Use `antigravity-auth` from the **build you are upgrading to**, whose `--help` lists `init`, `migrate`, and `rollback`. An older installed CLI may not implement them. Below, “new CLI” means that build's CLI.
+
+## Hold automatic updates before a major upgrade
+
+Set the top-level `auto_update` field to `false` in the effective `antigravity.json`, merging it into existing settings. Check each project's `.opencode/antigravity.json` too: project settings override the user config and must not set it back to `true`:
+
+```json
+{
+  "auto_update": false
+}
+```
+
+The published v2.2.1 default is `true`; its update check on host restart can advance pinned plugin configs across major versions. **A version specifier alone is not an update hold.** This disables the existing automatic config update, not the required offline migration. See the [v2.2.1 updater](https://github.com/cortexkit/antigravity-auth/blob/v2.2.1/packages/opencode/src/hooks/auto-update-checker/index.ts) and [schema](https://github.com/cortexkit/antigravity-auth/blob/v2.2.1/packages/opencode/src/plugin/config/schema.ts).
+
+## Initialize or migrate before starting the host
+
+The local OpenCode pool uses a shared account store. `antigravity-accounts.json.store.pointer.json`, beside the resolved legacy account path, selects the active generation directory containing `config.json` and `state.json`; legacy `antigravity-accounts.json` is no longer the active writer target. Both OpenCode host generations share that repository, not one pool per project.
+
+- **Fresh installation:** run `antigravity-auth init` before CLI/V1 login. Initialization refuses an existing legacy pool; migrate it instead. OpenCode 2's pool browser method can initialize a truly fresh store during login; it refuses a pending legacy migration.
+- **Upgrade an existing legacy pool:** stop **every OpenCode and Antigravity process and timer** using the pool, then run `antigravity-auth migrate --offline`. Type `yes` at the stopped-process confirmation prompt. Optional `--yes` skips the prompt but does not make concurrent use safe.
+- **Downgrade after migration:** stop every pool user again, run `antigravity-auth rollback --offline` with the **new CLI**, confirm and wait for success, then install/start the older build. Never run old and new builds concurrently.
+
+## Rollback exports current credentials
+
+Offline rollback exports **current credentials and metadata** from the active generation into legacy V4 JSON. It does not restore tokens from the original backup. It refuses an existing/recreated legacy file, a changed rollback snapshot, or credentials/metadata changed during rollback. Do not copy an old snapshot back or recreate the legacy pool. On a refusal, leave hosts stopped and resolve the reported conflict.
+
+Keep the pointer, generations, migration journal, protected backups, and transfer files private. Do not delete them as a generic reset or manually splice generations into another profile. A general cross-machine store transfer procedure is not established here; prefer explicit fresh initialization and re-login on the destination, or approved vault enrollment.
+
+## Host activation and vault custody are separate
+
+Migration and rollback manage the **local OpenCode pool**, not the native Google auth slot used to activate a provider or approved credentials held by the vault. Before changing builds, disconnect vault enrollment via `/antigravity` → Vault in the currently installed plugin/extension. Re-login if native credentials cannot be safely restored; complete restoration of native host records is not promised. See [vault custody](VAULT.md).
+
+For OpenCode 2, finish the [native login and saved-connection selection](OPENCODE-2.md#pool-browser-login). OpenCode 1's `auth.json` slot does not complete that step.
+
+Pi's native auth file is **not** the OpenCode pool: **Pi-only users must not run these migration commands on it.** Change old `google-antigravity/…` model selections to `google/…` and run `/login google`; old credential slots are not automatically moved or overwritten. See [Pi's upgrade notes](../../pi/README.md#major-upgrades-and-downgrade).
+
+## Implementation references
+
+- [CLI options and stopped-process confirmation](../src/cli.ts)
+- [Current-credential export and refusal checks](../../core/src/account-migration.ts)
+- [Configuration and setup](CONFIGURATION.md), [account storage](MULTI-ACCOUNT.md#account-storage), and [recovery](TROUBLESHOOTING.md)

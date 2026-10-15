@@ -142,7 +142,7 @@ sequenceDiagram
   end
 ```
 
-**V1 dormant-slot rule:** the native `google` auth record is only the host's pre-loader prerequisite. Once the loader is reached, vault admission depends on enrollment, not native connection ownership. A foreign tombstone (a vault placeholder associated with another enrollment) or ordinary local OAuth record remains unread, unvalidated and unrefreshed by the plugin while vault credentials serve. V1 does not apply GA's exact connection-marker ownership rule. Local work remains blocked while vault authority is active or unreadable.
+**V1 dormant-slot rule:** the native `google` auth record is only the host's pre-loader prerequisite. Once the loader is reached, vault admission depends on enrollment, not native connection ownership. A foreign tombstone (a vault placeholder associated with another enrollment) or ordinary local OAuth record remains unread, unvalidated and unrefreshed by the plugin while vault credentials serve. V1 does not apply GA's prepared-placeholder ownership rule. Local work remains blocked while vault authority is active or unreadable.
 
 ### Fetch interceptor
 
@@ -170,7 +170,7 @@ The shared engine preserves the same wire invariants for both OpenCode arms: fin
 
 Local GA service uses the lease-backed repository; vault service uses enrollment authority and fresh per-send grants. `ACCOUNT_INELIGIBLE` and `VALIDATION_REQUIRED` persist access state before rotation. Generic 403 responses are not rate limits. Stream EOF without a terminal candidate, embedded SSE errors and exhausted fallbacks surface as native failures, not successful assistant text.
 
-`createGaAntigravityPlugin(overrides)` is the GA composition/test seam, exported from `./server`. Server disposal unregisters hooks and retires location-owned resources, pending jobs, streams, timers and loopback connections. GA integration code in `src/ga/server/auth.ts` adds the plugin-owned vault activation method to `google`; serving admission checks the owned connection boundary as well as enrollment. That native-marker ownership requirement is GA-specific, not the V1 dormant-slot rule.
+`createGaAntigravityPlugin(overrides)` is the GA composition/test seam, exported from `./server`. Server disposal unregisters hooks and retires location-owned resources, pending jobs, streams, timers and loopback connections. GA integration registers the pool browser login and approved-vault method under the saved connection label `Antigravity`; login methods and saved connections are distinct. Serving ownership is the exact host-prepared `x-goog-api-key` match to common-auth `placeholderSecret('google')`, checked before body/model handling, not an active-connection or method-ID lookup. Real keys/native Google credentials pass through unchanged. Antigravity is the only supported plugin issuing that Google marker: another plugin issuing the same marker could not be distinguished by this check and is outside the supported integration. Fresh enrollment authority separately selects local or vault credentials. See [OpenCode 2](packages/opencode/docs/OPENCODE-2.md).
 
 **Server-only SDK profile:** the GA consumer fixture selects the installed `./server` API, checks its emitted declarations against the genuine `@opencode/plugin` SDK, and excludes installed host TUI frameworks. This is a test/type profile, not the package export topology. The public default is hybrid, `./tui` is a real renderer entry, and SDK imports in the server source are type-only.
 
@@ -644,7 +644,7 @@ Registration after closing disposes the offered resource instead of adding it to
 
 ## Error handling and recovery strategy
 
-Failure behavior is scoped: missing/stale quota policy can fail open, but unreadable vault authority, foreign GA native connection markers, closing runtimes and terminal transport failures do not silently fall back to local credentials. Toasts, cooldowns and redacted status supplement the host's native error path; they do not replace every error.
+Failure behavior is scoped: missing/stale quota readings can allow an account through quota selection, but unreadable vault authority, owned unsupported GA requests, closing runtimes and terminal transport failures do not silently fall back to local credentials. Unowned GA requests return unchanged; owned off-catalog/non-content requests refuse locally without sending the marker to an external provider. Toasts, cooldowns and redacted status supplement the host's native error path; they do not replace every error.
 
 Specific recovery paths:
 
@@ -665,7 +665,7 @@ These are native failure outcomes for the host to report/retry. Successful sourc
 
 ### Trust boundaries
 
-1. **Host → plugin.** Authorized local V1 work may read `getAuth`; vault-mode V1 work does not. Activation, GA connection ownership and Pi slot custody have host-specific rules, not one interchangeable native-auth policy.
+1. **Host → plugin.** Authorized local V1 work may read `getAuth`; vault-mode V1 work does not. Activation, GA prepared-request ownership and Pi slot custody have host-specific rules, not one interchangeable native-auth policy.
 2. **Plugin → Antigravity.** Sends carry a short-lived bearer and account request identity. Local refresh and vault per-send grants are distinct credential paths.
 3. **Plugin → TUI.** Redaction omits credentials, project IDs and fingerprints, generates ordinal account labels, and drops quota with mismatched identity stamps. The UI receives status, quota windows, tier and routing—not a credential object with zeroed fields.
 4. **TUI → RPC server.** Loopback, fresh bearer and owner-only discovery files protect RPC. Guessing a port is not the security model.

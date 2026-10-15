@@ -1,5 +1,7 @@
 # Architecture Guide
 
+This legacy fetch-interceptor guide describes the OpenCode 1 arm. For GA's pool-browser/vault methods, saved connection, and prepared-placeholder request ownership, see [OpenCode 2](OPENCODE-2.md) and the [root architecture](../../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services). Real Google keys/native credentials pass through unchanged on GA; V1's dormant-slot serving rule is separate.
+
 **Last Updated:** April 2026
 
 This document explains how the Antigravity plugin works: request/response flow, Claude-specific handling, and session recovery.

@@ -1,179 +1,58 @@
-# Multi-Account Setup
+# Accounts, routing, and quota
 
-Add multiple Google accounts to increase your combined quota and improve availability. The plugin automatically rotates between accounts when one is rate-limited.
+Local OpenCode 1 and OpenCode 2 share an initialized/migrated account repository at the resolved account path. Projects do not create independent pools. Pi local mode uses a single native Google login instead; see [Pi](../../pi/README.md).
 
-```bash
-opencode auth login  # Run again to add more accounts
-```
+## Add and manage accounts
 
----
+Initialize a fresh pool or complete [offline migration](MIGRATION.md) before CLI/V1 login. OpenCode 2's [pool browser method](OPENCODE-2.md#pool-browser-login) can initialize a truly fresh store but refuses a pending migration. Use the host's matching login route or `/antigravity` → Sign in to add local accounts. Use Accounts to enable/disable, remove, or reauthorize them; a disabled account remains visible but is excluded from rotation. Duplicate identities are not additional pool accounts: use reauthorization to replace an existing account's credentials.
 
-## Load Balancing Behavior
+Use `/antigravity` → Quota or `antigravity-auth quota [--refresh] [--json]` for readings. The old standalone quota script no longer ships. Account actions depend on active source authority; local OAuth is not permitted under vault custody. [Vault mode](VAULT.md) follows approved vault-served accounts with no local fallback.
 
-- **Sticky account selection** — Sticks to the same account until rate-limited (preserves Anthropic's prompt cache)
-- **Per-model-family limits** — Rate limits tracked separately for Claude and Gemini models
-- **Smart retry threshold** — Short rate limits (≤5s) are retried on same account
-- **Exponential backoff** — Increasing delays for consecutive rate limits
+## Account storage
 
----
+`antigravity-accounts.json.store.pointer.json`, beside the resolved legacy path, selects the active `antigravity-accounts.json.store.<id>.generation/` containing `config.json` and `state.json`. The default legacy path is `~/.config/opencode/antigravity-accounts.json`, overridden by `OPENCODE_CONFIG_DIR`. Legacy JSON is migration input or successful rollback output, **not** the active writer target.
 
-## Antigravity requests
+Local account data includes refresh credentials, email, enabled/access state, optional project context, fingerprint history, cooldowns, health, and cached quota. Credentials are plaintext in owner-only files/directories; permissions are not encryption. Protect pointers, generations, journals, backups, and transfer files. Never publish account contents, tokens, project IDs, or fingerprints in reports. Renderer state is redacted separately; it is not a credential backup.
 
-Google retired Gemini CLI for consumer accounts on June 18, 2026. All requests now use Antigravity; old routing settings (`cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing`) in config are ignored.
+Do not delete account files as a reset for `invalid_grant`, rate limits, or a failed migration. Stop the host, inspect the store/source refusal, then use account removal/reauthorization or provider re-login once the active source is healthy. A migrated pool is not transferable by copying only the old JSON or manually splicing generations; see [migration and rollback](MIGRATION.md).
 
-Rate limits apply to an account, model family and model. A rate-limited request rotates to another eligible account or waits for the current limits to expire.
+## Account selection
 
----
+Set `account_selection_strategy` in `antigravity.json`:
 
-## Checking Quotas
+| Strategy | Behavior |
+| --- | --- |
+| `sticky` | Use one account until rate-limited; preserves Anthropic's prompt cache |
+| `hybrid` (default) | Token bucket, health score, and least-recently-used freshness |
+| `round-robin` | Rotate per request; useful for many short parallel requests |
 
-Check your current API usage across all accounts:
+`pid_offset_enabled` shifts the per-session starting index across PIDs, useful for parallel subagents. `max_account_switches` (default `10`) bounds the number of accounts tried per request. `switch_on_first_rate_limit` (default on) chooses rotation on the first 429 rather than one same-account retry. `default_retry_after_seconds` and `max_backoff_seconds` default to `60`; `request_jitter_max_ms` can spread simultaneous requests. See [configuration](CONFIGURATION.md#account-rotation).
 
-```bash
-opencode auth login
-# Select "Check quotas" from the menu
-```
+## Antigravity routing
 
-This shows remaining quota percentages and reset times for each model family:
-- **Claude** - Claude Opus/Sonnet quota
-- **Gemini 3 Pro** - Gemini 3 Pro quota
-- **Gemini 3 Flash** - Gemini 3 Flash quota
+Google retired Gemini CLI for consumer accounts on June 18, 2026. Plugin-owned requests use Antigravity; old `cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing` settings are ignored. Ordinary real-key/native-login requests in OpenCode 2 remain [unowned passthrough](OPENCODE-2.md#request-ownership-marker-only-support-boundary).
 
-### Standalone Quota Script
+Antigravity content sends use its User-Agent without `X-Goog-Api-Client` or `Client-Metadata`. Rate limits are scoped to account, model family, and model, not header styles. Endpoint fallback (daily → production), rotation, and cooldown policies remain. `/antigravity` → Routing shows the effective selection strategy and configuration key without runtime actions.
 
-For checking quotas outside of OpenCode (for debugging, CI, etc.), use the
-in-app **Check quotas** menu shown above. There is no longer a standalone
-script shipped with the plugin.
+## Quota refresh and soft thresholds
 
----
+Each cached quota entry carries `{ remainingFraction, resetTime }` per quota group (`claude`, `gemini-pro`, `gemini-flash`, `gpt-oss`). Argon's per-model quota is independent; [weekly pool attribution is unverified](MODEL-VARIANTS.md#gemini).
 
-## Managing Accounts
+- **Refresh:** the quota manager refreshes opportunistically after successful requests according to `quota_refresh_interval_minutes` (default `30`, `0` disables that cadence).
+- **TTL:** `soft_quota_cache_ttl_minutes = "auto"` resolves to `max(2 × refresh_interval, 10)` minutes.
+- **Soft threshold:** `soft_quota_threshold_percent` (default `80`) skips accounts at or above the usage threshold as if rate-limited; `100` disables this filter.
+- **Stale/missing fail-open:** readings older than TTL, or never refreshed, are unknown and allowed through the soft check so cold starts cannot deadlock.
+- **All exhausted:** wait for eligible quota/reset/cooldown, bounded by `max_rate_limit_wait_seconds` (default `300`, `0` means indefinite waiting), then fail rather than invent success.
+- **Proactive rotation:** below `proactive_rotation_threshold_percent` remaining (default `20`), the next request selects a warm-cache account.
 
-Enable or disable specific accounts to control which ones are used for requests:
+## Operator killswitch
 
-```bash
-opencode auth login
-# Select "Manage accounts (enable/disable)"
-```
+`/antigravity` → Limits configures OpenCode's operator exclusion layer:
 
-Or select an account from the list and choose "Enable/Disable account".
+- `operator.killswitch.enabled` defaults to `false`.
+- `minimum_remaining_percent` defaults to `5`; accounts whose freshest cached remaining quota is at or below the floor are excluded.
+- `accounts` supplies per-account floors, keyed by `sha256(refreshToken).slice(0,12)`, not raw credentials. Raw tokens must not appear in config, sidebar, RPC, or apply responses.
+- Stale/missing cache fails open (default freshness TTL `5min`) so a cold start can obtain a real reading.
+- If every account is excluded, `AntigravityKillswitchError` carries a per-account summary rather than a synthetic success body.
 
-**Disabled accounts:**
-- Are excluded from automatic rotation
-- Still appear in quota checks (marked `[disabled]`)
-- Can be re-enabled at any time
-
-Useful when:
-- An account is temporarily banned or rate-limited for an extended period
-- You want to reserve certain accounts for specific use cases
-- Testing with a subset of accounts
-
----
-
-## Adding Accounts
-
-When running `opencode auth login` with existing accounts:
-
-```
-2 account(s) saved:
-  1. user1@gmail.com
-  2. user2@gmail.com
-
-(a)dd new account(s) or (f)resh start? [a/f]:
-```
-
-Choose `a` to add more accounts while keeping existing ones.
-
----
-
-## Account Storage
-
-Accounts are stored in `~/.config/opencode/antigravity-accounts.json`:
-
-```json
-{
-  "version": 3,
-  "accounts": [
-    {
-      "email": "user1@gmail.com",
-      "refreshToken": "1//0abc...",
-      "projectId": "my-gcp-project",
-      "enabled": true
-    },
-    {
-      "email": "user2@gmail.com",
-      "refreshToken": "1//0xyz...",
-      "enabled": false
-    }
-  ],
-  "activeIndex": 0,
-  "activeIndexByFamily": {
-    "claude": 0,
-    "gemini": 0
-  }
-}
-```
-
-> ⚠️ **Security:** This file contains OAuth refresh tokens. Treat it like a password file.
-
-### Fields
-
-| Field | Description |
-|-------|-------------|
-| `email` | Google account email |
-| `refreshToken` | OAuth refresh token (auto-managed) |
-| `projectId` | Optional. Antigravity project context. |
-| `enabled` | Optional. Set to `false` to disable account rotation. Defaults to `true`. |
-| `activeIndex` | Currently active account index |
-| `activeIndexByFamily` | Per-model-family active account (claude/gemini tracked separately) |
-
----
-
-## Token Revocation
-
-If Google revokes a token (e.g., password change, security event), you'll see `invalid_grant` errors. The plugin automatically removes invalid accounts.
-
-To manually reset:
-
-```bash
-rm ~/.config/opencode/antigravity-accounts.json
-opencode auth login
-```
-
----
-
-## Parallel Sessions (oh-my-opencode)
-
-When using oh-my-opencode with parallel subagents, multiple processes may select the same account, causing rate limit errors.
-
-**Solution:** Enable PID-based offset in `antigravity.json`:
-
-```json
-{
-  "pid_offset_enabled": true
-}
-```
-
-This distributes sessions across accounts based on process ID.
-
-Alternatively, add more accounts via `opencode auth login`.
-
----
-
-## Account Selection Strategies
-
-Configure in `antigravity.json`:
-
-```json
-{
-  "account_selection_strategy": "hybrid"
-}
-```
-
-| Strategy | Behavior | Best For |
-|----------|----------|----------|
-| `sticky` | Same account until rate-limited | Prompt cache preservation |
-| `round-robin` | Rotate to next account on every request | Maximum throughput |
-| `hybrid` | Deterministic selection based on health score + token bucket + LRU | Best overall distribution |
-
-See [Configuration](CONFIGURATION.md#account-selection) for more details.
+Exclusion and soft-quota checks precede token-bucket/health selection. Pi vault mode does not implement these OpenCode operator controls. See [commands](COMMANDS.md) and [credential safety](CONFIGURATION.md#security-and-redaction).
