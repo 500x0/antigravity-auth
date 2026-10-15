@@ -813,7 +813,7 @@ describe('openAccountStore', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Genuine candidate store
+// Genuine released store
 //
 // These run the adapters against common-auth's genuine public `./store` and
 // `./fs` entries in disposable directories. They migrate real account files,
@@ -821,7 +821,8 @@ describe('openAccountStore', () => {
 // migration during rollback. The entries are the released
 // common-auth copy embedded in the core package, loaded through its typed
 // `loadCommonAuthStoreModules`. Before loading, the embedding receipt
-// (`source-output.json`) must name the pinned common-auth 0.16.0 candidate archive, and every
+// (`source-output.json`) must name the published archive at
+// `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`, and every
 // store and fs file must match the size and SHA-256 it records, with no
 // unrecorded file; anything else fails these tests instead of skipping them.
 // ---------------------------------------------------------------------------
@@ -830,7 +831,7 @@ const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.16.0',
   tarballSha256:
-    '0093e55bc1dbc6a0fc7872214038fa5bff0ec8c41c92f26eda3b3ffb07c531c2',
+    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
 } as const
 
 async function embeddedFilesBelow(
@@ -871,7 +872,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'candidate' ||
+      receipt.artifactStatus !== 'released' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
@@ -907,7 +908,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     .then((modules) => managedStoreModules(owner, modules))
 }
 
-describe('account store over the genuine candidate store', () => {
+describe('account store over the genuine released store', () => {
   let configDir = ''
   let previousConfigDir: string | undefined
   const opened: AccountRepository[] = []

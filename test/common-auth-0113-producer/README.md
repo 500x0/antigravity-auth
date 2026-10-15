@@ -71,5 +71,5 @@ source file.
 The legacy acceptance directory remains active for existing archive guards, exclusive path
 admission and compiler cleanup. Its historical oracle and mutation classification
 predicates are retained, while its active producer identity expectations move
-to the current candidate producer. Docker/hygiene and mutation results must be
+to the current released producer. Docker/hygiene and mutation results must be
 recorded from real provisioned runs; historical records do not establish a pass.

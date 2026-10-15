@@ -436,12 +436,13 @@ describe('createOAuthMethods persistence failure handling', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Account-store mode over the genuine candidate store
+// Account-store mode over the genuine released store
 //
 // The login menu's verification and re-authentication run against the
 // released common-auth store and fs entries embedded in the core package
 // through `loadCommonAuthStoreModules`. Check source-output.json and every
-// payload against the pinned common-auth 0.16.0 candidate archive first. Each private config
+// payload against the published archive at
+// `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz` first. Each private config
 // directory has a genuinely initialized store, so login checks the completed
 // initialization record instead of accepting a mocked active-store result.
 // ---------------------------------------------------------------------------
@@ -450,7 +451,7 @@ const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.16.0',
   tarballSha256:
-    '0093e55bc1dbc6a0fc7872214038fa5bff0ec8c41c92f26eda3b3ffb07c531c2',
+    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
 } as const
 
 async function embeddedFilesBelow(
@@ -491,7 +492,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'candidate' ||
+      receipt.artifactStatus !== 'released' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {

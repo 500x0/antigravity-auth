@@ -59,7 +59,7 @@ export const PACKAGE_ROOT = resolve(
 const REPO_ROOT = resolve(PACKAGE_ROOT, '../..')
 const TOOL_ROOT = join(REPO_ROOT, 'tools/common-auth-build')
 const LOCK_HASH =
-  '41281c586ba052288ef4a92305aaf5e60e5e2587d33a646d6ca3e09d0a3d0fca'
+  '2e99c24dd06cf31cc78ed71aa739331ae7466e4b1c2155f92519a9da0207c572'
 export const BUNDLE_EXTERNALS = [
   'zod',
   'jsonc-parser',
