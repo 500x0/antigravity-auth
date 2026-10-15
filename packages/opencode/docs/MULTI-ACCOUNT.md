@@ -4,7 +4,7 @@ Local OpenCode 1 and OpenCode 2 share an initialized/migrated account repository
 
 ## Add and manage accounts
 
-Initialize a fresh pool or complete [offline migration](MIGRATION.md) before CLI/V1 login. OpenCode 2's [pool browser method](OPENCODE-2.md#pool-browser-login) can initialize a truly fresh store but refuses a pending migration. Use the host's matching login route or `/antigravity` → Sign in to add local accounts. Use Accounts to enable/disable, remove, or reauthorize them; a disabled account remains visible but is excluded from rotation. Duplicate identities are not additional pool accounts: use reauthorization to replace an existing account's credentials.
+Initialize a fresh pool or complete [offline migration](MIGRATION.md) before CLI/OpenCode 1 login; the default CLI has a [known login persistence failure](COMMANDS.md#standalone-cli), not permission to bypass migration. OpenCode 2's [pool browser method](OPENCODE-2.md#pool-browser-login) can initialize a truly fresh store but refuses a pending migration. Use the host's matching login route or `/antigravity` → Sign in to add local accounts. Use Accounts to enable/disable, remove, or reauthorize them; a disabled account remains visible but is excluded from rotation. Duplicate identities are not additional pool accounts: use reauthorization to replace an existing account's credentials.
 
 Use `/antigravity` → Quota or `antigravity-auth quota [--refresh] [--json]` for readings. The old standalone quota script no longer ships. Account actions depend on active source authority; local OAuth is not permitted under vault custody. [Vault mode](VAULT.md) follows approved vault-served accounts with no local fallback.
 
@@ -30,13 +30,13 @@ Set `account_selection_strategy` in `antigravity.json`:
 
 ## Antigravity routing
 
-Google retired Gemini CLI for consumer accounts on June 18, 2026. Plugin-owned requests use Antigravity; old `cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing` settings are ignored. Ordinary real-key/native-login requests in OpenCode 2 remain [unowned passthrough](OPENCODE-2.md#request-ownership-marker-only-support-boundary).
+Google [ended Gemini CLI service for free individual users and Google AI Pro/Ultra subscribers on June 18, 2026](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). Plugin-owned requests use Antigravity; old `cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing` settings are ignored. Ordinary real-key/native-login requests in OpenCode 2 remain [unowned passthrough](OPENCODE-2.md#request-ownership-marker-only-support-boundary).
 
-Antigravity content sends use its User-Agent without `X-Goog-Api-Client` or `Client-Metadata`. Rate limits are scoped to account, model family, and model, not header styles. Endpoint fallback (daily → production), rotation, and cooldown policies remain. `/antigravity` → Routing shows the effective selection strategy and configuration key without runtime actions.
+Antigravity content sends use its User-Agent without `X-Goog-Api-Client` or `Client-Metadata`. Rate limits are scoped to account, model family, and model; the plugin no longer switches to the retired Gemini CLI request/quota path. Antigravity endpoint fallback (daily → production), account rotation, and cooldown policies remain. `/antigravity` → Routing shows the effective selection strategy and configuration key without runtime actions.
 
 ## Quota refresh and soft thresholds
 
-Each cached quota entry carries `{ remainingFraction, resetTime }` per quota group (`claude`, `gemini-pro`, `gemini-flash`, `gpt-oss`). Argon's per-model quota is independent; [weekly pool attribution is unverified](MODEL-VARIANTS.md#gemini).
+Each cached quota entry carries `{ remainingFraction, resetTime }` per quota group (`claude`, `gemini-pro`, `gemini-flash`, `gpt-oss`). Gemini 4 Argon's remaining quota and reset time are reported per model. [Whether Argon uses the same weekly quota allowance as other models, and which allowance, is unverified](MODEL-VARIANTS.md#gemini).
 
 - **Refresh:** the quota manager refreshes opportunistically after successful requests according to `quota_refresh_interval_minutes` (default `30`, `0` disables that cadence).
 - **TTL:** `soft_quota_cache_ttl_minutes = "auto"` resolves to `max(2 × refresh_interval, 10)` minutes.

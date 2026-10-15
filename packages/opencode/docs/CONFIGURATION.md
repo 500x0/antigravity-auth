@@ -252,14 +252,14 @@ These settings are `false` by default:
 
 ## Additional settings and environment overrides
 
-The schema is the source of truth for complete bounds and defaults. Settings moved from the project overview include:
+The [schema](../src/plugin/config/schema.ts) is the source of truth for complete bounds and defaults. The notification, warmup, retry, quota, account-floor, and logging settings formerly listed in the [root README](../../../README.md) are collected below:
 
 | Setting | Default | Effect / environment override |
 | --- | --- | --- |
 | `toast_scope` | `root_only` | `all` includes subagent toasts; `OPENCODE_ANTIGRAVITY_TOAST_SCOPE` |
 | `debug_tui` | `false` | TUI verbosity independent of file logging; `OPENCODE_ANTIGRAVITY_DEBUG_TUI=1` |
 | `thinking_warmup` | `false` | Session-start probe; `OPENCODE_ANTIGRAVITY_THINKING_WARMUP=1` |
-| `cache_warmup_on_switch` | `true` | Cache-seeding probe after account rotation; `OPENCODE_ANTIGRAVITY_CACHE_WARMUP_ON_SWITCH=1` |
+| `cache_warmup_on_switch` | `true` | After switching accounts, send an extra copy of the prepared request, read one response chunk, then cancel that response before the normal send; `OPENCODE_ANTIGRAVITY_CACHE_WARMUP_ON_SWITCH=1` |
 | `claude_prompt_auto_caching` | `false` | Add top-level `cache_control` when absent |
 | `max_account_switches` | `10` | Per-request account budget; `OPENCODE_ANTIGRAVITY_MAX_ACCOUNT_SWITCHES` |
 | `scheduling_mode` | `cache_first` | Also `balance` / `performance_first`; `OPENCODE_ANTIGRAVITY_SCHEDULING_MODE` |
@@ -284,17 +284,17 @@ Use `OPENCODE_ANTIGRAVITY_QUIET=1`, `OPENCODE_ANTIGRAVITY_DEBUG=1`, and `OPENCOD
 
 | Purpose | Location | Notes |
 | --- | --- | --- |
-| Local account store | Beside the resolved legacy path; `antigravity-accounts.json.store.pointer.json` selects a generation | Owner-only `config.json` / `state.json`, journals, protected backups/transfers |
+| Local account store | In the directory containing `antigravity-accounts.json` (default `~/.config/opencode`, or `OPENCODE_CONFIG_DIR`); `antigravity-accounts.json.store.pointer.json` selects the sibling `antigravity-accounts.json.store.<id>.generation/` directory | Owner-only `config.json` / `state.json`, journals, protected backups/transfers |
 | Legacy pool | `$OPENCODE_CONFIG_DIR/antigravity-accounts.json` (default `~/.config/opencode/…`) | Migration input / successful V4 rollback output, not the active writer |
 | Plugin config | Project `.opencode/antigravity.json`, then user config | Zod-validated settings |
 | Debug logs / wire dumps | `antigravity-logs/` and `antigravity-logs/dumps/`, or `log_dir` | Sensitive request/response data; owner-only |
-| V1 sidebar | `$XDG_STATE_HOME/cortexkit/antigravity-auth/sidebar-state.json` | Override `ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE`; `0600` |
-| V1 RPC | `$XDG_STATE_HOME/cortexkit/antigravity-auth/rpc/<project-hash>/port-<pid>.json` | Override `ANTIGRAVITY_AUTH_RPC_DIR`; loopback bearer, `0600` files / `0700` directory |
+| OpenCode 1 sidebar | `$XDG_STATE_HOME/cortexkit/antigravity-auth/sidebar-state.json` | Override `ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE`; `0600` |
+| OpenCode 1 RPC | `$XDG_STATE_HOME/cortexkit/antigravity-auth/rpc/<project-hash>/port-<pid>.json` | Override `ANTIGRAVITY_AUTH_RPC_DIR`; loopback bearer, `0600` files / `0700` directory |
 | Signature cache | `signature-cache-disk-<hash>.json` under the `keep_thinking` path | `0600`; two-day default disk TTL |
 
-V1's sidebar polls every two seconds. Contract version `1` includes timestamps, redacted accounts, routing, optional quota backoff and last error; malformed/unknown versions fall back to the default awaiting-state view. Active routing is pruned to 24h / 100 entries. Writes serialize, lock, re-read/merge, and atomically replace. Lock contention is reported to the caller; successful writes do not prove that the terminal rendered the snapshot. See the [sidebar contract](sidebar-contract.md).
+OpenCode 1's sidebar polls every two seconds. Contract version `1` includes timestamps, redacted accounts, routing, optional quota backoff and last error; malformed/unknown versions fall back to the default awaiting-state view. Active routing is pruned to 24h / 100 entries. Writes serialize, lock, re-read/merge, and atomically replace. Lock contention is reported to the caller; successful writes do not prove that the terminal rendered the snapshot. See the [sidebar contract](sidebar-contract.md).
 
-GA uses location-scoped snapshots and native host RPC, not V1 port files. For a stale V1 sidebar, stop the host, check the state path and its `0600` file permissions (owner read/write only), then restart. For missing RPC, verify the server loaded and the project-specific directory is writable; different projects have different hashed RPC directories.
+OpenCode 2 uses location-scoped snapshots and native host RPC, not OpenCode 1 port files. If OpenCode 1's sidebar stays on old readings or "Awaiting Antigravity state", stop the host, check the state path and its `0600` file permissions (owner read/write only), then restart. For missing RPC, verify the server loaded and the project-specific directory is writable; different projects have different hashed RPC directories.
 
 Raw generative AGY sends use [agy-transport.ts](../../core/src/agy-transport.ts): separate default `180_000` ms response-header and no-body-data idle timeouts, **not** a total streaming deadline. Standard-fetch callers use [fetchWithActiveTimeout](../../core/src/fetch-timeout.ts), default `15_000` ms until headers; cancellation stays connected through body completion/error/cancel. That helper's 15s budget is not the raw AGY limit.
 

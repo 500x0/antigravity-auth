@@ -13,11 +13,11 @@ Open `/antigravity` in the configured OpenCode or Pi host. It opens a shared men
 | Diagnostics | Adjust OpenCode logging and wire-dump capture; treat dumps as sensitive |
 | Vault | Request enrollment, choose approved accounts, or disconnect to use local credentials again |
 
-V1 registers the command in [catalog.ts](../src/plugin/catalog.ts), builds it in [commands.ts](../src/plugin/commands.ts), and renders it in [command-dialogs.tsx](../src/tui/command-dialogs.tsx). The [shared core menu](../../core/src/antigravity-command-menu.ts) defines common actions. GA uses its native TUI/RPC integration, not V1's port-file protocol.
+Both OpenCode generations expose the [shared account menu](../../core/src/antigravity-command-menu.ts) through their own terminal UI; account and credential operations run on the server. See [OpenCode 2's menu and sidebar](OPENCODE-2.md#ui-and-evidence-limits) for its host integration.
 
 ## Standalone CLI
 
-The `antigravity-auth` bin ships inside the OpenCode package; no separate CLI package is needed:
+The `antigravity-auth` bin ships inside `@cortexkit/opencode-antigravity-auth`; no separate CLI package is needed:
 
 ```bash
 npx -y @cortexkit/opencode-antigravity-auth --help
@@ -44,7 +44,9 @@ antigravity-auth rollback --offline [--yes]
 - `quota`: `ACCOUNT`, `STATUS`, `GROUP`, `REMAINING`, and `RESET`; `--refresh` forces a live reading and `--json` emits the same array as JSON.
 - `init`, `migrate`, `rollback`: change the active local store. Follow [offline migration and rollback](MIGRATION.md) first; `--yes` skips the prompt, not the stopped-process requirement.
 
-Exit codes are `0` for success, `1` for a thrown error, and `2` for parse failure, including unsupported commands/options. Local login persists through the same shared account store as both OpenCode adapters. `list` and `quota` only read accounts; they do not initialize or migrate storage. The pre-2.0 inline quota helper no longer ships.
+Exit codes are `0` for success, `1` for a thrown error, and `2` for parse failure, including unsupported commands/options. `list` and `quota` do not initialize or migrate account storage.
+
+**Known CLI login limitation:** default `login` still attempts to write the retired legacy account file and fails with `LegacyAccountPoolRetiredError` after the shared store is initialized. The default fresh/current-store CLI login path is not verified. Do not skip initialization or migration, recreate the legacy file, or delete store files to work around this error.
 
 ## Host login routes
 

@@ -1,6 +1,6 @@
 # Codebase Structure
 
-For the unified V1/GA package map, see the [root structure](../../STRUCTURE.md). [OpenCode 2](docs/OPENCODE-2.md) distinguishes pool-browser/vault login methods, the saved `Antigravity` connection, and prepared-placeholder ownership; native Google credentials are not taken over by GA.
+For the unified OpenCode 1/OpenCode 2 package map, see the [root structure](../../STRUCTURE.md). [OpenCode 2](docs/OPENCODE-2.md) distinguishes pool-browser/vault login methods from the saved `Antigravity` connection. Its adapter handles outgoing requests carrying the host-prepared Google placeholder; real native Google credentials pass through unchanged. OpenCode 1 leaves an existing saved login unused while approved vault credentials serve.
 
 ## Directory Layout
 

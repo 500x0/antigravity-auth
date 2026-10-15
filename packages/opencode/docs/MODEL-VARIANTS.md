@@ -8,7 +8,7 @@ The canonical [model registry](../../core/src/model-registry.ts) is re-exported 
 
 | Model ID (under `google/`) | Variants | Quota |
 | --- | --- | --- |
-| `antigravity-gemini-4-argon` | `low`, `medium` (default), `high` | Per-model; weekly pool attribution unverified |
+| `antigravity-gemini-4-argon` | `low`, `medium` (default), `high` | Per-model readings; whether usage shares a weekly quota allowance with other models, and which allowance, is unverified |
 | `antigravity-gemini-3.8-flash` | `low`, `medium`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.5-flash` | `low`, `medium`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.1-flash-image` | — | `gemini-flash` |
@@ -16,7 +16,7 @@ The canonical [model registry](../../core/src/model-registry.ts) is re-exported 
 | `antigravity-claude-opus-5-5` | `low`, `medium`, `high` | `claude` |
 | `antigravity-gpt-oss-120b-medium` | — | `gpt-oss` |
 
-Gemini 3.8 Flash Cyber is absent from the captured AGY 1.3.5 server catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
+Gemini 3.8 Flash Cyber is absent from the captured Antigravity 1.3.5 server catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
 
 ## Claude 5.5
 
@@ -64,6 +64,8 @@ defaults to 65,536 output tokens; a caller's output cap still wins. Only LOW is
 captured on the wire; MEDIUM/HIGH follow catalog levels 2/3 in `test-fixtures/agy-cli-1.3.5/argon-model-metadata.json` and are unverified live.
 The native LOW request omits toolConfig. The adapter applies that omission to the
 whole Argon family; MEDIUM/HIGH omission remains unverified live.
+
+Argon's remaining quota and reset time are reported per model. It is unverified whether Argon uses the same weekly quota allowance as other models, or which shared weekly allowance would apply.
 
 Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
 Antigravity. Grouped and native tier selectors refuse without aliases or

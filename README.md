@@ -7,7 +7,7 @@ The host packages are [`@cortexkit/opencode-antigravity-auth`](packages/opencode
 ## Why use it
 
 - An Antigravity model catalog with supported thinking variants.
-- A shared local OpenCode account pool with account rotation, quota readings, cooldowns, and configurable limits.
+- A shared OpenCode account pool—Google accounts added to the plugin—with rotation, quota, cooldowns, and limits.
 - An `/antigravity` menu and OpenCode sidebar for account and quota management.
 - Optional approved Claustrum vault custody instead of local credentials.
 - A bundled `antigravity-auth` command-line interface for login, account listing, and quota checks.

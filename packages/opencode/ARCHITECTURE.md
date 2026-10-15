@@ -1,6 +1,6 @@
 # Architecture
 
-The fetch-interceptor details below describe the legacy OpenCode 1 arm. The unified package also has a GA server/TUI arm: see the [current root architecture](../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services) and [OpenCode 2 guide](docs/OPENCODE-2.md). GA registers pool-browser and approved-vault login methods under a saved `Antigravity` connection; ownership uses the host-prepared common-auth Google placeholder, not active connection metadata. Real Google keys/native credentials pass through unchanged.
+The fetch-interceptor details below describe OpenCode 1. The unified package also supplies an OpenCode 2 server and terminal UI: see the [current root architecture](../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services) and [OpenCode 2 guide](docs/OPENCODE-2.md). OpenCode 2 registers pool-browser and approved-vault login methods under a saved `Antigravity` connection. The adapter handles requests carrying the host-prepared common-auth Google placeholder, not requests selected by active connection metadata. Real Google keys/native credentials pass through unchanged. OpenCode 1 instead leaves the saved Google login unused while approved vault credentials serve.
 
 ## Pattern Overview
 

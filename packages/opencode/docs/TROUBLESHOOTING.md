@@ -13,7 +13,7 @@ OpenCode uses `~/.config/opencode/` on **all platforms** including Windows.
 | File | Path |
 |------|------|
 | Main config | `~/.config/opencode/opencode.json` |
-| Accounts | Shared-store pointer/generation beside `~/.config/opencode/antigravity-accounts.json`; legacy JSON is import/export only |
+| Accounts | `~/.config/opencode/antigravity-accounts.json.store.pointer.json` selects the sibling `antigravity-accounts.json.store.<id>.generation/` directory containing `config.json` / `state.json`; legacy `antigravity-accounts.json` is import/export only. `OPENCODE_CONFIG_DIR` overrides that directory. |
 | Plugin config | `~/.config/opencode/antigravity.json` |
 | Debug logs | `~/.config/opencode/antigravity-logs/` |
 
@@ -24,7 +24,7 @@ OpenCode uses `~/.config/opencode/` on **all platforms** including Windows.
 ## Quick Fixes
 
 ### Auth problems
-Verify the active source and initialized/migrated store before reauthorization. Use `/antigravity` → Accounts to reauthorize or remove a local account; do not hand-edit legacy JSON. For GA, finish [pool browser login and saved Antigravity connection selection](OPENCODE-2.md#pool-browser-login). A real native Google key/login deliberately passes through instead of using plugin accounts.
+Verify the active source and initialized/migrated store before reauthorization. Use `/antigravity` → Accounts to reauthorize or remove a local account; do not hand-edit legacy JSON. For OpenCode 2, finish [pool browser login and saved Antigravity connection selection](OPENCODE-2.md#pool-browser-login). A real native Google key/login deliberately passes through instead of using plugin accounts.
 
 ### "This version of Antigravity is no longer supported"
 This almost always means an outdated Antigravity `User-Agent` is still being used.
@@ -41,7 +41,7 @@ pkill -f opencode || true
 Stop-Process -Name "opencode" -Force -ErrorAction SilentlyContinue
 ```
 
-2) Reinstall the intended plugin build using the matching host's [installation surface](CONFIGURATION.md#opencode-1-manual-registration), or the [GA guide](OPENCODE-2.md). Preserve the store and custody files. A major upgrade still requires the automatic-update hold and offline migration; do not use a cache reset to bypass those steps.
+2) Reinstall the intended plugin build using the [OpenCode 1 registration instructions](CONFIGURATION.md#opencode-1-manual-registration) or the [OpenCode 2 guide](OPENCODE-2.md). Preserve the store and custody files. Before a major upgrade, [hold automatic updates](MIGRATION.md#hold-automatic-updates-before-a-major-upgrade) and [migrate offline](MIGRATION.md#initialize-or-migrate-before-starting-the-host). For a downgrade, follow the [stopped-process rollback instructions](MIGRATION.md#initialize-or-migrate-before-starting-the-host). Before changing builds, [disconnect vault custody safely](VAULT.md#disconnect-and-change-builds-safely). Do not bypass these steps with a cache reset.
 
 ### "Model not found"
 Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by

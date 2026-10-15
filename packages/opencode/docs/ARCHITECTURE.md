@@ -1,6 +1,6 @@
 # Architecture Guide
 
-This legacy fetch-interceptor guide describes the OpenCode 1 arm. For GA's pool-browser/vault methods, saved connection, and prepared-placeholder request ownership, see [OpenCode 2](OPENCODE-2.md) and the [root architecture](../../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services). Real Google keys/native credentials pass through unchanged on GA; V1's dormant-slot serving rule is separate.
+This fetch-interceptor guide describes OpenCode 1. For OpenCode 2's pool-browser/vault methods and saved connection, see [OpenCode 2](OPENCODE-2.md) and the [root architecture](../../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services). Its adapter handles outgoing requests carrying the host-prepared Google placeholder; real Google keys/native credentials pass through unchanged. OpenCode 1 instead leaves the saved Google login unused while approved vault credentials serve.
 
 **Last Updated:** April 2026
 
