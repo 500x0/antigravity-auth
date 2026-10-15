@@ -692,3 +692,63 @@ runner = "command"
 command = ["bash", "-c", "selector=\"${1//\\\\s/ }\"; selector=\"${selector##* > }\"; selector=\"${selector#^}\"; selector=\"${selector%$}\"; bun run --cwd packages/core build && bun test --isolate packages/core/src/antigravity/oauth.test.ts -t \"$selector\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^Antigravity\sOAuth\s>\sexchangeAntigravity\s>\spropagates\sadmit\sfrom\sproject\sdiscovery\sinstead\sof\ssucceeding\swith\san\sempty\sproject$']
+
+[[control]]
+id = "ga-retired-before-cold-source"
+guards = "Owned retired non-title requests return static 412 without constructing a cold local credential source."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = "              if (job.kind !== 'title') {"
+new = "              if (false) { // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^rejects\sretired\snon-title\srequests\sbefore\scold\slocal\sconstruction\sthrough\sloopback$']
+
+[[control]]
+id = "ga-claimed-failure-lifetime"
+guards = "A paused claimed response retains its identical native failure beyond the unclaimed-job expiry window."
+file = "packages/opencode/src/ga/server/index.ts"
+old = "      state.claimed = true"
+new = "      state.claimed = true\n      setTimeout(() => release(state), GA_UNCLAIMED_JOB_TTL_MS).unref?.() // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^retains\sa\sclaimed\snative\sfailure\sbeyond\sthe\sformer\s60-second\slease$']
+
+[[control]]
+id = "ga-dispose-drains-native-readers"
+guards = "Disposal waits for a delayed genuine native reader rejection before clearing response ownership."
+file = "packages/opencode/src/ga/server/index.ts"
+old = "          await Promise.allSettled([...reads])"
+new = "          // NON-VACUITY BREAK: skip running reader cleanup"
+test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^disposal\sdrains\sa\sdelayed\snative\sreader\sand\sforbids\slate\sfailure\stimers$']
+
+[[control]]
+id = "ga-retired-before-unavailable-vault"
+guards = "Owned retired non-title requests return static 412 without refreshing a genuinely unavailable enrolled vault source."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = "              if (job.kind !== 'title') {"
+new = "              if (false) { // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^rejects\sretired\snon-title\srequests\sbefore\sunavailable\svault\sconstruction\sthrough\sloopback$']
+
+[[control]]
+id = "ga-dispose-preserves-claimed-terminal"
+guards = "Disposal releases bridge ownership without turning a paused adapted upstream failure into clean EOF."
+file = "packages/opencode/src/ga/server/index.ts"
+old = "            if (state) release(state, !state.claimed)"
+new = "            if (state) release(state) // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^does\snot\sturn\sa\spaused\sclaimed\sfailure\sinto\sclean\sEOF\son\sdisposal$']
