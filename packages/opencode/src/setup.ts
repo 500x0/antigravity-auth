@@ -23,7 +23,7 @@ import {
   type SetupPlugin,
 } from './common-auth-embedded/setup/index.js'
 import type { AntigravityTokenExchangeSuccess } from './plugin/oauth-login.ts'
-import { getStoragePath } from './plugin/storage.ts'
+import { getStoragePath, UNMIGRATED_ACCOUNT_MESSAGE } from './plugin/storage.ts'
 import { nativeOpenCodeAuthPath } from './plugin/vault-activation.ts'
 import {
   OPENCODE_VAULT_ENROLLMENT_NAME,
@@ -50,7 +50,10 @@ async function nativeAuth(
   host: SetupHost,
   context: SetupCallbackContext,
 ): Promise<Record<string, unknown>> {
-  const path = nativeAuthPath(host, context)
+  return readNativeAuth(nativeAuthPath(host, context))
+}
+
+async function readNativeAuth(path: string): Promise<Record<string, unknown>> {
   try {
     const info = await lstat(path)
     if (!info.isFile() || info.nlink !== 1)
@@ -63,6 +66,39 @@ async function nativeAuth(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
     throw error
   }
+}
+
+/**
+ * Refuse local sign-in if vault access is approved or auth.json holds its vault
+ * marker. Re-read both because they can change while the OAuth browser is open.
+ */
+export async function assertLocalOpenCodeLogin(
+  legacyPath: string,
+  generation?: SetupCallbackContext['opencodeGeneration'],
+): Promise<void> {
+  const claustrum = await loadCommonAuthClaustrum()
+  if (
+    (await claustrum.enrollmentAuthority(
+      claustrum.hostEnrollmentPaths({
+        stateDir: openCodeVaultPaths(legacyPath).dir,
+        host: 'opencode',
+      }),
+      OPENCODE_VAULT_ENROLLMENT_NAME,
+    )) !== 'local'
+  )
+    throw new Error(
+      'Vault enrollment excludes local sign-in. Resolve vault access before choosing local setup.',
+    )
+  // OpenCode 2 authenticates Google through its own connection, not OpenCode 1's
+  // auth.json. That dormant file must not block its native login.
+  if (generation === '2') return
+  claustrum.assertHostSlotMatchesMode({
+    mode: 'local',
+    auth: (await readNativeAuth(nativeOpenCodeAuthPath()))[
+      OPENCODE_VAULT_PROVIDER
+    ],
+    provider: OPENCODE_VAULT_PROVIDER,
+  })
 }
 
 export async function assertSetupHostsStopped(): Promise<void> {
@@ -155,13 +191,15 @@ export async function createSetupPlugin(
     host: SetupHost,
     context: SetupCallbackContext,
   ) => {
+    if (host === 'opencode')
+      return assertLocalOpenCodeLogin(
+        resolve(getStoragePath()),
+        context.opencodeGeneration,
+      )
     if ((await authority(host)) !== 'local')
       throw new Error(
         'Vault enrollment excludes local sign-in. Resolve vault access before choosing local setup.',
       )
-    // OpenCode 2 reads Google's active integration connection, not OpenCode 1's
-    // auth.json. A dormant V1 slot must neither authorize nor block GA setup.
-    if (host === 'opencode' && context.opencodeGeneration === '2') return
     claustrum.assertHostSlotMatchesMode({
       mode: 'local',
       auth: (await nativeAuth(host, context))[provider(host)],
@@ -234,6 +272,19 @@ export async function createSetupPlugin(
             )
         }
       }
+      if (
+        forceLogin &&
+        context.mode === 'local' &&
+        context.hosts.includes('opencode') &&
+        context.opencodeGeneration !== '2'
+      ) {
+        const source = await deps.accountStore.read(
+          deps.accountStore.legacyPath(),
+        )
+        if (source.kind === 'legacy')
+          throw new Error(UNMIGRATED_ACCOUNT_MESSAGE)
+        if (source.kind === 'unavailable') throw new Error(source.reason)
+      }
     },
     signInLocal: async (host, context) => {
       await assertLocal(host, context)
@@ -246,6 +297,8 @@ export async function createSetupPlugin(
           ? await deps.accountStore.read(deps.accountStore.legacyPath())
           : undefined
       if (source?.kind === 'unavailable') throw new Error(source.reason)
+      if (forceLogin && source?.kind === 'legacy')
+        throw new Error(UNMIGRATED_ACCOUNT_MESSAGE)
       const accounts =
         source?.kind === 'store'
           ? source.accounts

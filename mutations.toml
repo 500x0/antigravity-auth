@@ -567,3 +567,22 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate packages/opencode/src/setup-native-path.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^Pi\snative\spath\sCLI\sOAuth\swrites\sthe\sdetected\snative\sfile\sand\spreserves\sthe\sextension\sdecoy\s\(path=absolute\)$']
+
+[[control]]
+id = "cli-login-current-store-persistence"
+guards = "Default CLI OAuth persists into the initialized current store, never the retired legacy writer."
+file = "packages/opencode/src/cli.ts"
+old = '''            await persistCliStoreLogin(
+              repository!,
+              result,
+              request.startFresh && request.accounts.length === 0,
+            )'''
+new = '''            await (await import('./plugin/persist-account-pool')).persistAccountPool( // NON-VACUITY BREAK
+              [result],
+              request.startFresh && request.accounts.length === 0,
+            )'''
+test_file = "packages/opencode/src/cli.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/cli.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^default\sCLI\sreal-store\slogin\sinitialized\sempty\slogin\scommits\sinto\sthe\scurrent\sstore$']

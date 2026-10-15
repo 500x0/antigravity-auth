@@ -1,25 +1,64 @@
-import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { afterEach, describe, expect, it, mock } from 'bun:test'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import {
   type AccountMigrationOutcome,
   type AccountQuotaResult,
   type AccountStorageV4,
   createAccountRepositoryFactory,
+  loadCommonAuthClaustrum,
   loadCommonAuthStoreModules,
   readAccountStoreAdmission,
 } from '@cortexkit/antigravity-auth-core'
 
-import {
-  type CliAccountsRead,
-  type CliDependencies,
+import type { CliAccountsRead, CliDependencies } from './cli'
+import type { OAuthLoginRequest } from './plugin/oauth-methods'
+
+const oauthResult = {
+  type: 'success' as const,
+  refresh: 'synthetic-new-refresh|synthetic-project',
+  access: 'synthetic-access',
+  expires: 123,
+  email: 'new@example.test',
+  projectId: 'synthetic-project',
+}
+const authorize = mock(async () => ({
+  url: 'https://accounts.example.test/auth?state=synthetic-state',
+  verifier: 'synthetic-verifier',
+  projectId: 'synthetic-project',
+}))
+const exchange = mock(async () => oauthResult)
+const startListener = mock(async () => ({
+  waitForCallback: async () =>
+    new URL(
+      'http://localhost/oauth-callback?code=synthetic-code&state=synthetic-state',
+    ),
+  close: async () => {},
+}))
+// Only the OAuth wire boundary is synthetic; orchestration and disk stores are real.
+mock.module('./antigravity/oauth', () => ({
+  authorizeAntigravity: authorize,
+  exchangeAntigravity: exchange,
+}))
+mock.module('./plugin/server', () => ({ startOAuthListener: startListener }))
+const {
   createDefaultAccountStoreOperations,
+  createDefaultCliDependencies,
   performOAuthLogin,
   runCli,
-} from './cli'
-import type { OAuthLoginRequest } from './plugin/oauth-methods'
+} = await import('./cli')
 
 function accountStorage(): AccountStorageV4 {
   return {
@@ -548,6 +587,353 @@ describe('runCli reads the active account store', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('default CLI real-store login', () => {
+  const roots: string[] = []
+  const originalEnv = { ...process.env }
+  afterEach(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key]
+    }
+    Object.assign(process.env, originalEnv)
+    for (const root of roots.splice(0))
+      rmSync(root, { recursive: true, force: true })
+    authorize.mockClear()
+    exchange.mockClear()
+    startListener.mockClear()
+  })
+
+  function profile() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'cli-store-login-')))
+    roots.push(root)
+    const home = join(root, 'home')
+    const config = join(root, 'config', 'opencode')
+    mkdirSync(home, { mode: 0o700 })
+    mkdirSync(config, { recursive: true, mode: 0o700 })
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      XDG_CONFIG_HOME: join(root, 'config'),
+      XDG_DATA_HOME: join(root, 'data'),
+      XDG_STATE_HOME: join(root, 'state'),
+      XDG_CACHE_HOME: join(root, 'cache'),
+      OPENCODE_CONFIG_DIR: config,
+      OPENCODE_DB: join(root, 'isolated.db'),
+      PI_AGENT_DIR: join(root, 'pi-decoy'),
+      PI_CODING_AGENT_DIR: join(root, 'pi-native'),
+      PI_ANTIGRAVITY_AUTH_FILE: join(root, 'pi-decoy', 'accounts.json'),
+      SUBC_CONNECTION_FILE: join(root, 'absent-connection.json'),
+      CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-connection.json'),
+      PATH: '/usr/bin:/bin',
+    }
+    Object.assign(process.env, env)
+    const deps = createDefaultCliDependencies()
+    let errors = ''
+    deps.stdout = { write() {} }
+    deps.stderr = { write: (value) => (errors += value) }
+    deps.openBrowser = mock(async () => {})
+    deps.isHeadless = () => false
+    deps.setupIO = { env, home }
+    return {
+      root,
+      config,
+      deps,
+      legacyPath: deps.accountStore.legacyPath(),
+      nativePath: join(env.XDG_DATA_HOME, 'opencode', 'auth.json'),
+      errors: () => errors,
+    }
+  }
+
+  async function seed(p: ReturnType<typeof profile>, populated = false) {
+    expect((await p.deps.accountStore.initialize(p.legacyPath)).status).toBe(
+      'completed',
+    )
+    if (!populated) return
+    const modules = await loadCommonAuthStoreModules()
+    const admission = await readAccountStoreAdmission(
+      p.legacyPath,
+      modules,
+      Date.now,
+    )
+    if (admission.status !== 'active') throw new Error(admission.status)
+    const repository = createAccountRepositoryFactory(modules)({
+      paths: admission.paths,
+      now: Date.now,
+      exchange: async () => {
+        throw new Error('refresh must not run during login')
+      },
+    })
+    try {
+      await repository.login({
+        id: crypto.randomUUID(),
+        refreshToken: 'synthetic-original-refresh',
+        identity: 'original@example.test',
+        metadata: { email: 'original@example.test', addedAt: 1, lastUsed: 2 },
+      })
+    } finally {
+      await repository.dispose()
+    }
+  }
+
+  async function accounts(p: ReturnType<typeof profile>) {
+    const read = await p.deps.accountStore.read(p.legacyPath)
+    if (read.kind !== 'store')
+      throw new Error(`expected store, got ${read.kind}`)
+    return read.accounts
+  }
+
+  function snapshot(root: string, prefix = ''): unknown[] {
+    return readdirSync(join(root, prefix))
+      .sort()
+      .flatMap((name): unknown[] => {
+        const path = join(prefix, name)
+        const stat = statSync(join(root, path))
+        const row = [
+          path,
+          stat.mode,
+          stat.mtimeMs,
+          stat.ctimeMs,
+          stat.isDirectory()
+            ? 'directory'
+            : readFileSync(join(root, path)).toString('base64'),
+        ]
+        return stat.isDirectory() ? [row, ...snapshot(root, path)] : [row]
+      })
+  }
+
+  it('fresh login initializes the current store without creating a legacy pool', async () => {
+    const p = profile()
+    expect(await runCli(['login'], p.deps)).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(await accounts(p)).toMatchObject([
+      { email: oauthResult.email, refreshToken: 'synthetic-new-refresh' },
+    ])
+    expect(existsSync(p.legacyPath)).toBe(false)
+    expect(authorize).toHaveBeenCalledTimes(1)
+    expect(exchange).toHaveBeenCalledTimes(1)
+  })
+
+  it('native vault marker refuses fresh login before OAuth or initialization', async () => {
+    const p = profile()
+    const claustrum = await loadCommonAuthClaustrum()
+    mkdirSync(dirname(p.nativePath), { recursive: true, mode: 0o700 })
+    writeFileSync(
+      p.nativePath,
+      JSON.stringify({ google: claustrum.custodyPlaceholder('google') }),
+      { mode: 0o600 },
+    )
+    const before = snapshot(p.root)
+    expect(await runCli(['login'], p.deps)).toBe(1)
+    expect(p.errors()).not.toBe('')
+    expect(authorize).not.toHaveBeenCalled()
+    expect(startListener).not.toHaveBeenCalled()
+    expect(p.deps.openBrowser).not.toHaveBeenCalled()
+    expect(snapshot(p.root)).toEqual(before)
+    expect(await p.deps.accountStore.read(p.legacyPath)).toEqual({
+      kind: 'uninitialized',
+    })
+  })
+
+  it('native source changing during OAuth refuses persistence into the real store', async () => {
+    const p = profile()
+    await seed(p, true)
+    const claustrum = await loadCommonAuthClaustrum()
+    exchange.mockImplementationOnce(async () => {
+      mkdirSync(dirname(p.nativePath), { recursive: true, mode: 0o700 })
+      writeFileSync(
+        p.nativePath,
+        JSON.stringify({ google: claustrum.custodyPlaceholder('google') }),
+        { mode: 0o600 },
+      )
+      return oauthResult
+    })
+    expect(await runCli(['login'], p.deps)).toBe(1)
+    expect(p.errors()).not.toBe('')
+    expect(authorize).toHaveBeenCalledTimes(1)
+    expect(exchange).toHaveBeenCalledTimes(1)
+    expect(await accounts(p)).toMatchObject([
+      {
+        email: 'original@example.test',
+        refreshToken: 'synthetic-original-refresh',
+      },
+    ])
+    expect(JSON.parse(readFileSync(p.nativePath, 'utf8')).google).toEqual(
+      claustrum.custodyPlaceholder('google'),
+    )
+    expect(existsSync(p.legacyPath)).toBe(false)
+  })
+
+  it('initialized empty login commits into the current store', async () => {
+    const p = profile()
+    await seed(p)
+    expect(await runCli(['login'], p.deps)).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(await accounts(p)).toMatchObject([{ email: oauthResult.email }])
+    expect(existsSync(p.legacyPath)).toBe(false)
+  })
+
+  it.each([
+    false,
+    true,
+  ])('add preserves the original account and commits the new login (startFresh=%s)', async (startFresh) => {
+    const p = profile()
+    await seed(p, true)
+    await p.deps.performLogin(
+      {
+        noBrowser: false,
+        isHeadless: false,
+        accounts: startFresh
+          ? [{ ...oauthResult, refresh: 'earlier-result' }]
+          : [],
+        startFresh,
+      },
+      p.deps.openBrowser,
+    )
+    expect(await accounts(p)).toMatchObject([
+      {
+        email: 'original@example.test',
+        refreshToken: 'synthetic-original-refresh',
+      },
+      { email: oauthResult.email, refreshToken: 'synthetic-new-refresh' },
+    ])
+    expect(existsSync(p.legacyPath)).toBe(false)
+  })
+
+  it('replace uses the attributed repository replacement', async () => {
+    const p = profile()
+    await seed(p, true)
+    expect(await runCli(['login'], p.deps)).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(await accounts(p)).toMatchObject([{ email: oauthResult.email }])
+    expect(existsSync(p.legacyPath)).toBe(false)
+    const admission = await readAccountStoreAdmission(
+      p.legacyPath,
+      await loadCommonAuthStoreModules(),
+      Date.now,
+    )
+    expect(admission.status).toBe('active')
+  })
+
+  it('pending legacy migration refuses before OAuth with unchanged bytes and metadata', async () => {
+    const p = profile()
+    writeFileSync(p.legacyPath, JSON.stringify(accountStorage()), {
+      mode: 0o600,
+    })
+    const before = snapshot(p.root)
+    expect(await runCli(['login'], p.deps)).toBe(1)
+    expect(p.errors()).toContain('offline migration')
+    expect(authorize).not.toHaveBeenCalled()
+    expect(startListener).not.toHaveBeenCalled()
+    expect(exchange).not.toHaveBeenCalled()
+    expect(p.deps.openBrowser).not.toHaveBeenCalled()
+    expect(snapshot(p.root)).toEqual(before)
+  })
+
+  it('setup --login refuses pending migration before OAuth or native activation', async () => {
+    const p = profile()
+    writeFileSync(p.legacyPath, JSON.stringify(accountStorage()), {
+      mode: 0o600,
+    })
+    const before = snapshot(p.root)
+    expect(
+      await runCli(
+        ['setup', '--yes', '--no-claustrum', '--opencode=1', '--login'],
+        p.deps,
+      ),
+    ).toBe(1)
+    expect(p.errors()).toContain('offline migration')
+    expect(authorize).not.toHaveBeenCalled()
+    expect(startListener).not.toHaveBeenCalled()
+    expect(exchange).not.toHaveBeenCalled()
+    expect(p.deps.openBrowser).not.toHaveBeenCalled()
+    expect(snapshot(p.root)).toEqual(before)
+  })
+
+  it('fresh setup --login initializes the store and activates V1 without a legacy bootstrap', async () => {
+    const p = profile()
+    expect(
+      await runCli(
+        ['setup', '--yes', '--no-claustrum', '--opencode=1', '--login'],
+        p.deps,
+      ),
+    ).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(await accounts(p)).toMatchObject([{ email: oauthResult.email }])
+    expect(existsSync(p.legacyPath)).toBe(false)
+    expect(JSON.parse(readFileSync(p.nativePath, 'utf8')).google.refresh).toBe(
+      oauthResult.refresh,
+    )
+  })
+
+  it('setup --login persists before native V1 activation and retains unrelated accounts', async () => {
+    const p = profile()
+    await seed(p, true)
+    exchange.mockImplementationOnce(async () => {
+      expect(existsSync(p.nativePath)).toBe(false)
+      return oauthResult
+    })
+    expect(
+      await runCli(
+        ['setup', '--yes', '--no-claustrum', '--opencode=1', '--login'],
+        p.deps,
+      ),
+    ).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(await accounts(p)).toMatchObject([
+      { email: 'original@example.test' },
+      { email: oauthResult.email },
+    ])
+    expect(JSON.parse(readFileSync(p.nativePath, 'utf8')).google).toEqual({
+      type: 'oauth',
+      refresh: oauthResult.refresh,
+      access: oauthResult.access,
+      expires: oauthResult.expires,
+    })
+    if (process.platform !== 'win32')
+      expect(statSync(p.nativePath).mode & 0o777).toBe(0o600)
+    expect(existsSync(p.legacyPath)).toBe(false)
+  })
+
+  it('setup --login never activates V1 when persistence refuses a successor credential', async () => {
+    const p = profile()
+    await seed(p, true)
+    exchange.mockImplementationOnce(async () => ({
+      ...oauthResult,
+      email: 'original@example.test',
+    }))
+    expect(
+      await runCli(
+        ['setup', '--yes', '--no-claustrum', '--opencode=1', '--login'],
+        p.deps,
+      ),
+    ).toBe(1)
+    expect(p.errors()).toContain('re-authentication')
+    expect(existsSync(p.nativePath)).toBe(false)
+    expect(await accounts(p)).toMatchObject([
+      {
+        email: 'original@example.test',
+        refreshToken: 'synthetic-original-refresh',
+      },
+    ])
+  })
+
+  it('pure OpenCode 2 setup defers OAuth and leaves the V1 slot untouched', async () => {
+    const p = profile()
+    expect(
+      await runCli(
+        ['setup', '--yes', '--no-claustrum', '--opencode=2', '--login'],
+        p.deps,
+      ),
+    ).toBe(0)
+    expect(p.errors()).toBe('')
+    expect(authorize).not.toHaveBeenCalled()
+    expect(startListener).not.toHaveBeenCalled()
+    expect(exchange).not.toHaveBeenCalled()
+    expect(existsSync(p.nativePath)).toBe(false)
+    expect(existsSync(p.legacyPath)).toBe(false)
   })
 })
 
