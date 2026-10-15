@@ -139,6 +139,121 @@ for (const job of ['vault', 'migration']) {
   })
 }
 
+test('Windows Pi preflight loads the native verifier runtime in Node with product externals', async () => {
+  const entry = '../../test/windows-pi-preflight/product-entry.mjs'
+  const steps = workflow.jobs.vault!.steps
+  const build = steps.find((step) => step.run?.includes(`esbuild ${entry} `))!
+  const script = build.run!
+  expect(script.indexOf(`esbuild ${entry} `)).toBeGreaterThan(
+    script.indexOf('bun run --cwd packages/opencode build'),
+  )
+  expect(
+    script.indexOf('bun run --cwd packages/opencode build'),
+  ).toBeGreaterThan(script.indexOf('bun run --cwd packages/core build'))
+  expect(script).toContain('bun run --cwd packages/core build')
+  expect(steps.indexOf(build)).toBeLessThan(
+    steps.findIndex((step) =>
+      step.run?.includes('node test/windows-pi-preflight/verify.mjs $evidence'),
+    ),
+  )
+  const expression = script.match(/^\s*\$externals = bun -e "([^"]+)"$/m)![1]!
+  const externals = (await command(root, 'bun', ['-e', expression]))
+    .trim()
+    .split(/\r?\n/)
+  expect(externals).toEqual(
+    BUNDLE_EXTERNALS.map((name) => `--external:${name}`),
+  )
+  const line = script
+    .split(/\r?\n/)
+    .find((line) => line.includes(`esbuild ${entry} `))!
+    .trim()
+  for (const flag of [
+    '--bundle',
+    '--platform=node',
+    '--format=esm',
+    '--sourcemap',
+    '@externals',
+  ])
+    expect(line.split(/\s+/)).toContain(flag)
+  const args = line
+    .split(/\s+/)
+    .flatMap((arg) => (arg === '@externals' ? externals : [arg]))
+  expect(args.filter((arg) => arg.startsWith('--external:'))).toEqual(externals)
+  const bundle = resolve(
+    root,
+    'packages/opencode',
+    args
+      .find((arg) => arg.startsWith('--outfile='))!
+      .slice('--outfile='.length),
+  )
+  const metafile = join(await owned(), 'pi-meta.json')
+  try {
+    await command(root, args[0]!, [...args.slice(1), `--metafile=${metafile}`])
+    const meta = JSON.parse(await readFile(metafile, 'utf8'))
+    const map = JSON.parse(await readFile(`${bundle}.map`, 'utf8'))
+    for (const source of ['src/setup.ts', 'src/cli.ts']) {
+      expect(Object.keys(meta.inputs)).toContain(source)
+      expect(map.sources).toContain(`../${source}`)
+    }
+    expect(Object.keys(meta.inputs)).toContain(entry)
+    for (const dependency of BUNDLE_EXTERNALS) {
+      expect(
+        Object.keys(meta.inputs).some((path) =>
+          path.includes(`/node_modules/${dependency}/`),
+        ),
+      ).toBe(false)
+    }
+    const imports =
+      meta.outputs[
+        Object.keys(meta.outputs).find((path) => path.endsWith('.mjs'))!
+      ].imports
+    for (const [dependency, kind] of [
+      ['jsonc-parser', 'import-statement'],
+      ['@cortexkit/private-files', 'dynamic-import'],
+      ['@cortexkit/claustrum-client', 'import-statement'],
+      ['@cortexkit/subc-client', 'import-statement'],
+    ]) {
+      expect(imports).toContainEqual({
+        path: dependency,
+        kind,
+        external: true,
+      })
+    }
+    const verifier = join(root, 'test/windows-pi-preflight/verify.mjs')
+    const source = await readFile(verifier, 'utf8')
+    // Load the verifier's own adapter imports so reverting to unbundled emits fails in Node.
+    const runtimeEntries = [
+      ...source.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g),
+    ]
+      .map((match) => match[1]!)
+      .filter(
+        (path) =>
+          path.includes('packages/opencode/') &&
+          !path.includes('/common-auth-embedded/'),
+      )
+      .map((path) => new URL(path, pathToFileURL(verifier)).href)
+    expect(runtimeEntries.length).toBeGreaterThan(0)
+    const loaded = await command(root, 'node', [
+      '--input-type=module',
+      '-e',
+      `const exports = Object.assign({}, ...await Promise.all(${JSON.stringify(runtimeEntries)}.map(path => import(path)))); console.log(JSON.stringify(Object.fromEntries(Object.entries(exports).map(([name, value]) => [name, typeof value]))))`,
+    ])
+    expect(JSON.parse(loaded)).toEqual({
+      assertSetupHostsStopped: 'function',
+      createSetupPlugin: 'function',
+      createDefaultCliDependencies: 'function',
+    })
+    expect(runtimeEntries).toEqual([pathToFileURL(bundle).href])
+    expect(source).toContain("'test/windows-pi-preflight/product-entry.mjs'")
+    expect(source).toContain(
+      "'packages/opencode/dist/windows-pi-preflight-product.mjs'",
+    )
+  } finally {
+    await rm(bundle, { force: true })
+    await rm(`${bundle}.map`, { force: true })
+  }
+})
+
 test('Windows checkout preserves the embedded generator self-hash and manifest bytes', async () => {
   const target = await owned()
   const generator = 'packages/opencode/scripts/embed-common-auth.ts'

@@ -143,6 +143,8 @@ try {
   Object.assign(process.env, env)
   for (const path of [
     'packages/opencode/src/setup.ts',
+    'packages/opencode/src/cli.ts',
+    'test/windows-pi-preflight/product-entry.mjs',
     'packages/core/src/common-auth-embedded/pi-slot/slot.js',
     'packages/core/src/common-auth-embedded/fs/private-files.js',
     'packages/core/src/common-auth-embedded/claustrum/enrollment.js',
@@ -176,9 +178,18 @@ try {
   )
   assert.equal(oracle.sha256, expectedArchive)
   result.runtimeFiles = {}
+  for (const path of [
+    'packages/opencode/dist/windows-pi-preflight-product.mjs',
+    'packages/opencode/dist/windows-pi-preflight-product.mjs.map',
+    'packages/opencode/dist/cli.js',
+  ]) {
+    result.runtimeFiles[path] = createHash('sha256')
+      .update(await readFile(join(repository, path)))
+      .digest('hex')
+  }
+  // Check canonical emitted payloads separately from the bundled adapter runtime.
+  result.archiveFiles = {}
   for (const [path, canonical] of [
-    ['packages/opencode/dist/src/setup.js', null],
-    ['packages/opencode/dist/src/cli.js', null],
     [
       'packages/opencode/dist/src/common-auth-embedded/setup/command.js',
       'setup/command.js',
@@ -202,22 +213,20 @@ try {
   ]) {
     const bytes = await readFile(join(repository, path))
     const hash = createHash('sha256').update(bytes).digest('hex')
-    result.runtimeFiles[path] = hash
-    if (canonical) {
-      const expected = oracle.files.find(([name]) => name === canonical)
-      assert.ok(expected, `Missing independent archive pin: ${canonical}`)
-      assert.equal(
-        bytes.length,
-        expected[1],
-        `Wrong built payload size: ${path}`,
-      )
-      assert.equal(hash, expected[2], `Wrong built payload bytes: ${path}`)
-    }
+    result.archiveFiles[path] = hash
+    const expected = oracle.files.find(([name]) => name === canonical)
+    assert.ok(expected, `Missing independent archive pin: ${canonical}`)
+    assert.equal(bytes.length, expected[1], `Wrong built payload size: ${path}`)
+    assert.equal(hash, expected[2], `Wrong built payload bytes: ${path}`)
   }
   const { loadCommonAuthFs, loadCommonAuthPiSlot, loadCommonAuthClaustrum } =
     await import('../../packages/core/dist/index.js')
-  const { assertSetupHostsStopped, createSetupPlugin } = await import(
-    '../../packages/opencode/dist/src/setup.js'
+  const {
+    assertSetupHostsStopped,
+    createSetupPlugin,
+    createDefaultCliDependencies,
+  } = await import(
+    '../../packages/opencode/dist/windows-pi-preflight-product.mjs'
   )
   const fs = await loadCommonAuthFs()
   const { openPiSlot } = await loadCommonAuthPiSlot()
@@ -230,9 +239,6 @@ try {
       expires: 1,
     },
   })
-  const { createDefaultCliDependencies } = await import(
-    '../../packages/opencode/dist/src/cli.js'
-  )
   const deps = createDefaultCliDependencies()
   deps.performLogin = async () => {
     throw new Error('This proof must not start OAuth')
