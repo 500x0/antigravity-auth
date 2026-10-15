@@ -32,12 +32,17 @@ import {
   assertGaActivePlaceholder,
   assertGaImagePreparationPlatform,
   assertGaNoDirectProvider,
+  assertGaPassthroughEvidence,
   assertGaPinnedHostnameMappings,
   assertGaSuccess,
   captureGaPlaceholder,
   collectGaCompletion,
+  connectGaNativeKey,
   GA_CASE_IDS,
+  GA_SMOKE_CASE_IDS,
+  type GaAccountObservation,
   type GaHarness,
+  type GaRecordedRequest,
   type GaRunResult,
   gaAllowsDirectProvider,
   gaChildEnvironment,
@@ -49,6 +54,7 @@ import {
   gaTimestamp,
   importGaPlaceholder,
   loadGaOverflowFixture,
+  loginGaPool,
   prepareGaRoot,
   record,
   refreshGaFixtureCredentials,
@@ -767,6 +773,299 @@ it('admits Linux x64 artifact preparation without asserting runtime container me
 })
 
 describe('GA ownership harness preparation (source controls, not native proof)', () => {
+  it('dispatches the three ownership cases separately and retains the four-case smoke order', () => {
+    expect(GA_SMOKE_CASE_IDS).toEqual([
+      'ga-ownership-pool-login',
+      'terminal-frame',
+      'ga-ownership-passthrough',
+      'ga-ownership-empty-pool',
+    ])
+    const source = readFileSync(
+      'packages/e2e-tests/src/opencode-ga-harness.ts',
+      'utf8',
+    )
+    const driver = source.slice(
+      source.indexOf('export async function runGaFullDriver'),
+    )
+    const core = driver.slice(
+      driver.indexOf('const core ='),
+      driver.indexOf('for (const id of GA_CASE_IDS)'),
+    )
+    for (const [id, runner] of [
+      ['ga-ownership-pool-login', 'runGaOwnershipPoolLogin'],
+      ['ga-ownership-passthrough', 'runGaOwnershipPassthrough'],
+      ['ga-ownership-empty-pool', 'runGaOwnershipEmptyPool'],
+    ]) {
+      expect(core).not.toContain(id!)
+      expect(driver).toMatch(
+        new RegExp(
+          `if \\(id === '${id}'\\)\\s+await ${runner}\\(harness, inputs.accounts\\)`,
+        ),
+      )
+    }
+    expect(
+      source.match(/await retainGaScenario\(harness, started,/g),
+    ).toHaveLength(2)
+    expect(source).toContain(
+      'await runGaSmoke(root, inputs as GaHostIntegrationInputs)',
+    )
+  })
+
+  it('uses location-scoped public login endpoints, callback state and the returned credential', async () => {
+    const paths = prepareGaRoot(root())
+    const value = {
+      type: 'oauth',
+      methodID: 'antigravity-auth-pool-browser',
+      access: 'synthetic-host-placeholder',
+      refresh: '',
+      expires: 0,
+    }
+    const entries: Record<string, unknown>[] = []
+    const calls: string[] = []
+    let callback = false
+    const listener = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 51121,
+      fetch(request) {
+        const url = new URL(request.url)
+        expect(url.pathname).toBe('/oauth-callback')
+        expect(url.searchParams.get('state')).toBe('fixture-real-state')
+        expect(url.searchParams.get('code')).toBe('synthetic-ga-code')
+        callback = true
+        return new Response('Accepted')
+      },
+    })
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request): Promise<Response> {
+        const url = new URL(request.url)
+        calls.push(`${request.method} ${url.pathname}`)
+        if (url.pathname.startsWith('/api/integration/'))
+          expect(url.searchParams.get('location[directory]')).toBe(
+            paths.project,
+          )
+        else expect(url.search).toBe('')
+        if (url.pathname.endsWith('/connect/key')) {
+          expect(await request.json()).toEqual({
+            key: 'synthetic-ga-key',
+            label: 'native-control',
+          })
+          entries.push({
+            id: 'native-id',
+            integrationID: 'google',
+            label: 'native-control',
+            active: false,
+            value: { type: 'key', key: 'synthetic-ga-key' },
+          })
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname.endsWith('/activate')) {
+          for (const entry of entries)
+            entry.active =
+              url.pathname === `/api/credential/${entry.id}/activate`
+          return new Response(null, { status: 204 })
+        }
+        if (url.pathname === '/api/credential')
+          return Response.json({ data: entries })
+        if (url.pathname.endsWith('/connect/oauth')) {
+          expect(await request.json()).toEqual({
+            methodID: 'antigravity-auth-pool-browser',
+          })
+          return Response.json({
+            data: {
+              attemptID: 'attempt-real',
+              url: `http://127.0.0.1:${server.port}/authorize?state=fixture-real-state`,
+            },
+          })
+        }
+        if (url.pathname.endsWith('/connect/oauth/attempt-real')) {
+          expect(callback).toBe(true)
+          entries.push({
+            id: 'pool-id',
+            integrationID: 'google',
+            label: 'Antigravity',
+            active: false,
+            value,
+          })
+          return Response.json({ data: { status: 'complete' } })
+        }
+        expect(url.pathname).toBe('/api/integration/google')
+        return Response.json({
+          data: { methods: [{ id: 'antigravity-auth-pool-browser' }] },
+        })
+      },
+    })
+    try {
+      const harness = {
+        paths,
+        host: { url: `http://127.0.0.1:${server.port}` },
+        mock: { url: `http://127.0.0.1:${server.port}` },
+      }
+      const key = await connectGaNativeKey(harness)
+      expect(key.id).toBe('native-id')
+      const before = JSON.stringify(key.value)
+      expect(await loginGaPool(harness)).toEqual({ id: 'pool-id', value })
+      expect(JSON.stringify(entries[0]?.value)).toBe(before)
+      expect(calls).toContain(
+        'GET /api/integration/google/connect/oauth/attempt-real',
+      )
+      expect(calls.some((call) => call.startsWith('DELETE'))).toBe(false)
+    } finally {
+      await server.stop(true)
+      await listener.stop(true)
+    }
+  })
+
+  function passthroughEvidence() {
+    const session = { id: 'foreign-session', directory: '/owned/project' }
+    const requests: GaRecordedRequest[] = [200, 500, 200].map(
+      (responseStatus, index) => ({
+        kind: 'direct-provider',
+        path: '/direct/v1/models/fixture:streamGenerateContent',
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: index === 0 ? 'first' : 'retry-nonce' }],
+            },
+          ],
+        }),
+        headers: {
+          'x-goog-api-key': 'synthetic-ga-key',
+          'x-opencode-session-id': session.id,
+        },
+        rawHeaders: [],
+        authorization: '',
+        endpoint: '',
+        responseStatus,
+      }),
+    )
+    const events: Record<string, unknown>[] = requests.flatMap((request) =>
+      ['native.foreign.prepared', 'native.foreign.dispatched'].map((event) => ({
+        event,
+        sessionID: session.id,
+        kind: 'primary',
+        url: `http://127.0.0.1:1234${request.path}`,
+        headers: request.headers,
+        body: request.body,
+      })),
+    )
+    const snapshot: GaAccountObservation = {
+      rows: [
+        {
+          label: 'Synthetic A',
+          publicId: 'acct-1',
+          selector: 'row-1',
+          metadataStatus: 'present',
+          accessBlock: { kind: 'none' },
+          enabled: true,
+          current: false,
+        },
+      ],
+      routing: 'sticky',
+      logging: false,
+      dump: false,
+      killswitch: 0,
+      sidebarPullMs: 1000,
+    }
+    const harness = {
+      nonce: 'fixture',
+      mock: { requests },
+      readWrapperEvents: () => events,
+    }
+    const results: GaRunResult[] = [1, 2].map(() => ({
+      code: 0,
+      stdout: JSON.stringify({
+        type: 'text',
+        sessionID: session.id,
+        part: { text: 'GA_DIRECT_OK_fixture' },
+      }),
+      stderr: '',
+      timedOut: false,
+      outputCapExceeded: false,
+      elapsedMs: 1,
+      signal: null,
+    }))
+    return { session, requests, events, snapshot, harness, results }
+  }
+
+  it('accepts unchanged native primary wire evidence, without counting snapshots as acquisition', () => {
+    const f = passthroughEvidence()
+    expect(() =>
+      assertGaPassthroughEvidence(
+        f.harness,
+        f.session,
+        0,
+        0,
+        f.snapshot,
+        f.snapshot,
+        f.results,
+      ),
+    ).not.toThrow()
+  })
+
+  it('rejects a send.start in the passthrough measured interval', () => {
+    const f = passthroughEvidence()
+    f.events.push({ event: 'send.start' })
+    expect(() =>
+      assertGaPassthroughEvidence(
+        f.harness,
+        f.session,
+        0,
+        0,
+        f.snapshot,
+        f.snapshot,
+        f.results,
+      ),
+    ).toThrow('GA_PASSTHROUGH_ACCOUNT_ACQUISITION')
+  })
+
+  it('rejects refresh, bridge rewrites, marker headers, missing observations and stdout-only failures', () => {
+    for (const fault of [
+      'refresh',
+      'bridge',
+      'key',
+      'plugin-header',
+      'missing',
+      'exit',
+      'output',
+      'roster',
+      'status',
+      'session',
+      'retry-body',
+    ]) {
+      const f = passthroughEvidence()
+      const after = structuredClone(f.snapshot)
+      if (fault === 'refresh') f.events.push({ event: 'refreshAccessToken' })
+      if (fault === 'bridge') f.events[1]!.url = 'http://127.0.0.1:4567/bridge'
+      if (fault === 'key')
+        f.requests[0]!.headers['x-goog-api-key'] =
+          'common-auth-placeholder.google'
+      if (fault === 'plugin-header')
+        f.requests[0]!.headers['x-agy-test'] = 'added'
+      if (fault === 'missing') f.events.splice(0, 1)
+      if (fault === 'exit') f.results[0]!.code = 1
+      if (fault === 'output') f.results[0]!.stdout = ''
+      if (fault === 'roster') after.rows = []
+      if (fault === 'status') f.requests[1]!.responseStatus = 200
+      if (fault === 'session')
+        f.requests[1]!.headers['x-opencode-session-id'] = 'another-session'
+      if (fault === 'retry-body') f.requests[1]!.body = '{}'
+      expect(() =>
+        assertGaPassthroughEvidence(
+          f.harness,
+          f.session,
+          0,
+          0,
+          f.snapshot,
+          after,
+          f.results,
+        ),
+      ).toThrow()
+    }
+  })
+
   it('enforces direct-provider refusal for every case except passthrough at all three sites', () => {
     for (const id of GA_CASE_IDS) {
       if (id === 'ga-ownership-passthrough') continue

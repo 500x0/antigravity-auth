@@ -1158,6 +1158,7 @@ export function writeGaWrapper(input: {
   rawSender: boolean
   duplicateCleanup?: boolean
   recordPreparedOutputCap?: boolean
+  recordPassthrough?: boolean
   placeholderFixture?: string
 }): string {
   const { paths, consumerPrefix, packedServerEntry, mockUrl, rawSender } = input
@@ -1274,17 +1275,23 @@ const plugin = createGaAntigravityPlugin(overrides)
     if (typeof expected.value?.access !== 'string' || expected.value.type !== 'oauth' || expected.value.methodID !== 'antigravity-auth-pool-browser' || expected.valueSha256 !== bodyHash(JSON.stringify(expected.value))) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: missing captured placeholder provenance')
     log('native.prepared-output-cap', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, caller: capCaller(body), owned: event.request.headers.get('x-goog-api-key') === expected.value.access, bodySha256: bodyHash(original), maxOutputTokens: body.generationConfig?.maxOutputTokens ?? null })
   }, { providerID: 'google' })`
-      : 'undefined'
+      : input.recordPassthrough
+        ? `await context.session.hook('http.request', async (event) => {
+    log('native.foreign.prepared', { sessionID: event.sessionID, kind: event.kind, url: event.request.url, headers: Object.fromEntries(event.request.headers), body: await event.request.clone().text() })
+  }, { providerID: 'google' })`
+        : 'undefined'
   }
   let cleanup: Awaited<ReturnType<typeof plugin.setup>>
   try { cleanup = await plugin.setup(context) } catch (error) { await preparedWire?.dispose(); throw error }
   if (typeof cleanup !== 'function') throw new Error('GA setup did not return initialized Cleanup')
   log('initialized', { runtime: { name: 'Bun', version: Bun.version, revision: Bun.revision } })
   try {
-  const wire = await context.session.hook('http.request', (event) => {
+  const wire = await context.session.hook('http.request', async (event) => {
     log('native.request', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, url: event.request.url, method: event.request.method, headerNames: Array.from(event.request.headers.keys()) })
+    ${input.recordPassthrough ? "log('native.foreign.dispatched', { sessionID: event.sessionID, kind: event.kind, url: event.request.url, headers: Object.fromEntries(event.request.headers), body: await event.request.clone().text() })" : ''}
   }, { providerID: 'google' })
   const response = await context.session.hook('http.response', async (event) => {
+    ${input.recordPassthrough ? "log('native.foreign.response', { sessionID: event.sessionID, status: event.response.status })" : ''}
     if (event.kind === 'title') log('native.title.response', { status: event.response.status, sessionID: event.sessionID, kind: event.kind, model: event.model.id })
     if (event.response.status === 400) {
       const bytes = Buffer.from(await event.response.clone().arrayBuffer())
@@ -2621,20 +2628,7 @@ async function gaMain(): Promise<void> {
   // targeting and store seeding behind them live in opencode-ga-inputs.ts.
   if (mode === '--smoke') {
     mkdirSync(root, { recursive: true, mode: 0o700 })
-    const supplied = inputs as GaHostIntegrationInputs
-    const harness = await createOpenCodeGaHarness('terminal-frame', root, {
-      accounts: supplied.accounts,
-      rawSender: true,
-      rawTls: { identity: 'matching', phase: 'success' },
-    })
-    try {
-      const trace = await runGaRawTlsCase(harness, false)
-      for (const body of trace.primaryBodies)
-        assertGaWire({ body }, publicGaModel())
-      console.log('OpenCode 2.0.22 loopback request and terminal frame passed')
-    } finally {
-      await harness.dispose()
-    }
+    await runGaSmoke(root, inputs as GaHostIntegrationInputs)
     return
   }
   await runGaFullDriver(root, inputs as GaHostIntegrationInputs)
@@ -3592,6 +3586,7 @@ export async function createOpenCodeGaHarness(
       rawSender: options.rawSender ?? false,
       duplicateCleanup: caseId === 'cleanup-idempotent',
       recordPreparedOutputCap: caseId === 'claude-thinking',
+      recordPassthrough: gaAllowsDirectProvider(caseId),
       placeholderFixture,
     })
     const accountsMigrationInput = seedGaHost(
@@ -4638,6 +4633,7 @@ async function runGaClaudeThinking(harness: GaHarness): Promise<void> {
 export async function runGaUnrelatedResponse(
   harness: GaHarness,
 ): Promise<void> {
+  await connectGaNativeKey(harness)
   const directory = join(harness.paths.root, 'foreign-project')
   ownedPath(harness.paths.root, directory)
   mkdirSync(directory, { mode: 0o700 })
@@ -4662,15 +4658,51 @@ export async function runGaUnrelatedResponse(
     'google/ga-unregistered-fixture',
     'Unrelated fixed title',
   )
-  const [owned, foreign] = await Promise.all([
-    harness.run(publicGaModel()),
-    harness.run(
-      'google/ga-unregistered-fixture',
-      `Unrelated ${harness.nonce}`,
-      false,
-      session,
-    ),
-  ])
+  const foreignPending = harness.run(
+    'google/ga-unregistered-fixture',
+    `Unrelated ${harness.nonce}`,
+    false,
+    session,
+  )
+  // Observe both promises immediately so a failed setup cannot leave an
+  // unhandled CLI rejection while the foreign response is still held.
+  const observe = (pending: Promise<GaRunResult>) =>
+    pending.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    )
+  const foreignSettled = observe(foreignPending)
+  let ownedSettled: ReturnType<typeof observe> | undefined
+  let owned: GaRunResult
+  let foreign: GaRunResult
+  try {
+    await waitForGaObservation(
+      () =>
+        harness.mock.events.some((event) => event.event === 'unrelated-held'),
+      'foreign native request held before credential switch',
+    )
+    await importGaHeldResponsePlaceholder(harness)
+    const ownedPending = harness.run(publicGaModel())
+    ownedSettled = observe(ownedPending)
+    try {
+      await waitForGaObservation(
+        () => gaPrimaryRequests(harness).length > 0,
+        'owned request overlaps the held foreign response',
+      )
+    } finally {
+      harness.mock.releaseUnrelated()
+    }
+    const result = await ownedSettled
+    if ('error' in result) throw result.error
+    owned = result.value
+    const other = await foreignSettled
+    if ('error' in other) throw other.error
+    foreign = other.value
+  } finally {
+    harness.mock.releaseUnrelated()
+    await ownedSettled
+    await foreignSettled
+  }
   requireCondition(
     gaSessionErrors(owned.stdout).some(
       (error) => error.type === 'provider.transport' && error.status === 200,
@@ -4687,6 +4719,532 @@ export async function runGaUnrelatedResponse(
     harness.mock.requests.filter((request) => request.kind === 'unrelated')
       .length === 1,
     'Unrelated native request was replayed or rewritten',
+  )
+  const prepared = harness.mock.requests.find(
+    (request) => request.kind === 'unrelated',
+  )
+  requireCondition(
+    prepared?.headers?.['x-goog-api-key'] === 'synthetic-ga-key' &&
+      !JSON.stringify(prepared).includes('common-auth-placeholder.'),
+    'Foreign native request did not retain its prepared key',
+  )
+}
+
+function gaIntegrationPath(
+  harness: Pick<GaHarness, 'paths'>,
+  suffix = '',
+): string {
+  return `/api/integration/google${suffix}?${new URLSearchParams({ 'location[directory]': harness.paths.project })}`
+}
+
+export async function connectGaNativeKey(harness: {
+  paths: GaPaths
+  host: Pick<GaHostSession, 'url'>
+}): Promise<Record<string, unknown>> {
+  await gaNativeRequest(
+    harness.host.url,
+    'POST',
+    gaIntegrationPath(harness, '/connect/key'),
+    { key: 'synthetic-ga-key', label: 'native-control' },
+    204,
+    true,
+  )
+  const entries = (await gaCredentialEntries(harness.host.url)).filter(
+    (entry) =>
+      entry.integrationID === 'google' &&
+      entry.label === 'native-control' &&
+      record(entry.value).key === 'synthetic-ga-key',
+  )
+  const entry = entries[0]
+  requireCondition(
+    entries.length === 1 && entry && typeof entry.id === 'string',
+    'GA_NATIVE_KEY_MISSING',
+  )
+  await gaNativeRequest(
+    harness.host.url,
+    'POST',
+    `/api/credential/${encodeURIComponent(entry.id)}/activate`,
+    undefined,
+    204,
+    true,
+  )
+  const active = (await gaCredentialEntries(harness.host.url)).filter(
+    (candidate) =>
+      candidate.integrationID === 'google' && candidate.active === true,
+  )
+  requireCondition(
+    active.length === 1 &&
+      active[0]?.id === entry.id &&
+      JSON.stringify(active[0].value) === JSON.stringify(entry.value),
+    'GA_NATIVE_KEY_NOT_ACTIVE',
+  )
+  return active[0]
+}
+
+export async function loginGaPool(harness: {
+  paths: GaPaths
+  host: Pick<GaHostSession, 'url'>
+  mock: Pick<GaMock, 'url'>
+}): Promise<{ id: string; value: unknown }> {
+  const inventory = record(
+    record(
+      await gaNativeRequest(
+        harness.host.url,
+        'GET',
+        gaIntegrationPath(harness),
+        undefined,
+        200,
+      ),
+    ).data,
+  )
+  requireCondition(
+    Array.isArray(inventory.methods) &&
+      inventory.methods.some(
+        (method) => record(method).id === 'antigravity-auth-pool-browser',
+      ),
+    'GA_POOL_BROWSER_METHOD_MISSING',
+  )
+  const before = new Set(
+    (await gaCredentialEntries(harness.host.url)).map((entry) => entry.id),
+  )
+  const attempt = record(
+    record(
+      await gaNativeRequest(
+        harness.host.url,
+        'POST',
+        gaIntegrationPath(harness, '/connect/oauth'),
+        { methodID: 'antigravity-auth-pool-browser' },
+        200,
+      ),
+    ).data,
+  )
+  requireCondition(
+    typeof attempt.attemptID === 'string' && typeof attempt.url === 'string',
+    'GA_POOL_OAUTH_ATTEMPT_MISSING',
+  )
+  const attemptPath = gaIntegrationPath(
+    harness,
+    `/connect/oauth/${encodeURIComponent(attempt.attemptID)}`,
+  )
+  let complete = false
+  try {
+    const authorization = new URL(attempt.url)
+    requireCondition(
+      authorization.origin === harness.mock.url &&
+        authorization.pathname === '/authorize',
+      'GA_POOL_OAUTH_ESCAPED_FIXTURE',
+    )
+    const state = authorization.searchParams.get('state')
+    requireCondition(state, 'GA_POOL_OAUTH_STATE_MISSING')
+    const response = await fetch(
+      `http://127.0.0.1:51121/oauth-callback?${new URLSearchParams({ code: 'synthetic-ga-code', state })}`,
+      { signal: AbortSignal.timeout(2000) },
+    )
+    requireCondition(response.ok, 'GA_POOL_OAUTH_CALLBACK_REFUSED')
+    await waitForGaObservation(
+      async () => {
+        const status = record(
+          record(
+            await gaNativeRequest(
+              harness.host.url,
+              'GET',
+              attemptPath,
+              undefined,
+              200,
+            ),
+          ).data,
+        )
+        requireCondition(
+          status.status === 'pending' || status.status === 'complete',
+          `GA_POOL_OAUTH_FAILED: ${JSON.stringify(status)}`,
+        )
+        return status.status === 'complete'
+      },
+      'public pool OAuth attempt completed',
+      5000,
+    )
+    complete = true
+    const entries = (await gaCredentialEntries(harness.host.url)).filter(
+      (entry) =>
+        !before.has(entry.id) &&
+        entry.integrationID === 'google' &&
+        record(entry.value).methodID === 'antigravity-auth-pool-browser',
+    )
+    const entry = entries[0]
+    requireCondition(
+      entries.length === 1 &&
+        entry &&
+        typeof entry.id === 'string' &&
+        entry.label === 'Antigravity',
+      'GA_POOL_PLACEHOLDER_NOT_PUBLISHED',
+    )
+    const credentials = (await gaCredentialEntries(harness.host.url)).filter(
+      (candidate) => candidate.integrationID === 'google',
+    )
+    requireCondition(
+      credentials.every(
+        (candidate) =>
+          record(candidate.value).access !==
+            'synthetic-ga-reauthorized-access' &&
+          record(candidate.value).refresh !==
+            'synthetic-ga-reauthorized|synthetic-ga-project',
+      ),
+      'GA_POOL_ACCOUNT_LEAKED_TO_HOST',
+    )
+    await gaNativeRequest(
+      harness.host.url,
+      'POST',
+      `/api/credential/${encodeURIComponent(entry.id)}/activate`,
+      undefined,
+      204,
+      true,
+    )
+    const expected = { id: entry.id, value: entry.value }
+    await assertGaActivePlaceholder(harness.host.url, expected)
+    writeFileSync(
+      join(harness.paths.state, 'pool-login.json'),
+      JSON.stringify({ attempt, credential: expected }),
+      { mode: 0o600, flag: 'wx' },
+    )
+    return expected
+  } finally {
+    if (!complete)
+      await gaNativeRequest(
+        harness.host.url,
+        'DELETE',
+        attemptPath,
+        undefined,
+        204,
+        true,
+      )
+  }
+}
+
+async function gaNativeKeyBytes(
+  harness: GaHarness,
+  id: string,
+): Promise<{ id: string; value: string }> {
+  const { Database } = await import('bun:sqlite')
+  const database = new Database(harness.paths.database, { readonly: true })
+  try {
+    const row = record(
+      database.query('SELECT id, value FROM credential WHERE id = ?').get(id),
+    )
+    requireCondition(
+      row.id === id && typeof row.value === 'string',
+      'GA_NATIVE_KEY_DATABASE_BYTES_MISSING',
+    )
+    return { id, value: row.value }
+  } finally {
+    database.close()
+  }
+}
+
+export async function runGaOwnershipPoolLogin(
+  harness: GaHarness,
+  accounts: GaAccountRpcJoin,
+): Promise<void> {
+  await accounts.assertCurrentStoreInput(harness.paths, harness.caseId)
+  const configPath = join(harness.paths.opencodeConfig, 'opencode.json')
+  const configHash = sha256(readFileSync(configPath))
+  const key = await connectGaNativeKey(harness)
+  requireCondition(typeof key.id === 'string', 'GA_NATIVE_KEY_MISSING')
+  const nativeBefore = await gaNativeKeyBytes(harness, key.id)
+  const placeholder = await loginGaPool(harness)
+  await captureGaPlaceholder(harness, placeholder.id)
+  const session = await harness.native.create(
+    harness.paths.project,
+    publicGaModel(),
+    'Pool login fixed title',
+  )
+  const snapshot = await accounts.snapshot(harness, session)
+  requireCondition(
+    snapshot.rows.length === 1 && snapshot.rows[0]?.enabled,
+    'GA_POOL_LOGIN_ACCOUNT_NOT_COMMITTED',
+  )
+  const result = await harness.run(publicGaModel(), undefined, false, session)
+  assertGaSuccess(result, harness.nonce)
+  const assistant = result.completion?.assistant
+  requireCondition(
+    assistant?.type === 'assistant' &&
+      assistant.tokens?.input === 7 &&
+      assistant.tokens.output === 2,
+    'GA_POOL_LOGIN_USAGE_MISSING',
+  )
+  const primary = gaPrimaryRequests(harness)
+  requireCondition(
+    primary.length === 1 &&
+      primary[0]?.authorization === 'Bearer synthetic-ga-reauthorized-access' &&
+      record(JSON.parse(primary[0].body)).project === 'synthetic-ga-project',
+    'GA_POOL_LOGIN_WRONG_UPSTREAM_CREDENTIAL',
+  )
+  requireCondition(
+    primary.every(
+      (request) =>
+        !JSON.stringify(request).includes('common-auth-placeholder.') &&
+        !JSON.stringify(request).includes('synthetic-ga-key'),
+    ),
+    'GA_POOL_LOGIN_HOST_CREDENTIAL_EGRESS',
+  )
+  await assertGaActivePlaceholder(harness.host.url, placeholder)
+  const nativeAfter = await gaNativeKeyBytes(harness, key.id)
+  requireCondition(
+    JSON.stringify(nativeBefore) === JSON.stringify(nativeAfter) &&
+      sha256(readFileSync(configPath)) === configHash,
+    'GA_POOL_LOGIN_CHANGED_NATIVE_KEY_OR_CONFIG',
+  )
+  writeFileSync(
+    join(harness.paths.state, 'pool-login-preservation.json'),
+    JSON.stringify({ nativeBefore, nativeAfter, configHash, snapshot }),
+    { mode: 0o600 },
+  )
+}
+
+export async function runGaOwnershipPassthrough(
+  harness: GaHarness,
+  accounts: GaAccountRpcJoin,
+): Promise<void> {
+  const key = await connectGaNativeKey(harness)
+  const session = await harness.native.create(
+    harness.paths.project,
+    publicGaModel(),
+    'Passthrough fixed title',
+  )
+  const before = await accounts.snapshot(harness, session)
+  requireCondition(
+    before.rows.length > 0,
+    'GA_PASSTHROUGH_REQUIRES_POPULATED_POOL',
+  )
+  const requestOffset = harness.mock.requests.length
+  const eventOffset = harness.readWrapperEvents().length
+  const first = await harness.run(
+    publicGaModel(),
+    `Direct first ${harness.nonce}`,
+    false,
+    session,
+  )
+  const firstRecords = harness.mock.requests.slice(requestOffset)
+  requireCondition(
+    firstRecords.length === 1 &&
+      firstRecords[0]?.kind === 'direct-provider' &&
+      firstRecords[0].responseStatus === 200,
+    'GA_PASSTHROUGH_FIRST_NOT_SINGLE_SUCCESS',
+  )
+  const retryNonce = newGaNonce()
+  harness.mock.failNextDirectProvider(retryNonce)
+  const secondOffset = harness.mock.requests.length
+  const second = await harness.run(
+    publicGaModel(),
+    `Direct retry ${retryNonce}`,
+    false,
+    session,
+  )
+  const secondRecords = harness.mock.requests.slice(secondOffset)
+  requireCondition(
+    secondRecords.length === 2 &&
+      secondRecords.every(
+        (request) =>
+          request.kind === 'direct-provider' &&
+          request.body.includes(retryNonce) &&
+          request.headers['x-opencode-session-id'] === session.id,
+      ) &&
+      secondRecords[0]?.responseStatus === 500 &&
+      secondRecords[1]?.responseStatus === 200,
+    'GA_PASSTHROUGH_NATIVE_RETRY_MISSING',
+  )
+  requireCondition(
+    secondRecords[0]?.body === secondRecords[1]?.body &&
+      JSON.stringify(secondRecords[0]?.headers) ===
+        JSON.stringify(secondRecords[1]?.headers),
+    'GA_PASSTHROUGH_RETRY_BYTES_CHANGED',
+  )
+  const after = await accounts.snapshot(harness, session)
+  assertGaPassthroughEvidence(
+    harness,
+    session,
+    requestOffset,
+    eventOffset,
+    before,
+    after,
+    [first, second],
+  )
+  const active = (await gaCredentialEntries(harness.host.url)).filter(
+    (entry) => entry.integrationID === 'google' && entry.active === true,
+  )
+  requireCondition(
+    active.length === 1 && active[0]?.id === key.id,
+    'GA_PASSTHROUGH_NATIVE_KEY_CHANGED',
+  )
+  writeFileSync(
+    join(harness.paths.state, 'passthrough-interval.json'),
+    JSON.stringify({
+      session,
+      requestOffset,
+      eventOffset,
+      before,
+      after,
+      retryNonce,
+    }),
+    { mode: 0o600 },
+  )
+}
+
+export function assertGaPassthroughEvidence(
+  harness: Pick<GaHarness, 'readWrapperEvents' | 'nonce'> & {
+    mock: Pick<GaMock, 'requests'>
+  },
+  session: GaSessionRef,
+  requestOffset: number,
+  eventOffset: number,
+  before: GaAccountObservation,
+  after: GaAccountObservation,
+  results: GaRunResult[],
+): void {
+  const records = harness.mock.requests.slice(requestOffset)
+  const events = harness.readWrapperEvents().slice(eventOffset)
+  requireCondition(
+    records.length === 3 &&
+      records[0]?.responseStatus === 200 &&
+      records[1]?.responseStatus === 500 &&
+      records[2]?.responseStatus === 200 &&
+      records.every(
+        (request) =>
+          request.kind === 'direct-provider' &&
+          request.headers['x-opencode-session-id'] === session.id &&
+          request.headers['x-goog-api-key'] === 'synthetic-ga-key' &&
+          !JSON.stringify(request).includes('common-auth-placeholder.') &&
+          Object.keys(request.headers).every(
+            (header) => !/^x-(agy|antigravity|claustrum)/i.test(header),
+          ),
+      ),
+    'GA_PASSTHROUGH_FOREIGN_WIRE_CHANGED',
+  )
+  requireCondition(
+    records[1]?.body === records[2]?.body &&
+      JSON.stringify(records[1]?.headers) ===
+        JSON.stringify(records[2]?.headers),
+    'GA_PASSTHROUGH_RETRY_BYTES_CHANGED',
+  )
+  requireCondition(
+    !events.some(
+      (event) =>
+        event.event === 'send.start' || event.event === 'refreshAccessToken',
+    ) && JSON.stringify(before.rows) === JSON.stringify(after.rows),
+    'GA_PASSTHROUGH_ACCOUNT_ACQUISITION',
+  )
+  const prepared = events.filter(
+    (event) => event.event === 'native.foreign.prepared',
+  )
+  const dispatched = events.filter(
+    (event) => event.event === 'native.foreign.dispatched',
+  )
+  requireCondition(
+    prepared.length === 3 &&
+      dispatched.length === 3 &&
+      prepared.every((event, index) => {
+        const sent = dispatched[index]
+        const wire = records[index]
+        return (
+          sent !== undefined &&
+          wire !== undefined &&
+          event.kind === 'primary' &&
+          event.sessionID === session.id &&
+          event.url === sent.url &&
+          event.body === sent.body &&
+          JSON.stringify(event.headers) === JSON.stringify(sent.headers) &&
+          wire?.body === event.body &&
+          Object.entries(record(event.headers)).every(
+            ([header, value]) => wire.headers[header] === value,
+          )
+        )
+      }),
+    'GA_PASSTHROUGH_PLUGIN_REWRITE_OR_BRIDGE',
+  )
+  requireCondition(
+    results.length === 2 &&
+      results.every(
+        (result) =>
+          result.code === 0 &&
+          !result.timedOut &&
+          !result.outputCapExceeded &&
+          gaSessionErrors(result.stdout).length === 0 &&
+          result.stdout.includes(`GA_DIRECT_OK_${harness.nonce}`),
+      ),
+    'GA_PASSTHROUGH_NATIVE_COMPLETION_MISSING',
+  )
+}
+
+export async function runGaOwnershipEmptyPool(
+  harness: GaHarness,
+  accounts: GaAccountRpcJoin,
+): Promise<void> {
+  await accounts.assertCurrentStoreInput(harness.paths, harness.caseId)
+  const placeholder = await loginGaPool(harness)
+  const session = await harness.native.create(
+    harness.paths.project,
+    publicGaModel(),
+    'Empty pool fixed title',
+  )
+  const before = await accounts.snapshot(harness, session)
+  const row = before.rows[0]
+  requireCondition(
+    before.rows.length === 1 && row,
+    'GA_EMPTY_POOL_LOGIN_NOT_SOLE_ACCOUNT',
+  )
+  const target = await accounts.captureTarget(harness, session, row.publicId)
+  const removed = await accounts.applyCapturedTarget(
+    harness,
+    session,
+    'remove',
+    target,
+  )
+  requireCondition(removed.ok, 'GA_EMPTY_POOL_REMOVE_REFUSED')
+  const after = await accounts.snapshot(harness, session)
+  requireCondition(after.rows.length === 0, 'GA_EMPTY_POOL_STILL_POPULATED')
+  await assertGaActivePlaceholder(harness.host.url, placeholder)
+  const requestOffset = harness.mock.requests.length
+  const eventOffset = harness.readWrapperEvents().length
+  const result = await harness.run(publicGaModel(), undefined, false, session)
+  const messages = await harness.native.messages(session)
+  requireCondition(
+    !result.timedOut &&
+      !result.outputCapExceeded &&
+      gaSessionErrors(result.stdout).length > 0 &&
+      !result.completion &&
+      !messages.some(
+        (message) =>
+          message.type === 'assistant' &&
+          message.finish === 'stop' &&
+          message.error == null,
+      ),
+    'GA_EMPTY_POOL_NOT_TERMINAL_NATIVE_ERROR',
+  )
+  requireCondition(
+    harness.mock.requests
+      .slice(requestOffset)
+      .every(
+        (request) =>
+          request.kind !== 'direct-provider' &&
+          !request.path.startsWith('/agy/'),
+      ) &&
+      !harness
+        .readWrapperEvents()
+        .slice(eventOffset)
+        .some((event) => event.event === 'send.start'),
+    'GA_EMPTY_POOL_SENT_UPSTREAM',
+  )
+  await assertGaActivePlaceholder(harness.host.url, placeholder)
+  writeFileSync(
+    join(harness.paths.state, 'empty-pool.json'),
+    JSON.stringify({
+      before,
+      after,
+      requestOffset,
+      eventOffset,
+      result,
+      messages,
+    }),
+    { mode: 0o600 },
   )
 }
 
@@ -6208,6 +6766,105 @@ export interface GaScenarioResult {
   artifacts: Record<string, string>
 }
 
+export const GA_SMOKE_CASE_IDS = [
+  'ga-ownership-pool-login',
+  'terminal-frame',
+  'ga-ownership-passthrough',
+  'ga-ownership-empty-pool',
+] as const satisfies readonly GaCaseId[]
+
+async function retainGaScenario(
+  harness: GaHarness,
+  started: number,
+  proof: GaScenarioResult['proof'],
+): Promise<GaScenarioResult> {
+  const id = harness.caseId
+  assertGaDatabase(harness.paths)
+  assertGaNoDirectProvider(
+    id,
+    harness.mock.requests.filter(
+      (request) => request.kind === 'direct-provider',
+    ).length,
+  )
+  writeFileSync(
+    join(harness.paths.state, 'mock-requests.json'),
+    JSON.stringify(harness.mock.requests),
+    { mode: 0o600 },
+  )
+  await harness.dispose()
+  const result: GaScenarioResult = {
+    id,
+    state: 'runtime-verified',
+    proof,
+    root: harness.paths.root,
+    nonce: harness.nonce,
+    elapsedMs: gaTimestamp() - started,
+    pinSha256: sha256(readFileSync(GA_PIN_PATH)),
+    artifacts: gaCaseArtifacts(harness.paths.root),
+  }
+  requireCondition(
+    Object.keys(result.artifacts).length > 0 &&
+      result.elapsedMs > 0 &&
+      result.elapsedMs <= 60_000,
+    `Missing/late retained observations for ${id}`,
+  )
+  return result
+}
+
+export async function runGaSmoke(
+  out: string,
+  inputs: GaHostIntegrationInputs,
+): Promise<GaScenarioResult[]> {
+  requireCondition(
+    isAbsolute(out) && existsSync(out) && readdirSync(out).length === 0,
+    'Smoke GA output root must exist and be fresh/empty',
+  )
+  const results: GaScenarioResult[] = []
+  for (const id of GA_SMOKE_CASE_IDS) {
+    const started = gaTimestamp()
+    const harness = await createOpenCodeGaHarness(id, out, {
+      accounts: inputs.accounts,
+      ...(id === 'terminal-frame'
+        ? {
+            rawSender: true,
+            rawTls: {
+              identity: 'matching' as const,
+              phase: 'success' as const,
+            },
+          }
+        : {}),
+    })
+    try {
+      if (id === 'ga-ownership-pool-login')
+        await runGaOwnershipPoolLogin(harness, inputs.accounts)
+      else if (id === 'ga-ownership-passthrough')
+        await runGaOwnershipPassthrough(harness, inputs.accounts)
+      else if (id === 'ga-ownership-empty-pool')
+        await runGaOwnershipEmptyPool(harness, inputs.accounts)
+      else {
+        const trace = await runGaRawTlsCase(harness, false)
+        for (const body of trace.primaryBodies)
+          assertGaWire({ body }, publicGaModel())
+      }
+      const result = await retainGaScenario(harness, started, 'native-host')
+      results.push(result)
+      writeFileSync(
+        join(out, `${String(results.length).padStart(3, '0')}-result.json`),
+        JSON.stringify(result),
+        { mode: 0o600, flag: 'wx' },
+      )
+    } finally {
+      await harness.dispose()
+    }
+  }
+  writeFileSync(
+    join(out, 'smoke-results.json'),
+    JSON.stringify({ status: 'runtime-verified', results }),
+    { mode: 0o600, flag: 'wx' },
+  )
+  return results
+}
+
 function gaCaseArtifacts(root: string): Record<string, string> {
   const artifacts: Record<string, string> = {}
   const visit = (directory: string) => {
@@ -6342,7 +6999,14 @@ export async function runGaFullDriver(
         harness = await createOpenCodeGaHarness(id, out, {
           accounts: inputs.accounts,
         })
-        if (core.has(id)) await runGaCoreScenario(harness, id, inputs.accounts)
+        if (id === 'ga-ownership-pool-login')
+          await runGaOwnershipPoolLogin(harness, inputs.accounts)
+        else if (id === 'ga-ownership-passthrough')
+          await runGaOwnershipPassthrough(harness, inputs.accounts)
+        else if (id === 'ga-ownership-empty-pool')
+          await runGaOwnershipEmptyPool(harness, inputs.accounts)
+        else if (core.has(id))
+          await runGaCoreScenario(harness, id, inputs.accounts)
         else if (id === 'late-unrelated-response')
           await runGaUnrelatedResponse(harness)
         else if (
@@ -6369,35 +7033,7 @@ export async function runGaFullDriver(
         else await runGaRequiredControl(harness, id, inputs)
       }
       requireCondition(harness, `Scenario has no actual harness: ${id}`)
-      assertGaDatabase(harness.paths)
-      assertGaNoDirectProvider(
-        id,
-        harness.mock.requests.filter(
-          (request) => request.kind === 'direct-provider',
-        ).length,
-      )
-      writeFileSync(
-        join(harness.paths.state, 'mock-requests.json'),
-        JSON.stringify(harness.mock.requests),
-        { mode: 0o600 },
-      )
-      await harness.dispose()
-      const result: GaScenarioResult = {
-        id,
-        state: 'runtime-verified',
-        proof,
-        root: harness.paths.root,
-        nonce: harness.nonce,
-        elapsedMs: gaTimestamp() - started,
-        pinSha256: sha256(readFileSync(GA_PIN_PATH)),
-        artifacts: gaCaseArtifacts(harness.paths.root),
-      }
-      requireCondition(
-        Object.keys(result.artifacts).length > 0 &&
-          result.elapsedMs > 0 &&
-          result.elapsedMs <= 60_000,
-        `Missing/late retained observations for ${id}`,
-      )
+      const result = await retainGaScenario(harness, started, proof)
       results.push(result)
       writeFileSync(
         join(out, `${String(results.length).padStart(3, '0')}-result.json`),
