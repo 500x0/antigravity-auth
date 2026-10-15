@@ -233,7 +233,8 @@ try {
     provider: 'google',
     placeholderKey: 'antigravity-vault-custody',
   })
-  // Fixture preparation creates a genuine valid stash; no provider or enrollment is contacted.
+  // Use Pi's public slot API to stash the synthetic Google login;
+  // no OAuth or vault enrollment request is made.
   await slot.enterVault()
   const paths = [authPath, stashPath]
   const bytes = await Promise.all(paths.map((path) => readFile(path)))
@@ -291,7 +292,8 @@ try {
     'real CLI dry-run selected Pi without inspecting, locking or repairing its weak fixture files',
   )
 
-  // Observe and forward the actual migration warning without replacing emitWarning.
+  // Observe PrivateFileMigration warnings from repairing the fixture DACLs
+  // without replacing emitWarning.
   process.on('warning', onWarning)
   await assertSetupHostsStopped()
   assert.deepEqual(await slot.inspect(), {
