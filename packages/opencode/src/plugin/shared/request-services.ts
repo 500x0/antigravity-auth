@@ -492,6 +492,25 @@ export function routeTitleModel(url: string): string {
 }
 
 /**
+ * Return the retired-model error using only the model registry: callers need
+ * neither an initialized account store nor an available vault to reject it.
+ */
+export function retiredModelResponse(url: string): Response | undefined {
+  const model = extractModelFromUrl(url)
+  if (!model || !isRetiredAgyModel(model)) return undefined
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: 412,
+        status: 'FAILED_PRECONDITION',
+        message: RETIRED_AGY_MODEL_MESSAGE,
+      },
+    }),
+    { status: 412, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
+/**
  * The AGY metadata key for a request: the host session for primary (and
  * kind-less) requests, a separate per-kind key for every other kind.
  */
@@ -838,19 +857,9 @@ export function createRequestExecutor<A extends RequestAccountRow>(
       input = routed
     }
 
+    const retired = retiredModelResponse(input)
+    if (retired) return retired
     const selectedModel = extractModelFromUrl(input)
-    if (selectedModel && isRetiredAgyModel(selectedModel)) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            code: 412,
-            status: 'FAILED_PRECONDITION',
-            message: RETIRED_AGY_MODEL_MESSAGE,
-          },
-        }),
-        { status: 412, headers: { 'Content-Type': 'application/json' } },
-      )
-    }
 
     let variant: PrepareRequestOptions['variant']
     if (selectedVariant !== undefined) {

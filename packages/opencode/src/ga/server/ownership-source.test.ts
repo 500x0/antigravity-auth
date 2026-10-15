@@ -1,5 +1,13 @@
 import { expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -15,6 +23,10 @@ import {
   createGaRuntimeCollaborators,
 } from '../../plugin/ga-location-services.ts'
 import { createLocationRuntime } from '../../plugin/shared/runtime.ts'
+import {
+  createOpenCodeVaultCustody,
+  OPENCODE_VAULT_ENROLLMENT_NAME,
+} from '../../plugin/vault-custody.ts'
 import {
   createGaRawSender,
   type GaHttpRequestEvent,
@@ -246,3 +258,219 @@ it('selects pool then approved vault under the same prepared placeholder through
     }
   }
 })
+
+for (const source of ['cold local', 'unavailable vault'] as const) {
+  it(`rejects retired non-title requests before ${source} construction through loopback`, async () => {
+    // The vault rejects enrollment-token paths with writable shared ancestors.
+    // A test runner may put TMPDIR under such a node_modules directory.
+    const root = realpathSync(
+      mkdtempSync(
+        join(
+          process.platform === 'win32' ? tmpdir() : '/tmp',
+          'ga-retired-source-',
+        ),
+      ),
+    )
+    const directory = join(root, 'location')
+    const accountFile = join(directory, 'antigravity-accounts.json')
+    const missingConnection = join(root, 'absent-connection.json')
+    const previous = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = join(root, 'config')
+    let connects = 0
+    let storeLoads = 0
+    let sourceLoads = 0
+    let refreshFailures = 0
+    let sends = 0
+    let localPipelines = 0
+    let hostSlotReads = 0
+    const initialConnection = Promise.withResolvers<void>()
+    const custody = createOpenCodeVaultCustody({
+      accountFile,
+      reporterSource: 'direct',
+      readHostSlot: async () => {
+        hostSlotReads++
+        throw new Error('The isolated fixture has no host credential slot')
+      },
+      connectionFile: () => missingConnection,
+      connectEnrollment: async () => ({
+        enrollPropose: async () => ({ requestId: 'synthetic-request' }),
+        enrollPoll: async () => ({
+          status: 'approved',
+          name: OPENCODE_VAULT_ENROLLMENT_NAME,
+          token: 'ab'.repeat(32),
+          tokenGeneration: 1,
+        }),
+        close() {},
+      }),
+      connect: async () => {
+        connects++
+        // The enrolled vault connector reads a missing owned file, so refresh
+        // fails with the OS ENOENT rather than a fabricated admission error.
+        try {
+          await readFile(missingConnection)
+          throw new Error('The absent connection file unexpectedly exists')
+        } finally {
+          initialConnection.resolve()
+        }
+      },
+    })
+    const accounts: Parameters<
+      typeof createGaLocalRequestPipeline
+    >[0]['accounts'] = { current: null, quotaLogger: null }
+    const factory = createGaLocationServicesFactory({
+      now: Date.now,
+      loadStoreModules: () => {
+        storeLoads++
+        return loadCommonAuthStoreModules()
+      },
+      resolveAccountFile: () => accountFile,
+      runtime: (input) =>
+        createGaRuntimeCollaborators({ ...input, accounts, now: Date.now }),
+      createPipeline: async (input) => {
+        localPipelines++
+        return createGaLocalRequestPipeline({ ...input, accounts })
+      },
+      ...(source === 'unavailable vault'
+        ? {
+            custody: () => ({
+              ...custody,
+              custodySource: async () => {
+                sourceLoads++
+                const actual = await custody.custodySource()
+                return {
+                  ...actual,
+                  refresh: async () => {
+                    try {
+                      await actual.refresh()
+                    } catch (error) {
+                      refreshFailures++
+                      throw error
+                    }
+                  },
+                }
+              },
+            }),
+          }
+        : {}),
+    })
+    let services: Awaited<ReturnType<typeof factory>> | undefined
+    let runtime: Awaited<ReturnType<typeof createLocationRuntime>> | undefined
+    let bridge: Awaited<ReturnType<typeof startGaLoopbackBridge>> | undefined
+    try {
+      mkdirSync(join(directory, '.opencode'), { recursive: true })
+      writeFileSync(
+        join(directory, '.opencode', 'antigravity.json'),
+        JSON.stringify({
+          background_quota_refresh: false,
+          proactive_token_refresh: false,
+          request_jitter_max_ms: 0,
+        }),
+      )
+      if (source === 'unavailable vault') {
+        expect((await custody.requestAccess()).state).toBe('approved')
+      }
+      const send = async () => {
+        sends++
+        throw new Error('Unavailable sources cannot send')
+      }
+      services = await factory({ directory, overrides: { send } })
+      runtime = await createLocationRuntime({ ...services.runtime, directory })
+      const serving = await services.start({
+        runtime,
+        generation: 'retired-source',
+        send,
+        notify: () => null,
+        isConnected: () => false,
+      })
+      bridge = await startGaLoopbackBridge({ execute: serving.execute, send })
+      const ownership = new GaRequestOwnership()
+      const catalog = gaCatalogModels()
+      const dispatch = async (
+        kind: GaHttpRequestEvent['kind'],
+        modelID: string,
+      ) => {
+        if (!bridge) throw new Error('Bridge not started')
+        const event: GaHttpRequestEvent = {
+          sessionID: 'ses_retired_source',
+          kind,
+          model: { id: modelID, providerID: 'google' },
+          request: new Request(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelID}:streamGenerateContent?alt=sse`,
+            {
+              method: 'POST',
+              headers: { 'x-goog-api-key': placeholderSecret('google') },
+              body: JSON.stringify({
+                contents: [
+                  { role: 'user', parts: [{ text: 'source admission' }] },
+                ],
+              }),
+            },
+          ),
+        }
+        await rewriteGaHttpRequest(event, {
+          bridge,
+          ownership,
+          isRegisteredModel: (id) => catalog.has(id),
+          env: {},
+        })
+        expect(new URL(event.request.url).origin).toBe(bridge.origin)
+        return fetch(event.request)
+      }
+      // Approval starts a background connection attempt. Finish it before
+      // measuring request-driven source access, without disabling the observer.
+      if (source === 'unavailable vault') await initialConnection.promise
+      const before = { connects, storeLoads, sourceLoads, refreshFailures }
+      for (const kind of ['primary', 'compaction', 'generate'] as const) {
+        const retired = await dispatch(kind, 'antigravity-gemini-3.1-pro')
+        expect(retired.status).toBe(412)
+        expect(await retired.json()).toEqual({
+          error: {
+            code: 412,
+            status: 'FAILED_PRECONDITION',
+            message:
+              'This Antigravity model is no longer offered. Choose another model.',
+          },
+        })
+      }
+      expect({ connects, storeLoads, sourceLoads, refreshFailures }).toEqual(
+        before,
+      )
+      expect(sends).toBe(0)
+      expect(localPipelines).toBe(0)
+      expect(existsSync(accountFile)).toBe(false)
+      // Title replacements and live models still initialize local storage or
+      // refresh vault credentials, unlike retired non-title selections.
+      for (const [kind, modelID] of [
+        ['title', 'antigravity-gemini-3.1-pro'],
+        ['primary', 'antigravity-gemini-3.5-flash'],
+      ] as const) {
+        const control = await dispatch(kind, modelID)
+        expect(control.status).toBe(502)
+        expect(await control.text()).toContain(
+          source === 'cold local' ? 'not initialized' : 'ENOENT',
+        )
+      }
+      if (source === 'cold local') expect(storeLoads).toBeGreaterThan(0)
+      else {
+        expect(sourceLoads).toBeGreaterThan(before.sourceLoads)
+        expect(refreshFailures).toBe(2)
+        expect(connects).toBeGreaterThan(before.connects)
+      }
+      expect(sends).toBe(0)
+      expect(localPipelines).toBe(0)
+      expect(hostSlotReads).toBe(0)
+      expect(bridge.pendingJobs()).toBe(0)
+    } finally {
+      try {
+        await bridge?.dispose()
+        await runtime?.dispose()
+        await services?.dispose()
+        await custody.dispose()
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+        else process.env.OPENCODE_CONFIG_DIR = previous
+        rmSync(root, { recursive: true, force: true })
+      }
+    }
+  })
+}

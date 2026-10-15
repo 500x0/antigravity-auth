@@ -386,9 +386,16 @@ export interface GaLoopbackBridge {
   adaptResponse(request: Request, response: Response): Response | null
   /** Jobs registered or running (diagnostics and tests). */
   pendingJobs(): number
+  /** Read-only bridge-tracked response counts; no bodies, errors or credentials. */
+  retainedResponses(): {
+    unclaimed: number
+    claimed: number
+    failures: number
+    timers: number
+  }
   /**
    * Stop accepting connections, abort every running job, close every
-   * socket and wait for the server to close. Idempotent.
+   * socket, drain running readers and clear response ownership. Idempotent.
    */
   dispose(): Promise<void>
 }
@@ -420,25 +427,45 @@ export async function startGaLoopbackBridge(
     { job: GaBridgeJob; timer: ReturnType<typeof setTimeout> }
   >()
   const running = new Set<AbortController>()
+  const reads = new Set<Promise<void>>()
   const sockets = new Set<Socket>()
-  // Post-header failures by job id, held until the job's adapted response
-  // reads them or the hold expires.
-  const failures = new Map<
+  interface ResponseLifetime {
+    id: string
+    failure: Error | undefined
+    claimed: boolean
+    released: boolean
+    reference?: WeakRef<ResponseLifetime>
+  }
+  // Responses not yet wrapped by adaptResponse stay in this map with a bounded
+  // hold after completion. Once wrapped, the body's closure keeps the upstream
+  // Error available to slow readers without an expiring global error record.
+  const unclaimed = new Map<
     string,
-    { error: Error; timer: ReturnType<typeof setTimeout> }
+    { state: ResponseLifetime; timer?: ReturnType<typeof setTimeout> }
   >()
-  const recordFailure = (id: string, error: Error): void => {
-    const timer = setTimeout(() => failures.delete(id), GA_UNCLAIMED_JOB_TTL_MS)
-    timer.unref?.()
-    failures.set(id, { error, timer })
+  // Weak references let disposal detach its bookkeeping without keeping
+  // abandoned response bodies (and their errors) alive.
+  const lifetimes = new Set<WeakRef<ResponseLifetime>>()
+  const finalized = new FinalizationRegistry<WeakRef<ResponseLifetime>>(
+    (reference) => lifetimes.delete(reference),
+  )
+  const release = (state: ResponseLifetime, discardFailure = true): void => {
+    state.released = true
+    if (discardFailure) state.failure = undefined
+    const entry = unclaimed.get(state.id)
+    if (entry?.state === state) {
+      clearTimeout(entry.timer)
+      unclaimed.delete(state.id)
+    }
+    if (state.reference) lifetimes.delete(state.reference)
+    finalized.unregister(state)
   }
-  const takeFailure = (id: string): Error | undefined => {
-    const entry = failures.get(id)
-    if (!entry) return undefined
-    clearTimeout(entry.timer)
-    failures.delete(id)
-    return entry.error
+  const takeFailure = (state: ResponseLifetime): Error | undefined => {
+    const failure = state.failure
+    release(state)
+    return failure
   }
+  let closing = false
   let disposal: Promise<void> | null = null
   const report = (message: string): void => {
     try {
@@ -449,7 +476,7 @@ export async function startGaLoopbackBridge(
   }
 
   const server: Server = createServer((request, response) => {
-    void handle(request, response).catch((error) => {
+    const pending = handle(request, response).catch((error) => {
       report(`bridge request failed: ${errorMessage(error)}`)
       if (!response.headersSent) {
         writeResponseHead(response, 500, 'application/json')
@@ -458,6 +485,8 @@ export async function startGaLoopbackBridge(
         response.destroy()
       }
     })
+    reads.add(pending)
+    void pending.finally(() => reads.delete(pending))
   })
   server.on('connection', (socket) => {
     sockets.add(socket)
@@ -477,7 +506,7 @@ export async function startGaLoopbackBridge(
     const entry = id ? queued.get(id) : undefined
     // The body is always `{}`; read and ignore it so the socket stays usable.
     request.resume()
-    if (request.method !== 'POST' || !id || !entry || disposal) {
+    if (request.method !== 'POST' || !id || !entry || closing) {
       writeResponseHead(response, 404, 'application/json')
       response.end(JSON.stringify({ error: { message: 'unknown job' } }))
       return
@@ -485,6 +514,18 @@ export async function startGaLoopbackBridge(
     // A job runs at most once.
     queued.delete(id)
     clearTimeout(entry.timer)
+
+    const state: ResponseLifetime = {
+      id,
+      failure: undefined,
+      claimed: false,
+      released: false,
+    }
+    const reference = new WeakRef(state)
+    state.reference = reference
+    lifetimes.add(reference)
+    finalized.register(state, reference, state)
+    unclaimed.set(id, { state })
 
     const controller = new AbortController()
     running.add(controller)
@@ -503,11 +544,24 @@ export async function startGaLoopbackBridge(
       } catch (error) {
         upstream = gaPreHeaderFailureResponse(error)
       }
-      await pipeResponse(upstream, response, (error) =>
-        recordFailure(id, error),
-      )
+      await pipeResponse(upstream, response, (error) => {
+        // An adapted body owns its error even while disposal drains its reader.
+        // Unadapted jobs must not create retained failures after closing starts.
+        if (!state.released && (state.claimed || !closing))
+          state.failure = error
+      })
     } finally {
       running.delete(controller)
+      if (!closing && !state.claimed && !state.released) {
+        const entry = unclaimed.get(id)
+        if (entry) {
+          entry.timer = setTimeout(
+            () => release(state),
+            GA_UNCLAIMED_JOB_TTL_MS,
+          )
+          entry.timer.unref?.()
+        }
+      }
     }
   }
 
@@ -527,7 +581,7 @@ export async function startGaLoopbackBridge(
     port: address.port,
     origin,
     rewrite(original, job, env) {
-      if (disposal) throw new Error('The Antigravity bridge is disposed')
+      if (closing) throw new Error('The Antigravity bridge is disposed')
       const id = randomUUID()
       const target = `${origin}/agy/${id}`
       assertLoopbackProxyGuard({ env, target })
@@ -557,6 +611,16 @@ export async function startGaLoopbackBridge(
       const source = response.body
       if (!source) return null
       const reader = source.getReader()
+      const entry = unclaimed.get(id)
+      const state: ResponseLifetime = entry?.state ?? {
+        id,
+        failure: undefined,
+        claimed: false,
+        released: true,
+      }
+      state.claimed = true
+      clearTimeout(entry?.timer)
+      unclaimed.delete(id)
       const body = new ReadableStream<Uint8Array>({
         async pull(controller) {
           try {
@@ -565,19 +629,25 @@ export async function startGaLoopbackBridge(
               // The bridge ends a failed job's loopback body cleanly after
               // its last byte and records the failure first, so the end of
               // the body is where the genuine error is delivered.
-              const failure = takeFailure(id)
+              const failure = takeFailure(state)
+              reader.releaseLock()
               if (failure) controller.error(failure)
               else controller.close()
               return
             }
             controller.enqueue(value)
           } catch (error) {
-            controller.error(takeFailure(id) ?? error)
+            controller.error(takeFailure(state) ?? error)
+            reader.releaseLock()
           }
         },
-        cancel(reason) {
-          takeFailure(id)
-          return reader.cancel(reason)
+        async cancel(reason) {
+          release(state)
+          try {
+            await reader.cancel(reason)
+          } finally {
+            reader.releaseLock()
+          }
         },
       })
       return new Response(body, {
@@ -587,13 +657,27 @@ export async function startGaLoopbackBridge(
       })
     },
     pendingJobs: () => queued.size + running.size,
+    retainedResponses() {
+      let claimed = 0
+      let failures = 0
+      let timers = 0
+      for (const reference of lifetimes) {
+        const state = reference.deref()
+        if (!state || state.released) continue
+        if (state.claimed) claimed++
+        if (state.failure) failures++
+      }
+      for (const entry of unclaimed.values()) {
+        if (entry.timer) timers++
+      }
+      return { unclaimed: unclaimed.size, claimed, failures, timers }
+    },
     dispose() {
       if (!disposal) {
+        closing = true
         disposal = (async () => {
           for (const { timer } of queued.values()) clearTimeout(timer)
           queued.clear()
-          for (const { timer } of failures.values()) clearTimeout(timer)
-          failures.clear()
           const closed = new Promise<void>((resolve) => {
             server.close(() => resolve())
           })
@@ -603,7 +687,16 @@ export async function startGaLoopbackBridge(
             )
           }
           for (const socket of sockets) socket.destroy()
+          await Promise.allSettled([...reads])
           await closed
+          for (const reference of lifetimes) {
+            const state = reference.deref()
+            // Detach every bridge owner, but leave an adapted body's terminal
+            // error in its own closure until EOF, cancellation or collection.
+            if (state) release(state, !state.claimed)
+          }
+          lifetimes.clear()
+          unclaimed.clear()
         })()
       }
       return disposal
@@ -654,6 +747,10 @@ async function pipeResponse(
 ): Promise<void> {
   const contentType =
     upstream.headers.get('content-type') ?? 'application/octet-stream'
+  if (response.destroyed) {
+    await upstream.body?.cancel().catch(() => {})
+    return
+  }
   writeResponseHead(response, upstream.status, contentType)
   if (!upstream.body) {
     response.end()
@@ -672,7 +769,11 @@ async function pipeResponse(
       if (eventStream) {
         tail = (tail + Buffer.from(value).toString('latin1')).slice(-2)
       }
-      if (!response.write(value)) {
+      if (response.destroyed) {
+        await reader.cancel().catch(() => {})
+        return
+      }
+      if (!response.write(value) && !response.destroyed) {
         await new Promise<void>((resolve) => {
           response.once('drain', resolve)
           response.once('close', resolve)
@@ -691,6 +792,8 @@ async function pipeResponse(
     onFailure(error)
     response.end()
     return
+  } finally {
+    reader.releaseLock()
   }
   if (eventStream && wroteAny && tail !== '\n\n') {
     response.write(tail.endsWith('\n') ? '\n' : '\n\n')
