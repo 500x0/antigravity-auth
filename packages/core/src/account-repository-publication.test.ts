@@ -272,6 +272,20 @@ for (const step of [
         maxBuffer: 128 * 1024,
       },
     )
+    // Print captured child output before an assertion hides the failure reason.
+    if (child.error || child.signal || child.status !== 91 || child.stderr) {
+      console.error(
+        'Unexpected publication crash-child result',
+        JSON.stringify({
+          step,
+          error: child.error?.stack ?? null,
+          status: child.status,
+          signal: child.signal,
+          stdout: child.stdout,
+          stderr: child.stderr,
+        }),
+      )
+    }
     expect(child.error).toBeUndefined()
     expect(child.signal).toBeNull()
     expect(child.status).toBe(91)
