@@ -20,7 +20,11 @@ import {
   redactDacl,
 } from '../windows-vault/dacl.mjs'
 import { redactFailureText } from '../windows-vault/failure.mjs'
-import { cliEnvironment, verifyWithReceipt } from './harness.mjs'
+import {
+  cliEnvironment,
+  runSetupWithEnvironment,
+  verifyWithReceipt,
+} from './harness.mjs'
 
 if (process.platform !== 'win32') {
   console.error(
@@ -326,6 +330,16 @@ async function verify(stage) {
     'CLI must retain its inherited executable search path',
   )
   result.executableSearchPath.childRetainedInheritedPath = true
+  const { findExecutableOnPath } = await import(
+    '../../packages/opencode/dist/src/common-auth-embedded/setup/index.js'
+  )
+  for (const name of ['opencode', 'pi', 'ck']) {
+    assert.equal(
+      findExecutableOnPath(name, { env: cliEnv }),
+      join(bin, `${name}.cmd`),
+      `Setup must admit its owned ${name} executable`,
+    )
+  }
   assert.deepEqual(pathEntries(process.env), pathEntries(previous))
   const beforePreview = await snapshotFiles()
   const preview = spawnSync(
@@ -478,14 +492,28 @@ async function verify(stage) {
       throw new Error('ceremony must not poll')
     },
   }
+  const selectedHosts = []
+  const observedPlugin = {
+    ...plugin,
+    async beforeSignIn(host, context) {
+      selectedHosts.push([...context.hosts])
+      return plugin.beforeSignIn(host, context)
+    },
+  }
   const beforeConflict = await snapshotFiles()
   await assert.rejects(
-    runSetup(plugin, ['--yes', '--claustrum', '--opencode=2'], {
-      env,
-      connect: async () => client,
-    }),
+    runSetupWithEnvironment(
+      runSetup,
+      observedPlugin,
+      ['--yes', '--claustrum', '--opencode=2'],
+      cliEnv,
+      {
+        connect: async () => client,
+      },
+    ),
     /saved login|stash|conflict/i,
   )
+  assert.deepEqual(selectedHosts, [['opencode', 'pi']])
   assert.equal(ceremonies, 0)
   assert.deepEqual(
     await snapshotFiles(),

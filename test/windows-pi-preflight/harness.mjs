@@ -14,6 +14,18 @@ export function cliEnvironment(env, bin) {
   return child
 }
 
+// Direct setup needs the same executable search path as the CLI child, without
+// changing the parent process environment used by the other privacy checks.
+export function runSetupWithEnvironment(
+  runSetup,
+  plugin,
+  argv,
+  environment,
+  io = {},
+) {
+  return runSetup(plugin, argv, { ...io, env: environment })
+}
+
 export async function verifyWithReceipt({
   evidence,
   result,
