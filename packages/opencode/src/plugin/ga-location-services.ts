@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto'
 import {
   type AccountManager,
   type AccountMetadataV3,
+  type AccountMigrationModules,
   type AccountRepository,
   type AccountRepositoryRead,
   type AccountRow,
@@ -98,6 +99,7 @@ import {
 import type { GeminiDumpState } from './gemini-dump.ts'
 import type { Logger } from './logger.ts'
 import type { OperatorSettings } from './operator-settings.ts'
+import { commitLogins } from './persist-account-pool.ts'
 import {
   createAuthorizedFetchAccountQuota,
   createStoreQuotaService,
@@ -133,7 +135,7 @@ import {
   type VaultStateSource,
   vaultAccountRowKey,
 } from './shared/vault-request-credentials.ts'
-import { getStoragePath } from './storage'
+import { getStoragePath, initializeFreshAccountStoreFor } from './storage'
 import {
   createOpenCodeVaultCustody,
   type OpenCodeVaultCustody,
@@ -967,7 +969,9 @@ type GaStartInput = Parameters<GaLocationServices['start']>[0]
 
 export interface GaLocationServicesBindings {
   /** The common-auth `./store` and `./fs` modules the repository is built on. */
-  readonly loadStoreModules: () => Promise<AccountStoreModules>
+  readonly loadStoreModules: () => Promise<
+    AccountStoreModules & AccountMigrationModules
+  >
   /** Resolve the shared pool; a new workspace must not create a separate account store. */
   readonly resolveAccountFile: (directory: string) => string
   readonly now: () => number
@@ -1056,25 +1060,32 @@ interface LocationRepository {
 }
 
 /**
- * Opens the location's account repository on the migration's canonical
- * binding: a completed generation the repository may open, including to
- * resume its own pending clear or replace work. Binding is not permission
- * to route; `assertServingAdmission` checks that before any credential is
- * used. Initialization and migration are offline CLI operations, never a
- * side effect of activation.
+ * Opens the account store published by initialization or migration. Management
+ * may open that store to recover an unfinished account clear or replacement;
+ * serving requires a separate `assertServingAdmission` check before using
+ * credentials. Activation never initializes or migrates storage. An explicit
+ * pool login may initialize a fresh store, but cannot resume a migration.
  */
 async function openLocationRepository(
   directory: string,
   bindings: GaLocationServicesBindings,
   overrides: GaPluginOverrides,
+  login?: { readonly admit: () => Promise<void> },
 ): Promise<LocationRepository> {
   const legacyPath = bindings.resolveAccountFile(directory)
   const modules = await bindings.loadStoreModules()
-  const binding = await readAccountStoreBinding(
-    legacyPath,
-    modules,
-    bindings.now,
-  )
+  await login?.admit()
+  let binding = await readAccountStoreBinding(legacyPath, modules, bindings.now)
+  await login?.admit()
+  if (login && binding.status === 'initialization-required') {
+    await initializeFreshAccountStoreFor(modules, {
+      legacyPath,
+      now: bindings.now,
+    })
+    await login.admit()
+    binding = await readAccountStoreBinding(legacyPath, modules, bindings.now)
+    await login.admit()
+  }
   if (binding.status !== 'bound') throw storeRefusal(binding)
   return {
     repository: createAccountRepositoryFactory(modules)({
@@ -1981,12 +1992,15 @@ export function createGaLocationServicesFactory(
         await refreshVaultBinding?.()
       }
     }
-    const getRepository = async (): Promise<AccountRepository> => {
+    const getRepository = async (login?: {
+      readonly admit: () => Promise<void>
+    }): Promise<AccountRepository> => {
       await assertLocal()
       repositoryPromise ??= openLocationRepository(
         directory,
         bindings,
         overrides,
+        login,
       ).catch((error) => {
         repositoryPromise = undefined
         throw error
@@ -2070,6 +2084,29 @@ export function createGaLocationServicesFactory(
     }
     return {
       runtime,
+      localLogin: {
+        assertAdmission: assertLocal,
+        async persist(result, admit) {
+          await assertLocal()
+          await admit()
+          const repository = await getRepository({ admit })
+          await admit()
+          const opened = await repositoryPromise
+          await admit()
+          if (!opened)
+            throw new Error('The local repository was not constructed')
+          await assertServingAdmission(opened, bindings.now)
+          await admit()
+          const committed = await commitLogins(repository, [result])
+          await admit()
+          if (committed.length !== 1 || committed[0]?.status !== 'committed')
+            throw new Error(
+              'The Antigravity pool login could not be completed.',
+            )
+          await localPipeline?.refreshAccounts()
+          await admit()
+        },
+      },
       async start(input) {
         if (closing) throw new Error('The location services are disposed')
         if (started) throw new Error('The location services already started')

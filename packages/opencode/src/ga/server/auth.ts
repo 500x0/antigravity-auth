@@ -6,7 +6,7 @@ import {
 } from '@cortexkit/antigravity-auth-core'
 import type { Plugin } from '@opencode/plugin'
 import type { Registration } from '@opencode/plugin/promise/registration'
-
+import { OPENCODE2_VAULT_AUTH_LABEL } from '../../auth-method-labels.ts'
 import { registerOpenCode2AuthMethods } from '../../common-auth-embedded/opencode2/index.js'
 import { getStoragePath } from '../../plugin/storage.ts'
 import {
@@ -14,6 +14,8 @@ import {
   OPENCODE_VAULT_HOST,
   openCodeVaultPaths,
 } from '../../plugin/vault-custody.ts'
+import type { GaPluginOverrides } from './index.ts'
+import { createGaPoolLogin, type GaLocalLogin } from './pool-login.ts'
 
 export const GA_VAULT_METHOD_ID = 'antigravity-vault'
 
@@ -26,22 +28,22 @@ async function readAuthority(): Promise<EnrollmentAuthority> {
   return enrollmentAuthority(paths, OPENCODE_VAULT_ENROLLMENT_NAME, claustrum)
 }
 
-/** Adds one native vault activation method without modifying Google's existing login methods. */
-export function registerGaVaultActivation(
+/** Adds pool and vault methods without modifying Google's native login methods. */
+export async function registerGaAuthMethods(
   context: { integration: Pick<Plugin.Context['integration'], 'transform'> },
   authority: () => Promise<EnrollmentAuthority> = readAuthority,
+  input: { local?: GaLocalLogin; oauth?: GaPluginOverrides['oauth'] } = {},
 ): Promise<Registration> {
-  return registerOpenCode2AuthMethods(context, {
+  const pool = createGaPoolLogin(input)
+  const registration = await registerOpenCode2AuthMethods(context, {
     integrationID: ANTIGRAVITY_PROVIDER_ID,
-    methods: [],
-    onLogin() {
-      throw new Error('Vault activation does not accept local login results')
-    },
+    methods: [pool.method],
+    onLogin: pool.onLogin,
     vault: {
       method: {
         id: GA_VAULT_METHOD_ID,
         type: 'oauth',
-        label: 'Use approved Antigravity vault',
+        label: OPENCODE2_VAULT_AUTH_LABEL,
       },
       async activate() {
         if ((await authority()) !== 'vault') {
@@ -51,6 +53,20 @@ export function registerGaVaultActivation(
         }
       },
     },
-    label: 'Antigravity vault',
+    label: 'Antigravity',
   })
+  let disposal: Promise<void> | undefined
+  return {
+    dispose() {
+      disposal ??= (async () => {
+        const stopping = pool.dispose()
+        try {
+          await registration.dispose()
+        } finally {
+          await stopping
+        }
+      })()
+      return disposal
+    },
+  }
 }
