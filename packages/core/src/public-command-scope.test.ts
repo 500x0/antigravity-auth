@@ -1,6 +1,9 @@
-import { expect, it } from 'bun:test'
+import { expect, it, spyOn } from 'bun:test'
+import * as fs from 'node:fs'
 import {
+  createPublicCommandInspector,
   inspectPublicCommandScope,
+  type PublicCommandArgvObservation,
   type PublicCommandIdentity,
   type PublicCommandInspector,
   type PublicCommandScope,
@@ -51,6 +54,14 @@ type AncestryDiagnostic = {
   endpoint: DiagnosticIdentity
   leader: DiagnosticIdentity
   monitor: { pid: number; ppid: number }
+  directChildDiscovery: {
+    children: {
+      pid: number
+      start: string
+      commandLine: PublicCommandArgvObservation
+    }[]
+    omitted: number
+  }
 }
 
 const ancestryRefusalPrefix = 'PUBLIC_COMMAND_ANCESTRY_REFUSAL='
@@ -269,6 +280,194 @@ it('diagnoses the actual zombie snapshot at final ancestry revalidation', () => 
   expect(owned.signals).toEqual([])
 })
 
+it('retains discovery argv and birth when a direct child disappears at revalidation', () => {
+  const owned = scope()
+  const events: string[] = []
+  const argv = ['inert-child', '--discovery-marker']
+  const native: PublicCommandInspector = {
+    read(pid) {
+      events.push(`read:${pid}`)
+      if (pid === parent.pid) {
+        argv[1] = '--late-lookup-would-be-wrong'
+        return undefined
+      }
+      return pid === leader.pid ? leader : undefined
+    },
+    session: () => [parent],
+    observeArgv(identity) {
+      events.push(`argv:${identity.pid}:${identity.start}`)
+      return { status: 'available', argv }
+    },
+    close() {},
+  }
+  const messages = captureDiagnostics(() =>
+    expectAncestryRefusal(() => inspectPublicCommandScope(owned, native)),
+  )
+  const diagnostic = readAncestryDiagnostic(messages)
+  expect(diagnostic.current).toBeNull()
+  expect(diagnostic.expected).toEqual(serializeIdentity(parent))
+  expect(diagnostic.directChildDiscovery).toEqual({
+    children: [
+      {
+        pid: parent.pid,
+        start: parent.start.toString(),
+        commandLine: {
+          status: 'available',
+          argv: ['inert-child', '--discovery-marker'],
+        },
+      },
+    ],
+    omitted: 0,
+  })
+  expect(events).toEqual([
+    `read:${leader.pid}`,
+    `read:${leader.pid}`,
+    `argv:${parent.pid}:${parent.start}`,
+    `read:${leader.pid}`,
+    `read:${parent.pid}`,
+  ])
+  const sent: number[] = []
+  expect(() =>
+    signalPublicCommandMember(owned, parent, native, 'SIGTERM', (pid) =>
+      sent.push(pid),
+    ),
+  ).toThrow('not captured before signal')
+  expect([...owned.observed.values()]).toEqual([leader])
+  expect(owned.signals).toEqual([])
+  expect(sent).toEqual([])
+})
+
+it.each([
+  'unavailable',
+  'throws',
+  'absent',
+] as const)('labels discovery argv %s without changing the disappeared-child refusal', (mode) => {
+  const owned = scope()
+  const native: PublicCommandInspector = {
+    read: (pid) => (pid === leader.pid ? leader : undefined),
+    session: () => [parent],
+    close() {},
+  }
+  if (mode !== 'absent')
+    native.observeArgv = () => {
+      if (mode === 'throws') throw new Error('observer failure')
+      return {
+        status: 'unavailable',
+        reason: 'child already exited at discovery',
+      }
+    }
+  const messages = captureDiagnostics(() =>
+    expectAncestryRefusal(() => inspectPublicCommandScope(owned, native)),
+  )
+  expect(
+    readAncestryDiagnostic(messages).directChildDiscovery.children,
+  ).toEqual([
+    {
+      pid: parent.pid,
+      start: parent.start.toString(),
+      commandLine: {
+        status: 'unavailable',
+        reason:
+          mode === 'unavailable'
+            ? 'child already exited at discovery'
+            : mode === 'throws'
+              ? 'discovery argv observer failed'
+              : 'discovery argv observer unavailable',
+      },
+    },
+  ])
+  expect([...owned.observed.values()]).toEqual([leader])
+  expect(owned.signals).toEqual([])
+})
+
+it('bounds direct-child discovery storage and explicitly counts omitted observations', () => {
+  const owned = scope()
+  const children = Array.from({ length: 35 }, (_, index) => ({
+    ...parent,
+    pid: 200 + index,
+  }))
+  let observations = 0
+  const native: PublicCommandInspector = {
+    read: (pid) => (pid === leader.pid ? leader : undefined),
+    session: () => children,
+    observeArgv() {
+      observations++
+      return { status: 'unavailable', reason: 'not readable' }
+    },
+    close() {},
+  }
+  const messages = captureDiagnostics(() =>
+    expectAncestryRefusal(() => inspectPublicCommandScope(owned, native)),
+  )
+  const discovery = readAncestryDiagnostic(messages).directChildDiscovery
+  expect(discovery.children).toHaveLength(32)
+  expect(discovery.omitted).toBe(3)
+  expect(observations).toBe(32)
+  expect([...owned.observed.values()]).toEqual([leader])
+  expect(owned.signals).toEqual([])
+})
+
+it.skipIf(process.platform !== 'linux')(
+  'observes bounded Linux argv only for the sampled birth of an owned inert child',
+  async () => {
+    const native = await createPublicCommandInspector()
+    const marker = 'owned-discovery-marker'
+    const subprocess = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        'setTimeout(() => {}, 1000)',
+        marker,
+        'x'.repeat(8192),
+      ],
+      { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
+    )
+    const exitWithin = (milliseconds: number): Promise<boolean> => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      return Promise.race([
+        subprocess.exited.then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), milliseconds)
+        }),
+      ]).finally(() => clearTimeout(timer))
+    }
+    // Supervise runtime startup and exit independently of the child's own timer.
+    const supervisedExit = exitWithin(2000)
+    try {
+      const identity = native.read(subprocess.pid)
+      expect(identity).toBeDefined()
+      if (!identity || !native.observeArgv)
+        throw new Error('Linux observer unavailable')
+      const observation = native.observeArgv(identity)
+      expect(observation.status).toBe('truncated')
+      if (observation.status === 'unavailable')
+        throw new Error(observation.reason)
+      expect(observation.argv).toContain(marker)
+      expect(
+        Buffer.byteLength(observation.argv.join('\0')),
+      ).toBeLessThanOrEqual(4096)
+      expect(
+        native.observeArgv({ ...identity, start: identity.start + 1n }),
+      ).toEqual({
+        status: 'unavailable',
+        reason: 'birth unavailable before argv read',
+      })
+      expect(await supervisedExit).toBe(true)
+    } finally {
+      try {
+        if (subprocess.exitCode === null && subprocess.signalCode === null)
+          subprocess.kill('SIGKILL')
+        expect(await exitWithin(1000)).toBe(true)
+      } finally {
+        native.close()
+      }
+    }
+  },
+)
+
 it('keeps successful ancestry inspection calls unchanged and emits no diagnostic', () => {
   const owned = scope()
   const reads: number[] = []
@@ -300,6 +499,36 @@ it('keeps successful ancestry inspection calls unchanged and emits no diagnostic
   expect(sessions).toEqual([leader.sid])
   expect(messages).toEqual([])
   expect(owned.observed.get(child.pid)).toEqual(child)
+})
+
+it('emits no diagnostic or file output for successful direct-child discovery', () => {
+  const owned = scope()
+  const native = inspector([parent, leader])
+  let observations = 0
+  native.observeArgv = () => {
+    observations++
+    return { status: 'available', argv: ['inert-child'] }
+  }
+  const writes = [
+    spyOn(fs, 'writeSync'),
+    spyOn(fs, 'writeFileSync'),
+    spyOn(fs, 'appendFileSync'),
+    spyOn(Bun, 'write'),
+  ]
+  const logs = [spyOn(console, 'log'), spyOn(console, 'warn')]
+  try {
+    const messages = captureDiagnostics(() => {
+      expect(inspectPublicCommandScope(owned, native)).toEqual([parent, leader])
+    })
+    expect(observations).toBe(1)
+    expect(messages).toEqual([])
+    for (const output of [...writes, ...logs])
+      expect(output).not.toHaveBeenCalled()
+    expect(owned.observed.get(parent.pid)).toEqual(parent)
+    expect(owned.signals).toEqual([])
+  } finally {
+    for (const output of [...writes, ...logs]) output.mockRestore()
+  }
 })
 
 it('preserves ancestry refusal when the diagnostic sink throws', () => {

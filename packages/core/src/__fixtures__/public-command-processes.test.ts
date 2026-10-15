@@ -14,12 +14,26 @@ export interface PublicCommandIdentity {
 export interface PublicCommandInspector {
   read(pid: number): PublicCommandIdentity | undefined
   session(sid: number): PublicCommandIdentity[]
+  observeArgv?(identity: PublicCommandIdentity): PublicCommandArgvObservation
   close(): void
   readonly counts?: {
     generation: number
     tableRows: number
     sessionMembers: number
   }
+}
+
+export type PublicCommandArgvObservation =
+  | { status: 'available' | 'truncated'; argv: string[] }
+  | { status: 'unavailable'; reason: string }
+
+interface DirectChildDiscovery {
+  children: {
+    pid: number
+    start: string
+    commandLine: PublicCommandArgvObservation
+  }[]
+  omitted: number
 }
 
 export interface PublicCommandScope {
@@ -36,6 +50,8 @@ export interface PublicCommandScope {
 }
 
 const MAX_PROCESSES = 16_384
+const MAX_DISCOVERY_CHILDREN = 32
+const MAX_ARGV_BYTES = 4096
 
 function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
@@ -95,11 +111,84 @@ function linuxIdentity(pid: number): PublicCommandIdentity | undefined {
   }
 }
 
+function linuxArgv(
+  identity: PublicCommandIdentity,
+): PublicCommandArgvObservation {
+  try {
+    // Check birth on both sides of the read so a reused PID cannot supply argv.
+    if (linuxIdentity(identity.pid)?.start !== identity.start)
+      return {
+        status: 'unavailable',
+        reason: 'birth unavailable before argv read',
+      }
+    const fd = openSync(
+      `/proc/${identity.pid}/cmdline`,
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    )
+    let bytes: number
+    const buffer = Buffer.alloc(MAX_ARGV_BYTES + 1)
+    try {
+      bytes = readSync(fd, buffer, 0, buffer.length, 0)
+    } finally {
+      closeSync(fd)
+    }
+    if (linuxIdentity(identity.pid)?.start !== identity.start)
+      return {
+        status: 'unavailable',
+        reason: 'birth unavailable after argv read',
+      }
+    if (bytes === 0)
+      return { status: 'unavailable', reason: 'empty proc command line' }
+    const text = buffer.subarray(0, Math.min(bytes, MAX_ARGV_BYTES)).toString()
+    const argv = text.split('\0')
+    if (text.endsWith('\0')) argv.pop()
+    return { status: bytes > MAX_ARGV_BYTES ? 'truncated' : 'available', argv }
+  } catch {
+    return { status: 'unavailable', reason: 'proc command line read failed' }
+  }
+}
+
+function discoverDirectChildren(
+  scope: PublicCommandScope,
+  members: PublicCommandIdentity[],
+  inspector: PublicCommandInspector,
+): DirectChildDiscovery {
+  const discovery: DirectChildDiscovery = { children: [], omitted: 0 }
+  for (const member of members) {
+    if (member.ppid !== scope.leader.pid) continue
+    if (discovery.children.length === MAX_DISCOVERY_CHILDREN) {
+      discovery.omitted++
+      continue
+    }
+    let commandLine: PublicCommandArgvObservation
+    try {
+      commandLine = inspector.observeArgv?.(member) ?? {
+        status: 'unavailable',
+        reason: 'discovery argv observer unavailable',
+      }
+      if (commandLine.status !== 'unavailable')
+        commandLine = { ...commandLine, argv: [...commandLine.argv] }
+    } catch {
+      commandLine = {
+        status: 'unavailable',
+        reason: 'discovery argv observer failed',
+      }
+    }
+    discovery.children.push({
+      pid: member.pid,
+      start: member.start.toString(),
+      commandLine,
+    })
+  }
+  return discovery
+}
+
 export async function createPublicCommandInspector(): Promise<PublicCommandInspector> {
   const counts = { generation: 0, tableRows: 0, sessionMembers: 0 }
   if (process.platform === 'linux')
     return {
       read: linuxIdentity,
+      observeArgv: linuxArgv,
       session(sid) {
         const directory = opendirSync('/proc')
         const rows: PublicCommandIdentity[] = []
@@ -357,6 +446,7 @@ function capturePublicCommandAncestry(
   scope: PublicCommandScope,
   member: PublicCommandIdentity,
   inspector: PublicCommandInspector,
+  discovery: DirectChildDiscovery,
 ): void {
   const chain: PublicCommandIdentity[] = []
   const seen = new Set<number>()
@@ -412,6 +502,7 @@ function capturePublicCommandAncestry(
             endpoint: serialize(cursor),
             leader: serialize(scope.leader),
             monitor: { pid: process.pid, ppid: process.ppid },
+            directChildDiscovery: discovery,
           })}`,
         )
       } catch {
@@ -442,11 +533,14 @@ export function inspectPublicCommandScope(
     if (!current || current.zombie) scope.observed.delete(expected.pid)
   }
   const members = inspector.session(scope.leader.sid)
+  // Save discovery evidence before ancestry revalidation can lose a child. It
+  // never enters observed and is emitted only by the existing refusal report.
+  const discovery = discoverDirectChildren(scope, members, inspector)
   for (const member of members) {
     const captured = scope.observed.get(member.pid)
     if (captured) assertPublicCommandIdentity(captured, member, scope.leader)
     else if (!member.zombie)
-      capturePublicCommandAncestry(scope, member, inspector)
+      capturePublicCommandAncestry(scope, member, inspector, discovery)
   }
   return members.filter((member) => !member.zombie)
 }
