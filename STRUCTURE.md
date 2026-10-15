@@ -109,7 +109,7 @@ The harness-agnostic core ships as `@cortexkit/antigravity-auth-core`. `src/inde
 - `packages/core/src/transform/claude.ts` — `applyClaudeTransforms`, `appendClaudeThinkingHint`, `buildClaudeThinkingConfig`, `computeClaudeMaxOutputTokens`, `ensureClaudeMaxOutputTokens`, `isClaudeModel`, `isClaudeThinkingModel`, `normalizeClaudeTools`, `configureClaudeToolConfig`.
 - `packages/core/src/transform/gemini.ts` — `applyGeminiTransforms`, `buildGemini3ThinkingConfig`, `buildGemini25ThinkingConfig`, `buildImageGenerationConfig`, `isGemini3Model`, `isGemini25Model`, `isGeminiModel`, `isImageGenerationModel`, `normalizeGeminiTools`, `toGeminiSchema`.
 - `packages/core/src/transform/cross-model-sanitizer.ts` — payload cleanup before family switch (`sanitizeCrossModelPayload`, `sanitizeCrossModelPayloadInPlace`, `stripClaudeThinkingFields`, `stripGeminiThinkingMetadata`, `getModelFamily`).
-- `packages/core/src/transform/model-resolver.ts` — `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `MODEL_ALIASES`, `GEMINI_3_THINKING_LEVELS`, `THINKING_TIER_BUDGETS`.
+- `packages/core/src/transform/model-resolver.ts` — `resolveModelWithTier`, `resolveAntigravityModel`, `resolveModelWithVariant`, `MODEL_ALIASES`, `GEMINI_3_THINKING_LEVELS`, `THINKING_TIER_BUDGETS`; resolves Antigravity wire models and thinking config, not a Gemini CLI request path.
 
 ### Co-located tests
 
@@ -155,7 +155,7 @@ packages/opencode/
 - `packages/opencode/src/plugin/types.ts` — `PluginInput`, `PluginContext`, `PluginResult`, `GetAuth`, host types.
 - `packages/opencode/src/plugin/dependencies.ts` — `PluginDependencyOverrides` (the seam the e2e workspace uses to swap `fetchImpl`, `agyTransport`, `filesystemRoots`, `oauth`, `clock`) + `resolvePluginDependencies` default-resolver.
 - `packages/opencode/src/plugin/lifecycle.ts` — tracked retirement keeps old managers until admitted refresh/request/body work drains. Final disposal publishes closing and a shared completion promise synchronously before hooks can reenter, aborts live/retiring work, stops producers, drains sidebar writes and then tears down consumers.
-- `packages/opencode/src/plugin/auth-loader.ts` — fresh enrollment selects local/vault runtime; only authorized local work reads host auth/repairs drift/opens the repository. In V1, a native `google` auth record is only the host's pre-loader prerequisite: foreign tombstones (placeholders tied to another enrollment) and ordinary OAuth stay unread/unvalidated/unrefreshed while vault credentials serve. GA connection-ownership checks do not apply here.
+- `packages/opencode/src/plugin/auth-loader.ts` — fresh enrollment selects local/vault runtime; only authorized local work reads host auth/repairs drift/opens the repository. OpenCode 1 needs a saved `google` auth record to load the provider, but leaves ordinary logins and placeholders tied to other enrollments unread, unvalidated and unrefreshed while vault credentials serve. Checking which outgoing requests carry the Google placeholder belongs to OpenCode 2, not this loader.
 - `packages/opencode/src/plugin/auth.ts` — token validation helpers used by the loader (refresh-parts checks, expiry buffer).
 - `packages/opencode/src/plugin/auth-doctor.ts` — self-healing diagnostics for an unrecoverable auth store.
 - `packages/opencode/src/plugin/auth-drift.ts` — `detectAuthStorageDrift`: compares the host's `getAuth()` result against the on-disk pool and surfaces a `restorable` path.
@@ -166,13 +166,12 @@ packages/opencode/
 - `packages/opencode/src/plugin/background-vault-quota-refresh.ts`, `vault-quota-refresh.ts`, `vault-sidebar-projection.ts` — OpenCode 1 vault-only abortable producer whose distinct renewable lock deduplicates checks across processes. Its freshness gate reads the oldest matching durable quota observation, never sidebar publication time; missing readings are due. Manual/automatic checks share sidebar publication after accepted quota writes, and projection uses the same account/route/credential match. No local credential refresh path.
 - `packages/opencode/src/plugin/command-data.ts` — cache-only, privacy-safe account-row projection for account OAuth replies; the shared menu and repository collaborators own refresh and mutations.
 - `packages/opencode/src/plugin/storage.ts` — host-path adapter and lease-repository opening/composition, plus pool-file compatibility operations and `.gitignore` synchronization.
-- `packages/opencode/src/plugin/persist-account-pool.ts` — lock-held append-and-rewrite of `antigravity-accounts.json` used after a fresh OAuth login.
+- `packages/opencode/src/plugin/persist-account-pool.ts` — legacy JSON compatibility writer; current-store login persistence uses repository operations rather than rewriting the retired file.
 - `packages/opencode/src/plugin/fetch-interceptor.ts` — V1 local/vault credential and host-effect bindings to the shared executor. Retirement refuses new generative requests and drains admitted work/bodies; final disposal aborts.
-- `packages/opencode/src/plugin/shared/request-services.ts` — shared V1/GA selection, retries, endpoint/header fallback, warmups, transforms and native error handling. Policy/unavailability can return native 401/412/502; exhausted transport throws or returns the saved upstream failure, never synthetic HTTP 200 assistant success.
+- `packages/opencode/src/plugin/shared/request-services.ts` — shared OpenCode 1/2 account selection, retries, Antigravity endpoint fallback, warmups, transforms and native error handling. Policy/unavailability can return native 401/412/502; exhausted transport throws or returns the saved upstream failure, never synthetic HTTP 200 assistant success.
 - `packages/opencode/src/plugin/shared/runtime.ts`, `local-grant.ts`, `request-cancellation.ts`, `vault-request-credentials.ts`, `source-sidebar.ts`, `vault-menu.ts` — runtime/credential admission, cancellation, source projection and vault menu collaborators.
 - `packages/opencode/src/plugin/fetch/retry-state.ts` — per-interceptor `RetryState` (rate-limit toast debounce, retry counts).
 - `packages/opencode/src/plugin/fetch/warmup.ts` — `WarmupState` (probe accounts under load to detect soft-quota cliffs before they surprise the dispatcher).
-- `packages/opencode/src/plugin/fetch-routing.ts` — `resolveHeaderRoutingDecision`, `resolveQuotaFallbackHeaderStyle`, `getCurrentRoutingDecision` (live override from operator settings).
 - `packages/opencode/src/plugin/request.ts` — outbound transform pipeline (sanitize → resolve → inject metadata → order payload → harden).
 - `packages/opencode/src/plugin/request-helpers.ts` — `cleanGenerativeLanguageRequest`, thinking-block filtering, tool-id orphan recovery glue.
 - `packages/opencode/src/plugin/agy-request-metadata.ts` — host-side adapter around `core/agy-request-metadata.ts` with the session registry host binding.
@@ -284,7 +283,7 @@ The V1 TUI polls a redacted snapshot and private loopback RPC; GA uses its locat
 ## GA sources within `packages/opencode`
 
 - `packages/opencode/src/ga/server/index.ts` — `createGaAntigravityPlugin`, request-hook/loopback job bridge, location lifetime and cleanup.
-- `packages/opencode/src/ga/server/auth.ts` — plugin-owned vault activation method added to `google`; GA native-connection ownership is distinct from V1's enrollment-only serving rule.
+- `packages/opencode/src/ga/server/auth.ts` — pool browser login and approved-vault registration under the saved `Antigravity` connection label. OpenCode 2 handles outgoing requests carrying the host-prepared common-auth Google placeholder, not requests selected by connection metadata; see [OpenCode 2](packages/opencode/docs/OPENCODE-2.md). OpenCode 1's enrollment-only vault serving remains distinct.
 - `packages/opencode/src/ga/proxy-guard.ts` — guarded loopback request boundary.
 - `packages/opencode/src/ga/rpc/protocol.ts` — location-scoped snapshot/menu RPC.
 - `packages/opencode/src/ga/tui/host-ga.tsx` — real GA renderer loaded by the hybrid TUI entry's `setup` arm.

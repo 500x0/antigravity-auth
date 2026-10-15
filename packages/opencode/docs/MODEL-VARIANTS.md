@@ -4,6 +4,20 @@ OpenCode variants select the model's supported effort without adding a separate
 picker entry for every tier. Use the plugin's current catalog rather than copying
 an older model list into configuration.
 
+The table lists the public picker models from the canonical [model registry](../../core/src/model-registry.ts). OpenCode exposes their IDs through `getAntigravityOpencodeModelIds()`.
+
+| Model ID (under `google/`) | Variants | Quota |
+| --- | --- | --- |
+| `antigravity-gemini-4-argon` | `low`, `medium` (default), `high` | Per-model readings; whether usage shares a weekly quota allowance with other models, and which allowance, is unverified |
+| `antigravity-gemini-3.8-flash` | `low`, `medium`, `high` | `gemini-flash` |
+| `antigravity-gemini-3.5-flash` | `low`, `medium`, `high` | `gemini-flash` |
+| `antigravity-gemini-3.1-flash-image` | — | `gemini-flash` |
+| `antigravity-claude-sonnet-5-5` | `low`, `medium`, `high` | `claude` |
+| `antigravity-claude-opus-5-5` | `low`, `medium`, `high` | `claude` |
+| `antigravity-gpt-oss-120b-medium` | — | `gpt-oss` |
+
+The catalog uses a [model-list projection](../../../test-fixtures/agy-cli-1.3.5/server-model-catalog.json) of the official Antigravity CLI 1.3.5 `fetchAvailableModels` server response; see the [redacted capture's provenance](../../../test-fixtures/agy-cli-1.3.5/README.md). Gemini 3.8 Flash Cyber is absent from that catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
+
 ## Claude 5.5
 
 Both `google/antigravity-claude-opus-5-5` and
@@ -51,6 +65,8 @@ captured on the wire; MEDIUM/HIGH follow catalog levels 2/3 in `test-fixtures/ag
 The native LOW request omits toolConfig. The adapter applies that omission to the
 whole Argon family; MEDIUM/HIGH omission remains unverified live.
 
+Argon's remaining quota and reset time are reported per model. It is unverified whether Argon uses the same weekly quota allowance as other models, or which shared weekly allowance would apply.
+
 Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
 Antigravity. Grouped and native tier selectors refuse without aliases or
 redirects. Historical transcripts remain readable.
@@ -66,7 +82,7 @@ The resolver also accepts native tier-suffixed names, including
 `antigravity-gemini-3.8-flash-medium`. The grouped catalog entries with variants
 are the normal picker interface.
 
-The current catalog comes from the captured Antigravity server map. An ID omitted
+The current catalog comes from the official CLI server model-list evidence linked above. An ID omitted
 from the CLI picker is not necessarily retired: Gemini 3.5 Flash and Gemini 3.1
 Flash Image remain offered by the server. Captured catalog data and low-effort
 Claude probes do not establish complete wire parity for every model and effort.

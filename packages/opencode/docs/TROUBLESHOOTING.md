@@ -2,7 +2,7 @@
 
 Solutions to common issues with the Antigravity Auth plugin.
 
-> **Quick Reset**: Most issues can be resolved by deleting `~/.config/opencode/antigravity-accounts.json` and running `opencode auth login` again.
+> **Do not delete store or custody files as a generic reset.** Stop the host, inspect the initialization/migration/source refusal, then use account actions or re-login once the active source is healthy. Deletion can destroy rollback evidence or a saved native login. See [migration and rollback](MIGRATION.md) and [vault custody](VAULT.md).
 
 ---
 
@@ -13,7 +13,7 @@ OpenCode uses `~/.config/opencode/` on **all platforms** including Windows.
 | File | Path |
 |------|------|
 | Main config | `~/.config/opencode/opencode.json` |
-| Accounts | `~/.config/opencode/antigravity-accounts.json` |
+| Accounts | `~/.config/opencode/antigravity-accounts.json.store.pointer.json` selects the sibling `antigravity-accounts.json.store.<id>.generation/` directory containing `config.json` / `state.json`; legacy `antigravity-accounts.json` is import/export only. `OPENCODE_CONFIG_DIR` overrides that directory. |
 | Plugin config | `~/.config/opencode/antigravity.json` |
 | Debug logs | `~/.config/opencode/antigravity-logs/` |
 
@@ -24,11 +24,7 @@ OpenCode uses `~/.config/opencode/` on **all platforms** including Windows.
 ## Quick Fixes
 
 ### Auth problems
-Delete the accounts file and re-authenticate:
-```bash
-rm ~/.config/opencode/antigravity-accounts.json
-opencode auth login
-```
+Verify the active source and initialized/migrated store before reauthorization. Use `/antigravity` → Accounts to reauthorize or remove a local account; do not hand-edit legacy JSON. For OpenCode 2, finish [pool browser login and saved Antigravity connection selection](OPENCODE-2.md#pool-browser-login). A real native Google key/login deliberately passes through instead of using plugin accounts.
 
 ### "This version of Antigravity is no longer supported"
 This almost always means an outdated Antigravity `User-Agent` is still being used.
@@ -45,23 +41,7 @@ pkill -f opencode || true
 Stop-Process -Name "opencode" -Force -ErrorAction SilentlyContinue
 ```
 
-2) Clear the plugin caches and re-authenticate:
-
-**macOS/Linux:**
-```bash
-rm -f ~/.config/opencode/antigravity-accounts.json
-rm -rf ~/.cache/opencode/node_modules/opencode-antigravity-auth
-rm -rf ~/.bun/install/cache/opencode-antigravity-auth*
-opencode auth login
-```
-
-**Windows (PowerShell):**
-```powershell
-Remove-Item "$env:APPDATA\opencode\antigravity-accounts.json" -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:LOCALAPPDATA\opencode\Cache\node_modules\opencode-antigravity-auth" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:USERPROFILE\.bun\install\cache\opencode-antigravity-auth*" -Recurse -Force -ErrorAction SilentlyContinue
-opencode auth login
-```
+2) Reinstall the intended plugin build using the [OpenCode 1 registration instructions](CONFIGURATION.md#opencode-1-manual-registration) or the [OpenCode 2 guide](OPENCODE-2.md). Preserve the store and custody files. Before a major upgrade, [hold automatic updates](MIGRATION.md#hold-automatic-updates-before-a-major-upgrade) and [migrate offline](MIGRATION.md#initialize-or-migrate-before-starting-the-host). For a downgrade, follow the [stopped-process rollback instructions](MIGRATION.md#initialize-or-migrate-before-starting-the-host). Before changing builds, [disconnect vault custody safely](VAULT.md#disconnect-and-change-builds-safely). Do not bypass these steps with a cache reset.
 
 ### "Model not found"
 Gemini 3.1 Pro, Gemini 3.6/3.7 Flash and `gemini-pro-agent` were withdrawn by
@@ -81,11 +61,11 @@ Type `continue` to trigger auto-recovery, or use `/undo` to roll back.
 
 ### Configuration Key Typo
 
-The correct key is `plugin` (singular):
+For **OpenCode 1**, the key is `plugin` (singular):
 
 ```json
 {
-  "plugin": ["opencode-antigravity-auth@latest"]
+  "plugin": ["@cortexkit/opencode-antigravity-auth@latest"]
 }
 ```
 
@@ -229,10 +209,9 @@ If you only have one account, you'll likely have a better experience using [Anti
 <summary><b>5. Fresh account setup</b></summary>
 
 If adding new accounts:
-1. Delete accounts file: `rm ~/.config/opencode/antigravity-accounts.json`
-2. Re-authenticate: `opencode auth login`
-3. Update to latest beta: `"plugin": ["opencode-antigravity-auth@beta"]`
-4. Consider "warming up" the account in Antigravity IDE first
+1. Initialize a truly fresh store or migrate a legacy pool [offline](MIGRATION.md).
+2. Use the [host-specific login route](COMMANDS.md#host-login-routes) to add an account without deleting existing rows.
+3. Inspect Accounts and Quota in `/antigravity`; a new login does not prove entitlement or reset server-side limits.
 
 </details>
 
@@ -247,12 +226,7 @@ If you're seeing unusual rate limit behavior, please share in a [GitHub issue](h
 
 ## Infinite `.tmp` Files Created
 
-**Cause:** When account is rate-limited and plugin retries infinitely, it creates many temp files.
-
-**Workaround:**
-1. Stop OpenCode
-2. Clean up: `rm ~/.config/opencode/*.tmp`
-3. Add more accounts or wait for rate limit to expire
+Stop every process/timer using the pool and inspect the reported error before touching temporary files. Do not remove migration, transfer, or custody artifacts while diagnosing a failed operation. Rate-limit recovery should use account/quota actions or wait for reset, not delete store evidence.
 
 ---
 
@@ -334,10 +308,7 @@ ssh -L 51121:localhost:51121 user@remote
 
 ## Migrating Accounts Between Machines
 
-When copying `antigravity-accounts.json` to a new machine:
-1. Ensure the plugin is installed: `"plugin": ["opencode-antigravity-auth@beta"]`
-2. Copy `~/.config/opencode/antigravity-accounts.json`
-3. If you get "API key missing" error, the refresh token may be invalid — re-authenticate
+A migrated pool is not one legacy JSON file. Do not copy only `antigravity-accounts.json` or manually splice generations. A general cross-machine store-transfer procedure is not established; prefer explicit initialization and re-login on the destination or approved vault enrollment. [Offline rollback](MIGRATION.md) is a downgrade operation, not a generic backup restore.
 
 ---
 
@@ -395,7 +366,7 @@ redirecting to another model. Use low, medium or high adaptive effort:
 
 Older `max` and custom Claude thinking-budget examples do not define supported
 5.5 efforts. See [Model Variants](MODEL-VARIANTS.md) for current selectors and
-[the package README](../README.md) for offline account migration.
+[migration and rollback](MIGRATION.md) for offline account migration.
 
 ---
 
