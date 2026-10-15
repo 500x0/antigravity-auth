@@ -72,6 +72,7 @@ import {
   resolveThinkingConfig,
   rewriteAntigravityPreviewAccessError,
   transformThinkingParts,
+  type VariantThinkingConfig,
   validateAndFixClaudeToolPairing,
 } from './request-helpers'
 import { defaultSignatureStore } from './stores/signature-store'
@@ -1459,6 +1460,8 @@ export interface PrepareRequestOptions {
   agySession?: AgyRequestSessionContext
   /** Monotonic request timestamp allocated once and reused across endpoint retries. */
   agyRequestTimestamp?: number
+  /** The selected catalog thinking variant takes precedence over defaults in the request body. */
+  variant?: VariantThinkingConfig
 }
 
 function prepareAntigravityRequestIn(
@@ -1763,10 +1766,14 @@ function prepareAntigravityRequestIn(
           | Record<string, unknown>
           | undefined
 
-        const variantConfig = extractVariantThinkingConfig(
-          requestPayload.providerOptions as Record<string, unknown> | undefined,
-          rawGenerationConfig,
-        )
+        const variantConfig =
+          options?.variant ??
+          extractVariantThinkingConfig(
+            requestPayload.providerOptions as
+              | Record<string, unknown>
+              | undefined,
+            rawGenerationConfig,
+          )
         const isGemini3 = effectiveModel.toLowerCase().includes('gemini-3')
 
         wire.logger.debug(
@@ -1821,13 +1828,16 @@ function prepareAntigravityRequestIn(
         // Resolve thinking configuration based on user settings and model capabilities
         // Image generation models don't support thinking - skip thinking config entirely
         const isImageModel = isImageGenerationModel(effectiveModel)
-        const userThinkingConfig = isImageModel
-          ? undefined
-          : extractThinkingConfig(
-              requestPayload,
-              rawGenerationConfig,
-              extraBody,
-            )
+        // A catalog selection owns thinking; body settings may be host defaults
+        // for a different effort and must not disable the selected effort.
+        const userThinkingConfig =
+          isImageModel || options?.variant
+            ? undefined
+            : extractThinkingConfig(
+                requestPayload,
+                rawGenerationConfig,
+                extraBody,
+              )
         const hasAssistantHistory =
           Array.isArray(requestPayload.contents) &&
           requestPayload.contents.some(

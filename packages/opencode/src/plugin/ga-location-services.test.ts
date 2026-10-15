@@ -43,6 +43,7 @@ import {
   emptyOperatorSettings,
   type OperatorSettings,
 } from './operator-settings.ts'
+import { AgySessionRegistry } from './session-context.ts'
 import {
   createLocationRuntime,
   type LocationRuntime,
@@ -591,7 +592,7 @@ describe('GA request pipeline pieces', () => {
     expect(routes.route({ kind: 'sessionless' })).toBeNull()
   })
 
-  it('hands a bridged job to the engine with its body, signal and session', async () => {
+  it('hands a bridged job to the engine with its body, signal, session and context', async () => {
     const calls: unknown[] = []
     const controller = new AbortController()
     const execute = createGaJobExecutor({
@@ -623,6 +624,8 @@ describe('GA request pipeline pieces', () => {
           signal: controller.signal,
         },
         options: {
+          kind: 'primary',
+          variant: undefined,
           session: { sessionId: 'session-a', parentSessionId: null },
         },
       },
@@ -646,8 +649,14 @@ describe('GA request pipeline pieces', () => {
       send: async () => terminalResponse(),
     })(transportJob, context)
     expect(calls).toEqual([
-      { session: { sessionId: transportJob.sessionID, parentSessionId: null } },
       {
+        kind: transportJob.kind,
+        variant: undefined,
+        session: { sessionId: transportJob.sessionID, parentSessionId: null },
+      },
+      {
+        kind: transportJob.kind,
+        variant: undefined,
         session: { sessionId: transportJob.sessionID, parentSessionId: null },
         transport: expect.any(Function),
       },
@@ -1326,6 +1335,295 @@ describe('GA composed transport', () => {
       },
     )
   }
+})
+
+describe('GA composed request context', () => {
+  function job(
+    kind: GaBridgeJob['kind'],
+    modelID: string,
+    variant: string | null = null,
+    body = transportJob.body,
+    sessionID = 'context-session',
+  ): GaBridgeJob {
+    return {
+      ...transportJob,
+      sessionID,
+      kind,
+      modelID,
+      variant,
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${modelID}:streamGenerateContent?alt=sse`,
+      body,
+    }
+  }
+
+  function physicalBody(index: number) {
+    const call = networkCalls[index]
+    if (!call) throw new Error(`Missing physical request ${index}`)
+    return JSON.parse(String(call.init?.body))
+  }
+
+  function execute(
+    location: Awaited<ReturnType<typeof transportLocation>>,
+    scope: GaTestCase,
+    request: GaBridgeJob,
+  ) {
+    return scope.step(async () => {
+      const response = await location.serving.execute(request, {
+        signal: scope.controller().signal,
+        send: async () => {
+          throw new Error('legacy sender must not be used')
+        },
+      })
+      const text = await response.text()
+      return { response, text }
+    })
+  }
+
+  ownedIt('routes title work before primary model refusal', async (scope) => {
+    const location = await transportLocation(scope, 'local', {})
+    try {
+      for (const model of [
+        'host-off-catalog-title',
+        'antigravity-gemini-3.1-pro',
+        'antigravity-gemini-3.1-flash-image',
+      ]) {
+        const { response, text } = await execute(
+          location,
+          scope,
+          job('title', model, 'unavailable-on-original-model'),
+        )
+        expect(response.status).toBe(200)
+        expect(text).toContain('transport reached')
+        expect(physicalBody(networkCalls.length - 1).model).toBe(
+          'gemini-3.5-flash-extra-low',
+        )
+      }
+      expect(networkCalls).toHaveLength(3)
+    } finally {
+      await location.dispose()
+    }
+  })
+
+  ownedIt(
+    'applies the selected registered variant to the wire model and thinking',
+    async (scope) => {
+      const location = await transportLocation(scope, 'local', {})
+      const incidentalDefault = JSON.stringify({
+        ...JSON.parse(transportJob.body),
+        providerOptions: { google: { thinkingLevel: 'high' } },
+        generationConfig: {
+          thinkingConfig: { includeThoughts: false, thinkingLevel: 'high' },
+        },
+      })
+      try {
+        const { response } = await execute(
+          location,
+          scope,
+          job(
+            'primary',
+            'antigravity-gemini-3.8-flash',
+            'low',
+            incidentalDefault,
+          ),
+        )
+        expect(response.status).toBe(200)
+        expect(networkCalls).toHaveLength(1)
+        const body = physicalBody(0)
+        expect(body.model).toBe('gemini-3.8-flash-low')
+        expect(body.request.generationConfig.thinkingConfig).toEqual({
+          includeThoughts: true,
+          thinkingBudget: 1000,
+        })
+        expect(body.request).not.toHaveProperty('providerOptions')
+      } finally {
+        await location.dispose()
+      }
+    },
+  )
+
+  ownedIt(
+    'keeps a registered title target and its selected variant',
+    async (scope) => {
+      const location = await transportLocation(scope, 'local', {})
+      try {
+        const { response } = await execute(
+          location,
+          scope,
+          job(
+            'title',
+            'antigravity-gemini-3.8-flash',
+            'medium',
+            JSON.stringify({
+              ...JSON.parse(transportJob.body),
+              generationConfig: { thinkingConfig: { thinkingLevel: 'high' } },
+            }),
+          ),
+        )
+        expect(response.status).toBe(200)
+        expect(networkCalls).toHaveLength(1)
+        const body = physicalBody(0)
+        expect(body.model).toBe('gemini-3.8-flash-medium')
+        expect(body.request.generationConfig.thinkingConfig).toEqual({
+          includeThoughts: true,
+          thinkingBudget: 4000,
+        })
+      } finally {
+        await location.dispose()
+      }
+    },
+  )
+
+  ownedIt(
+    'refuses unavailable and disabled variants without a physical send',
+    async (scope) => {
+      const location = await transportLocation(scope, 'local', {})
+      const variants =
+        realCore.getPublicModelDefinitions()['antigravity-gemini-3.8-flash']!
+          .variants!
+      const original = variants.low!
+      variants.low = { ...original, disabled: true }
+      try {
+        for (const kind of [
+          'primary',
+          'compaction',
+          'generate',
+          'title',
+        ] as const) {
+          for (const variant of ['not-registered', 'low', 'toString']) {
+            const { response, text } = await execute(
+              location,
+              scope,
+              job(kind, 'antigravity-gemini-3.8-flash', variant),
+            )
+            expect(response.status).toBe(412)
+            expect(JSON.parse(text)).toEqual({
+              error: {
+                code: 412,
+                status: 'FAILED_PRECONDITION',
+                message:
+                  'This Antigravity thinking level is unavailable. Choose another thinking level.',
+              },
+            })
+            expect(networkCalls).toHaveLength(0)
+          }
+        }
+      } finally {
+        variants.low = original
+        await location.dispose()
+      }
+    },
+  )
+
+  ownedIt(
+    'isolates every auxiliary kind without changing primary steps',
+    async (scope) => {
+      const location = await transportLocation(scope, 'local', {})
+      const begin = spyOn(AgySessionRegistry.prototype, 'beginRequest')
+      const flash = 'antigravity-gemini-3.8-flash'
+      const payload = (count: number) =>
+        JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: Array.from({ length: count }, (_, i) => ({
+                text: `Part ${i}`,
+              })),
+            },
+          ],
+        })
+      try {
+        for (const count of [1, 3, 2]) {
+          await execute(
+            location,
+            scope,
+            job('primary', flash, null, payload(count), 'all-primary'),
+          )
+        }
+        await execute(
+          location,
+          scope,
+          job('primary', flash, null, payload(1), 'mixed'),
+        )
+        for (const kind of ['title', 'compaction', 'generate'] as const) {
+          await execute(
+            location,
+            scope,
+            job(
+              kind,
+              'antigravity-claude-sonnet-5-5',
+              null,
+              payload(5),
+              'mixed',
+            ),
+          )
+        }
+        for (const count of [3, 2]) {
+          await execute(
+            location,
+            scope,
+            job('primary', flash, null, payload(count), 'mixed'),
+          )
+        }
+        expect(networkCalls).toHaveLength(9)
+        expect(
+          begin.mock.calls.map(([identity]) => identity.sessionId),
+        ).toEqual([
+          'all-primary',
+          'all-primary',
+          'all-primary',
+          'mixed',
+          'mixed#title',
+          'mixed#compaction',
+          'mixed#generate',
+          'mixed',
+          'mixed',
+        ])
+        const bodies = Array.from({ length: 9 }, (_, i) => physicalBody(i))
+        const control = bodies.slice(0, 3)
+        const primary = [bodies[3], bodies[7], bodies[8]]
+        for (const sequence of [control, primary]) {
+          expect(sequence.map((body) => body.requestId.split('/')[4])).toEqual([
+            '2',
+            '4',
+            '3',
+          ])
+          expect(
+            sequence.map((body) => body.request.labels.last_step_index),
+          ).toEqual(['1', '3', '2'])
+          expect(
+            new Set(sequence.map((body) => body.request.labels.trajectory_id))
+              .size,
+          ).toBe(1)
+          expect(
+            sequence.map((body) => body.request.labels.used_claude),
+          ).toEqual(['false', 'false', 'false'])
+        }
+        const auxiliaries = bodies.slice(4, 7)
+        expect(
+          new Set(
+            [primary[0], ...auxiliaries].map(
+              (body) => body.request.labels.trajectory_id,
+            ),
+          ).size,
+        ).toBe(4)
+        expect(
+          new Set(
+            [primary[0], ...auxiliaries].map(
+              (body) => body.requestId.split('/')[1],
+            ),
+          ).size,
+        ).toBe(4)
+        for (const body of auxiliaries) {
+          expect(body.request.labels.last_step_index).toBe('5')
+          expect(body.requestId.split('/')[4]).toBe('6')
+          expect(body.request.labels.used_claude).toBe('true')
+        }
+      } finally {
+        begin.mockRestore()
+        await location.dispose()
+      }
+    },
+  )
 })
 
 describe('GA quota check authorization', () => {

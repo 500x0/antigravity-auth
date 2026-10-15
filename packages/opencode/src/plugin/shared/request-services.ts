@@ -456,6 +456,8 @@ export interface RequestExecuteOptions {
    * AGY session metadata. Omitted by OpenCode 1, which has no kind.
    */
   readonly kind?: RequestKind
+  /** Selected catalog thinking variant ID; legacy hosts leave this unset. */
+  readonly variant?: string
   /**
    * Raw sender for this request's `antigravity` header-style sends, in place
    * of `RequestServicesDeps.transport`. It receives the transformed request's
@@ -828,8 +830,12 @@ export function createRequestExecutor<A extends RequestAccountRow>(
         })
       }
     }
+    let selectedVariant = options.variant
     if (kind === 'title') {
-      input = routeTitleModel(input)
+      const routed = routeTitleModel(input)
+      // A variant belongs to its catalog model, not the replacement title model.
+      if (routed !== input) selectedVariant = undefined
+      input = routed
     }
 
     const selectedModel = extractModelFromUrl(input)
@@ -844,6 +850,36 @@ export function createRequestExecutor<A extends RequestAccountRow>(
         }),
         { status: 412, headers: { 'Content-Type': 'application/json' } },
       )
+    }
+
+    let variant: PrepareRequestOptions['variant']
+    if (selectedVariant !== undefined) {
+      const definitions = getPublicModelDefinitions()
+      const variants =
+        selectedModel && Object.hasOwn(definitions, selectedModel)
+          ? definitions[selectedModel]?.variants
+          : undefined
+      const registered =
+        variants && Object.hasOwn(variants, selectedVariant)
+          ? variants[selectedVariant]
+          : undefined
+      if (!registered || registered.disabled === true) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 412,
+              status: 'FAILED_PRECONDITION',
+              message:
+                'This Antigravity thinking level is unavailable. Choose another thinking level.',
+            },
+          }),
+          { status: 412, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      variant = {
+        thinkingLevel: registered.thinkingLevel,
+        thinkingBudget: registered.thinkingConfig?.thinkingBudget,
+      }
     }
 
     // A host that sends each request through its own raw sender (the GA
@@ -1692,6 +1728,7 @@ export function createRequestExecutor<A extends RequestAccountRow>(
                 fingerprint: account.fingerprint,
                 agySession: agyRequestSession,
                 agyRequestTimestamp: agyRequestScope.timestamp,
+                variant,
               },
             })
 

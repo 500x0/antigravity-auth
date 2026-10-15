@@ -1423,6 +1423,8 @@ export function createGaJobExecutor(
         signal: context.signal,
       },
       {
+        kind: job.kind,
+        variant: job.variant ?? undefined,
         session: {
           sessionId: job.sessionID,
           parentSessionId: job.parentSessionID,

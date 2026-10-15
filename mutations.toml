@@ -598,3 +598,31 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^GA\scomposed\stransport\sreaches\sthe\slocal\ssend\soverride\swith\sthe\sfinalized\sphysical\sattempt$']
+
+[[control]]
+id = "ga-composed-request-kind-disconnect"
+guards = "The real bridge job kind reaches the shared engine's title routing."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = '''      {
+        kind: job.kind,
+        variant: job.variant ?? undefined,'''
+new = '''      {
+        kind: undefined, // NON-VACUITY BREAK
+        variant: job.variant ?? undefined,'''
+test_file = "packages/opencode/src/plugin/ga-location-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^GA\scomposed\srequest\scontext\sroutes\stitle\swork\sbefore\sprimary\smodel\srefusal$']
+
+[[control]]
+id = "ga-composed-request-variant-disconnect"
+guards = "The selected registered variant, not a body default, determines wire model and thinking."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = '        variant: job.variant ?? undefined,'
+new = '        variant: undefined, // NON-VACUITY BREAK'
+test_file = "packages/opencode/src/plugin/ga-location-services.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^GA\scomposed\srequest\scontext\sapplies\sthe\sselected\sregistered\svariant\sto\sthe\swire\smodel\sand\sthinking$']
