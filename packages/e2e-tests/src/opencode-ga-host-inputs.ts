@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { parseConfigFileTextToJson } from 'typescript'
 import { assertMeasuredNativeJob } from './fixtures/opencode-ga-host/native-job.ts'
 import {
   assertOwnedCommandSucceeded,
@@ -42,9 +43,17 @@ export function assertGaFixturePins(repo: string): void {
   const manifest = record(
     JSON.parse(readFileSync(join(fixture, 'package.json'), 'utf8')),
   )
-  const lock = record(
-    JSON.parse(readFileSync(join(fixture, 'bun.lock'), 'utf8')),
+  const lockText = readFileSync(join(fixture, 'bun.lock'), 'utf8')
+  const parsedLock = parseConfigFileTextToJson(
+    join(fixture, 'bun.lock'),
+    lockText,
   )
+  check(
+    parsedLock.error === undefined,
+    'Host fixture lock contains JSONC parse errors',
+  )
+  const lockConfig: unknown = parsedLock.config
+  const lock = record(lockConfig)
   const dependencies = record(manifest.dependencies)
   const lockedRoot = record(record(record(lock.workspaces)['']).dependencies)
   check(
@@ -68,6 +77,9 @@ export function assertGaFixturePins(repo: string): void {
   const expected = [
     pin.package,
     '@cortexkit/claustrum-client',
+    '@cortexkit/private-files',
+    '@cortexkit/store',
+    '@cortexkit/store/@cortexkit/private-files',
     '@cortexkit/subc-client',
     'jsonc-parser',
     'xdg-basedir',
