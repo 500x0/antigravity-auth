@@ -33,6 +33,7 @@ import {
   gaChildEnvironment,
   gaDetachedDispatchSignalMutation,
   gaTimestamp,
+  loadGaOverflowFixture,
   ownedPath,
   parseGaPin,
   prepareGaRoot,
@@ -46,6 +47,89 @@ import {
 import { cleanupE2eRootsForCurrentFile } from './setup'
 
 afterAll(cleanupE2eRootsForCurrentFile)
+
+describe('GA revised oracle transport fixtures (mock-only)', () => {
+  it('returns the exact canned first-title 400 then allows fallback and primary success', async () => {
+    const mock = await startGaMock(
+      'title-primary-fallback',
+      'title-control',
+      process.cwd(),
+    )
+    try {
+      const fixture = loadGaOverflowFixture(process.cwd(), 'gemini')
+      const first = await fetch(`${mock.url}/agy/title`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(first.status).toBe(400)
+      expect(first.headers.get('content-type')).toBe(fixture.contentType)
+      expect(Buffer.from(await first.arrayBuffer()).equals(fixture.bytes)).toBe(
+        true,
+      )
+      const fallback = await fetch(`${mock.url}/agy/title`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(fallback.status).toBe(200)
+      expect(await fallback.text()).toContain('GA_TITLE_title-control')
+      const primary = await fetch(`${mock.url}/agy/primary`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(primary.status).toBe(200)
+      expect(await primary.text()).toContain('GA_OK_title-control')
+    } finally {
+      await mock.close()
+    }
+  })
+  it('attributes a held HTTP connection and its natural close to the same physical record', async () => {
+    const mock = await startGaMock(
+      'pty-interrupt-recovery',
+      'peer-control',
+      process.cwd(),
+    )
+    const signal = new AbortController()
+    try {
+      await (
+        await fetch(`${mock.url}/agy/primary`, { method: 'POST', body: '{}' })
+      ).text()
+      const held = await fetch(`${mock.url}/agy/primary`, {
+        method: 'POST',
+        body: '{}',
+        signal: signal.signal,
+      })
+      expect(held.status).toBe(200)
+      await waitForGaObservation(
+        () => mock.events.some((event) => event.event === 'held-content'),
+        'mock held peer',
+      )
+      const record = mock.requests[1]!
+      const observation = mock.events.find(
+        (event) => event.event === 'held-content',
+      )!
+      expect(observation).toMatchObject({ requestIndex: 1, peer: record.peer })
+      expect(record.peer).toBeGreaterThan(0)
+      signal.abort()
+      await waitForGaObservation(
+        () =>
+          mock.events.some(
+            (event) =>
+              event.event === 'peer-close' &&
+              event.peer === record.peer &&
+              event.requestIndex === 1,
+          ),
+        'mock natural-close of held peer',
+        2000,
+      )
+      expect(mock.events.some((event) => event.event === 'forced-close')).toBe(
+        false,
+      )
+    } finally {
+      signal.abort()
+      await mock.close()
+    }
+  })
+})
 
 async function withServer(
   fn: (server: MockServerHandle) => Promise<void>,

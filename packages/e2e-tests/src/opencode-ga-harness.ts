@@ -31,10 +31,12 @@ import type { Duplex } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 import { gunzipSync } from 'node:zlib'
+import type { Plugin } from '@opencode/plugin'
 import {
   type CallExpression,
   createSourceFile,
   forEachChild,
+  isAwaitExpression,
   isBinaryExpression,
   isCallExpression,
   isExportAssignment,
@@ -45,8 +47,10 @@ import {
   isMethodDeclaration,
   isNewExpression,
   isObjectLiteralExpression,
+  isParenthesizedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isReturnStatement,
   isSpreadAssignment,
   isStringLiteralLike,
   isVariableDeclaration,
@@ -643,6 +647,8 @@ export function verifiedArchiveFiles(
 }
 
 export interface GaRunResult {
+  completion?: GaCompletionEvidence
+  completionError?: string
   outputCapExceeded: boolean
   cleanupFailures?: string[]
   spawnError?: string
@@ -651,6 +657,18 @@ export interface GaRunResult {
   stdout: string
   stderr: string
   timedOut: boolean
+}
+
+type GaSessionMessage = Awaited<
+  ReturnType<Plugin.Context['session']['context']>
+>[number]
+export interface GaCompletionEvidence {
+  sessionID: string
+  prompt: string
+  beforeMessageIDs: string[]
+  messageID: string
+  assistant: GaSessionMessage
+  messages: GaSessionMessage[]
 }
 
 export interface GaChild {
@@ -1140,6 +1158,7 @@ export function writeGaWrapper(input: {
   rawSender: boolean
   duplicateCleanup?: boolean
   recordPreparedOutputCap?: boolean
+  placeholderFixture?: string
 }): string {
   const { paths, consumerPrefix, packedServerEntry, mockUrl, rawSender } = input
   requireCondition(
@@ -1164,6 +1183,7 @@ export function writeGaWrapper(input: {
     mode: 0o600,
   })
   const source = `import { appendFileSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { createGaAntigravityPlugin, type GaPluginOverrides } from '@cortexkit/opencode-antigravity-auth/server'
 import type { Plugin } from '@opencode/plugin'
 export default { id: 'antigravity-e2e-wrapper', async setup(context: Plugin.Context) {
@@ -1173,6 +1193,12 @@ const entry = fixtures && typeof fixtures === 'object' && context.location.direc
 const transportMock = entry && typeof entry.mockUrl === 'string' ? entry.mockUrl : ${JSON.stringify(mockUrl)}
 if (new URL(transportMock).hostname !== '127.0.0.1') throw new Error('Fixture transport escaped loopback')
 const log = (event: string, fields: object = {}) => appendFileSync(${JSON.stringify(join(paths.state, 'wrapper.ndjson'))}, JSON.stringify({ event, scope, at: Number(process.hrtime.bigint() / 1000000n), ...fields }) + '\\n')
+const bodyHash = (body: string) => createHash('sha256').update(body).digest('hex')
+const capCaller = (body: Record<string, unknown>) => {
+  const contents = Array.isArray(body.contents) ? body.contents : []
+  const markers = contents.filter(content => content.role === 'user').flatMap(content => Array.isArray(content.parts) ? content.parts.flatMap(part => typeof part.text === 'string' ? part.text.match(/GA_CAP_CALLER_[a-f0-9]{32}/g) ?? [] : []) : [])
+  return markers.length === 1 ? markers[0] : null
+}
 let observerDisposed = false
 const observedSignals = new Map<AbortSignal, { identity: number, listener: () => void }>()
 const observeRawSenderSignal: NonNullable<GaPluginOverrides['observeRawSenderSignal']> = (signal) => {
@@ -1226,6 +1252,7 @@ const overrides: GaPluginOverrides = {
     rawSender
       ? ''
       : `send: ({ envelope, auth, endpoint, signal, kind }) => {
+    ${input.recordPreparedOutputCap ? "if (kind === 'primary') log('native.primary-wire', { kind, caller: capCaller(Reflect.get(envelope, 'request')), bodySha256: bodyHash(JSON.stringify(envelope)), requestId: Reflect.get(envelope, 'requestId') })" : ''}
     log('send.start', { kind, endpoint, aborted: signal.aborted })
     signal.addEventListener('abort', () => log('send.abort', { kind }), { once: true })
     return fetch(transportMock + '/agy/' + kind, { method: 'POST', headers: { authorization: 'Bearer ' + auth.access, 'content-type': 'application/json', 'x-agy-endpoint': endpoint }, body: JSON.stringify(envelope), signal })
@@ -1240,9 +1267,12 @@ const plugin = createGaAntigravityPlugin(overrides)
     input.recordPreparedOutputCap
       ? `await context.session.hook('http.request', async (event) => {
     if (event.kind !== 'primary') return
-    const body = await event.request.clone().json()
+    const original = await event.request.clone().text()
+    const body = JSON.parse(original)
     if (!event.request.url.startsWith(transportMock + '/direct/v1/') || !Array.isArray(body.contents) || body.request !== undefined) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: expected the host-prepared Google body before rewrite')
-    log('native.prepared-output-cap', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, maxOutputTokens: body.generationConfig?.maxOutputTokens ?? null })
+    const expected = JSON.parse(readFileSync(${JSON.stringify(input.placeholderFixture ?? '')}, 'utf8'))
+    if (typeof expected.value?.access !== 'string' || expected.value.type !== 'oauth' || expected.value.methodID !== 'antigravity-auth-pool-browser' || expected.valueSha256 !== bodyHash(JSON.stringify(expected.value))) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: missing captured placeholder provenance')
+    log('native.prepared-output-cap', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, caller: capCaller(body), owned: event.request.headers.get('x-goog-api-key') === expected.value.access, bodySha256: bodyHash(original), maxOutputTokens: body.generationConfig?.maxOutputTokens ?? null })
   }, { providerID: 'google' })`
       : 'undefined'
   }
@@ -1255,10 +1285,10 @@ const plugin = createGaAntigravityPlugin(overrides)
     log('native.request', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, url: event.request.url, method: event.request.method, headerNames: Array.from(event.request.headers.keys()) })
   }, { providerID: 'google' })
   const response = await context.session.hook('http.response', async (event) => {
-    if (event.kind === 'title') log('native.title.response', { status: event.response.status })
+    if (event.kind === 'title') log('native.title.response', { status: event.response.status, sessionID: event.sessionID, kind: event.kind, model: event.model.id })
     if (event.response.status === 400) {
       const bytes = Buffer.from(await event.response.clone().arrayBuffer())
-      log('native.400', { status: event.response.status, contentType: event.response.headers.get('content-type'), bytes: bytes.toString('base64'), contextErrorHeader: event.response.headers.get('x-antigravity-context-error') })
+      log('native.400', { status: event.response.status, sessionID: event.sessionID, kind: event.kind, model: event.model.id, contentType: event.response.headers.get('content-type'), bytes: bytes.toString('base64'), contextErrorHeader: event.response.headers.get('x-antigravity-context-error') })
     }
   }, { providerID: 'google' })
   return async () => {
@@ -1594,6 +1624,7 @@ export interface GaRecordedRequest {
   headers: Record<string, string | string[]>
   rawHeaders: string[]
   responseStatus?: number
+  peer?: number
 }
 
 export interface GaMock {
@@ -1602,6 +1633,8 @@ export interface GaMock {
   events: Array<{
     event: 'held-content' | 'peer-close' | 'forced-close' | 'unrelated-held'
     at: number
+    peer: number
+    requestIndex: number
   }>
   failNextDirectProvider(nonce: string): void
   releaseUnrelated(): void
@@ -1644,10 +1677,13 @@ export async function startGaMock(
   let titleCount = 0
   let directFailureNonce: string | undefined
   let releaseUnrelated: (() => void) | undefined
+  const peers = new WeakMap<Socket, number>()
+  let nextPeer = 0
   const canned =
     caseId === 'overflow-gemini' ||
     caseId === 'overflow-claude' ||
-    caseId === 'title-overflow'
+    caseId === 'title-overflow' ||
+    caseId === 'title-primary-fallback'
       ? loadGaOverflowFixture(
           repoRoot,
           caseId === 'overflow-claude' ? 'claude' : 'gemini',
@@ -1685,7 +1721,14 @@ export async function startGaMock(
           ),
         ),
         rawHeaders: [...request.rawHeaders],
+        peer: peers.get(request.socket),
       }
+      const requestIndex = requests.length
+      const peer = recorded.peer
+      requireCondition(
+        typeof peer === 'number' && peer > 0,
+        'Missing owned mock peer identity',
+      )
       requests.push(recorded)
       if (kind === 'unrelated') {
         const complete = () => {
@@ -1698,7 +1741,12 @@ export async function startGaMock(
         if (caseId === 'late-unrelated-response') {
           requireCondition(!releaseUnrelated, 'GA_UNRELATED_ALREADY_HELD')
           releaseUnrelated = complete
-          events.push({ event: 'unrelated-held', at: gaTimestamp() })
+          events.push({
+            event: 'unrelated-held',
+            at: gaTimestamp(),
+            peer,
+            requestIndex,
+          })
         } else complete()
         return
       }
@@ -1792,12 +1840,17 @@ export async function startGaMock(
         caseId === 'title-primary-fallback' &&
         titleCount === 1
       ) {
-        error(400, 'Title fixture refusal')
+        requireCondition(canned, 'Missing canned first-title refusal')
+        response.writeHead(canned.status, {
+          'content-type': canned.contentType,
+        })
+        response.end(canned.bytes)
         return
       }
       if (
         canned &&
-        ((kind === 'primary' && caseId !== 'title-overflow') ||
+        ((kind === 'primary' &&
+          (caseId === 'overflow-gemini' || caseId === 'overflow-claude')) ||
           (kind === 'title' && caseId === 'title-overflow'))
       ) {
         response.writeHead(canned.status, {
@@ -1891,10 +1944,17 @@ export async function startGaMock(
           events.push({
             event: teardown ? 'forced-close' : 'peer-close',
             at: gaTimestamp(),
+            peer,
+            requestIndex,
           })
         })
         response.write(gaFrame([{ text: `GENUINE_HELD_${nonce}` }]))
-        events.push({ event: 'held-content', at: gaTimestamp() })
+        events.push({
+          event: 'held-content',
+          at: gaTimestamp(),
+          peer,
+          requestIndex,
+        })
         return
       }
       if (caseId === 'late-immediate-first-chunk-error') {
@@ -1981,6 +2041,7 @@ export async function startGaMock(
       )
     }
   })
+  server.on('connection', (socket: Socket) => peers.set(socket, ++nextPeer))
   await new Promise<void>((resolveListen, reject) => {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', resolveListen)
@@ -2968,7 +3029,51 @@ export interface GaSessionRef {
   directory: string
 }
 export function gaNativeControl(url: string) {
+  const origin = new URL(url)
+  requireCondition(
+    origin.protocol === 'http:' && origin.hostname === '127.0.0.1',
+    'Native SDK completion reads must stay on owned IPv4 loopback',
+  )
+  const loadClient = async () => {
+    const { gaSdkDeclarationPaths } = await import(
+      './opencode-ga-host-inputs.ts'
+    )
+    gaSdkDeclarationPaths(resolve('.'))
+    const plugin = realpathSync(
+      resolve('packages/opencode/node_modules/@opencode/plugin'),
+    )
+    const entry = Bun.resolveSync('@opencode/client/promise', plugin)
+    const { OpenCode } = await import(pathToFileURL(entry).href)
+    return OpenCode.make({
+      baseUrl: url,
+      headers: {
+        authorization: `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
+      },
+    })
+  }
+  let client: ReturnType<typeof loadClient> | undefined
+  const sdk = () => (client ??= loadClient())
   return {
+    async messages(session: GaSessionRef): Promise<GaSessionMessage[]> {
+      const response = await (await sdk()).message.list(
+        { sessionID: session.id, limit: 100, order: 'asc' },
+        { signal: AbortSignal.timeout(5000) },
+      )
+      requireCondition(
+        response.cursor.next == null && response.cursor.previous == null,
+        'Completion message inventory is paginated; refusing an incomplete freshness boundary',
+      )
+      return response.data
+    },
+    async message(
+      session: GaSessionRef,
+      messageID: string,
+    ): Promise<GaSessionMessage> {
+      return (await sdk()).session.message.get(
+        { sessionID: session.id, messageID },
+        { signal: AbortSignal.timeout(5000) },
+      )
+    },
     async create(
       directory: string,
       model: string,
@@ -3097,6 +3202,55 @@ export function gaNativeControl(url: string) {
   }
 }
 
+export async function collectGaCompletion(
+  native: Pick<
+    ReturnType<typeof gaNativeControl>,
+    'wait' | 'messages' | 'message'
+  >,
+  session: GaSessionRef,
+  prompt: string,
+  before: GaSessionMessage[],
+  stdout: string,
+): Promise<GaCompletionEvidence> {
+  const events = parseGaNativeJson(stdout)
+  requireCondition(
+    events.every(
+      (event) =>
+        event.sessionID === undefined || event.sessionID === session.id,
+    ),
+    'Completion stdout belongs to another requested session',
+  )
+  const text = events
+    .filter((event) => event.type === 'text')
+    .map((event) => record(event.part))
+  requireCondition(
+    text.length > 0 &&
+      text.every(
+        (part) =>
+          part.type === 'text' &&
+          part.sessionID === session.id &&
+          typeof part.messageID === 'string',
+      ),
+    'Completion stdout has no session-attributed assistant message ID',
+  )
+  const messageID = String(text.at(-1)!.messageID)
+  requireCondition(
+    !before.some((message) => message.id === messageID),
+    'Completion stdout names a stale earlier assistant',
+  )
+  await native.wait(session)
+  const messages = await native.messages(session)
+  const assistant = await native.message(session, messageID)
+  return {
+    sessionID: session.id,
+    prompt,
+    beforeMessageIDs: before.map((message) => message.id),
+    messageID,
+    assistant,
+    messages,
+  }
+}
+
 export function gaDriverTypeFixture(): string {
   return `import { OpenCode } from '@opencode/client/promise'
 const client = OpenCode.make({ baseUrl: 'http://127.0.0.1:1' })
@@ -3107,6 +3261,10 @@ export async function verifyTypes(sessionID: string, directory: string) {
   await client.session.command({ sessionID, name: 'antigravity', text: '' })
   await client.session.interrupt({ sessionID })
   await client.session.wait({ sessionID })
+  const messages = await client.message.list({ sessionID, order: 'asc', limit: 100 })
+  const message = await client.session.message.get({ sessionID, messageID: 'synthetic-source-only-message' })
+  if (message.type === 'assistant') { void message.time.completed; void message.finish; void message.content }
+  void messages.data; void messages.cursor
   await client.plugin.list({ location: { directory } })
   await client.location.reload()
 }
@@ -3434,6 +3592,7 @@ export async function createOpenCodeGaHarness(
       rawSender: options.rawSender ?? false,
       duplicateCleanup: caseId === 'cleanup-idempotent',
       recordPreparedOutputCap: caseId === 'claude-thinking',
+      placeholderFixture,
     })
     const accountsMigrationInput = seedGaHost(
       paths,
@@ -3472,6 +3631,8 @@ export async function createOpenCodeGaHarness(
             .map((line) => record(JSON.parse(line)))
         : []
     let runSequence = 0
+    let lastRunSession: GaSessionRef | undefined
+    const native = gaNativeControl(runningHost.url)
     return {
       caseId,
       placeholderFixture,
@@ -3480,7 +3641,7 @@ export async function createOpenCodeGaHarness(
       accountsMigrationInput,
       mock,
       host: runningHost,
-      native: gaNativeControl(runningHost.url),
+      native,
       executable,
       rawPeer,
       tlsFiles,
@@ -3492,6 +3653,17 @@ export async function createOpenCodeGaHarness(
         continuation = false,
         session,
       ) {
+        const requested =
+          session ??
+          (continuation
+            ? lastRunSession
+            : await native.create(paths.project, model))
+        requireCondition(
+          requested,
+          'Continuation has no previously exercised native session',
+        )
+        const before = await native.messages(requested)
+        lastRunSession = requested
         if (
           !gaAllowsDirectProvider(caseId) &&
           !(
@@ -3502,25 +3674,36 @@ export async function createOpenCodeGaHarness(
         ) {
           await assertGaActivePlaceholder(runningHost.url)
         }
-        const result = session
-          ? await launchGaHost(
-              executable,
-              paths,
-              [
-                'run',
-                '--server',
-                runningHost.url,
-                '--format',
-                'json',
-                '--model',
-                model,
-                '--session',
-                session.id,
-                prompt,
-              ],
-              startup,
-            ).result
-          : await runningHost.run(model, prompt, continuation)
+        const result = await launchGaHost(
+          executable,
+          paths,
+          [
+            'run',
+            '--server',
+            runningHost.url,
+            '--format',
+            'json',
+            '--model',
+            model,
+            '--session',
+            requested.id,
+            prompt,
+          ],
+          startup,
+        ).result
+        if (result.code === 0 && gaSessionErrors(result.stdout).length === 0) {
+          try {
+            result.completion = await collectGaCompletion(
+              native,
+              requested,
+              prompt,
+              before,
+              result.stdout,
+            )
+          } catch (error) {
+            result.completionError = String(error)
+          }
+        }
         writeFileSync(
           join(paths.state, `cli-run-${++runSequence}.json`),
           JSON.stringify(result),
@@ -3923,14 +4106,98 @@ function publicGaModel(
 function gaPrimaryRequests(harness: GaHarness): GaRecordedRequest[] {
   return harness.mock.requests.filter((request) => request.kind === 'primary')
 }
-function assertGaSuccess(result: GaRunResult, nonce: string): void {
+// The recorded OpenCode 2.0.22 text event identifies a session and message but
+// is not a terminal receipt. After CLI exit and session.wait, SDK reads must
+// show that fresh assistant finished with stop and a subsequent idle succeeded.
+export function assertGaSuccess(result: GaRunResult, nonce: string): void {
   requireCondition(
     result.code === 0 &&
       !result.timedOut &&
       !result.outputCapExceeded &&
-      gaSessionErrors(result.stdout).length === 0 &&
-      result.stdout.includes(`GA_OK_${nonce}`),
-    'Actual native completion is missing',
+      gaSessionErrors(result.stdout).length === 0,
+    'Actual native completion is missing or the CLI failed',
+  )
+  const proof = result.completion
+  requireCondition(
+    proof && proof.sessionID.length > 0 && proof.messageID.length > 0,
+    `Actual native completion proof is missing: ${result.completionError ?? 'no SDK receipt'}`,
+  )
+  const events = parseGaNativeJson(result.stdout)
+  requireCondition(
+    events.every(
+      (event) =>
+        event.sessionID === undefined || event.sessionID === proof.sessionID,
+    ),
+    'Native completion stdout belongs to another session',
+  )
+  const textEvents = events.filter((event) => event.type === 'text')
+  const parts = textEvents.map((event) => record(event.part))
+  requireCondition(
+    textEvents.length > 0 &&
+      parts.every(
+        (part) =>
+          part.type === 'text' &&
+          part.sessionID === proof.sessionID &&
+          typeof part.messageID === 'string' &&
+          typeof part.text === 'string',
+      ),
+    'Native completion has no attributed assistant text',
+  )
+  const output = parts
+    .filter((part) => part.messageID === proof.messageID)
+    .map((part) => String(part.text))
+    .join('')
+  requireCondition(
+    output.includes(`GA_OK_${nonce}`) && output !== proof.prompt,
+    'Native completion contains no assistant result or only echoes the prompt',
+  )
+  const before = new Set(proof.beforeMessageIDs)
+  requireCondition(
+    !before.has(proof.messageID),
+    'Native completion reused an earlier assistant',
+  )
+  const fresh = proof.messages.filter((message) => !before.has(message.id))
+  requireCondition(
+    new Set(proof.messages.map((message) => message.id)).size ===
+      proof.messages.length,
+    'Native completion message inventory contains duplicate IDs',
+  )
+  const assistant = proof.assistant
+  const listed = fresh.find((message) => message.id === proof.messageID)
+  requireCondition(
+    assistant.id === proof.messageID &&
+      assistant.type === 'assistant' &&
+      listed?.type === 'assistant',
+    'Native completion SDK read returned another message or a non-assistant',
+  )
+  const text = (message: typeof assistant) =>
+    message.content
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('')
+  requireCondition(
+    typeof assistant.time.completed === 'number' &&
+      Number.isFinite(assistant.time.completed) &&
+      assistant.time.completed >= assistant.time.created &&
+      assistant.finish === 'stop' &&
+      assistant.error == null &&
+      text(assistant) === output &&
+      text(listed) === output &&
+      listed.time.completed === assistant.time.completed &&
+      listed.finish === 'stop' &&
+      listed.error == null &&
+      fresh.every(
+        (message) => message.type !== 'assistant' || message.error == null,
+      ),
+    'Native completion assistant is incomplete, mismatched or failed',
+  )
+  const terminal = fresh.at(-1)
+  requireCondition(
+    terminal?.type === 'idle' &&
+      terminal.outcome === 'succeeded' &&
+      terminal.time.created >= assistant.time.completed &&
+      fresh.indexOf(terminal) > fresh.indexOf(listed),
+    'Native completion has no fresh succeeded terminal idle result',
   )
 }
 function assertGaWire(
@@ -3968,16 +4235,14 @@ export async function runGaCoreScenario(
   id: GaCaseId,
   accounts?: GaAccountRpcJoin,
 ): Promise<void> {
-  const model =
-    id === 'claude-thinking'
-      ? 'google/antigravity-claude-sonnet-5-5#low'
-      : publicGaModel(
-          id === 'claude-tools' || id === 'overflow-claude'
-            ? 'claude'
-            : id === 'image-permissions'
-              ? 'image'
-              : 'gemini',
-        )
+  if (id === 'claude-thinking') return runGaClaudeThinking(harness)
+  const model = publicGaModel(
+    id === 'claude-tools' || id === 'overflow-claude'
+      ? 'claude'
+      : id === 'image-permissions'
+        ? 'image'
+        : 'gemini',
+  )
   if (id === 'catalog-and-titles') {
     const definitions = getPublicModelDefinitions()
     requireCondition(
@@ -4214,40 +4479,6 @@ export async function runGaCoreScenario(
         ),
       'Tool-step labels/requestId changed',
     )
-  } else if (id === 'claude-thinking') {
-    const request = assertGaWire(primary[0]!, model)
-    const thinking = record(record(request.generationConfig).thinkingConfig)
-    requireCondition(
-      thinking.includeThoughts === true &&
-        thinking.thinkingBudget === 0 &&
-        thinking.thinkingLevel === 'LOW' &&
-        record(JSON.parse(primary[0]!.body)).model === 'claude-sonnet-5-5-low',
-      'Native Sonnet 5.5 low thinking/model changed',
-    )
-    const prepared = harness
-      .readWrapperEvents()
-      .filter(
-        (event) =>
-          event.event === 'native.prepared-output-cap' &&
-          event.kind === 'primary',
-      )
-    requireCondition(
-      prepared.length === primary.length &&
-        prepared[0]?.model === 'antigravity-claude-sonnet-5-5',
-      'Missing independently prepared Claude output cap',
-    )
-    const cap = prepared[0]?.maxOutputTokens
-    requireCondition(
-      cap === null ||
-        (typeof cap === 'number' && Number.isSafeInteger(cap) && cap > 0),
-      'Invalid prepared Claude output cap',
-    )
-    requireCondition(
-      record(request.generationConfig).maxOutputTokens ===
-        (cap === null ? 128_000 : Math.min(cap, 128_000)) &&
-        request.providerOptions === undefined,
-      'Native Claude output cap differs from the prepared caller cap/native 128000 limit or retained providerOptions',
-    )
   } else if (id === 'capacity-fallback') {
     requireCondition(
       primary.length === 3 &&
@@ -4301,6 +4532,107 @@ export async function runGaCoreScenario(
       'Native tool configuration missing',
     )
   }
+}
+
+async function runGaClaudeThinking(harness: GaHarness): Promise<void> {
+  // The caller marker is test input carried in user text, not an SDK request
+  // identifier. A fresh fixed-title session excludes unrelated title traffic;
+  // the send override's body hash must match the body recorded by the HTTP mock.
+  const model = 'google/antigravity-claude-sonnet-5-5#low'
+  const caller = `GA_CAP_CALLER_${newGaNonce()}`
+  const session = await harness.native.create(
+    harness.paths.project,
+    model,
+    'Claude cap fixed title',
+  )
+  const eventOffset = harness.readWrapperEvents().length
+  const requestOffset = harness.mock.requests.length
+  const result = await harness.run(
+    model,
+    `Reply with GA_OK_${harness.nonce}. ${caller}`,
+    false,
+    session,
+  )
+  const primary = harness.mock.requests
+    .slice(requestOffset)
+    .filter((request) => request.kind === 'primary')
+  const events = harness.readWrapperEvents().slice(eventOffset)
+  const prepared = events.filter(
+    (event) =>
+      event.event === 'native.prepared-output-cap' && event.kind === 'primary',
+  )
+  const native = events.filter(
+    (event) => event.event === 'native.request' && event.kind === 'primary',
+  )
+  const wires = events.filter(
+    (event) =>
+      event.event === 'native.primary-wire' && event.kind === 'primary',
+  )
+  requireCondition(
+    primary.length === 1 &&
+      prepared.length === 1 &&
+      native.length === 1 &&
+      wires.length === 1,
+    'Claude cap attribution requires exactly one fresh prepared/native/physical primary',
+  )
+  const preparedCap = prepared[0]!
+  const physical = primary[0]!
+  const envelope = record(JSON.parse(physical.body))
+  const request = assertGaWire(physical, model)
+  const contents = Array.isArray(request.contents)
+    ? request.contents.map(record)
+    : []
+  const markers = contents
+    .filter((content) => content.role === 'user')
+    .flatMap((content) =>
+      Array.isArray(content.parts)
+        ? content.parts
+            .map(record)
+            .flatMap((part) =>
+              typeof part.text === 'string'
+                ? (part.text.match(/GA_CAP_CALLER_[a-f0-9]{32}/g) ?? [])
+                : [],
+            )
+        : [],
+    )
+  requireCondition(
+    preparedCap.sessionID === session.id &&
+      preparedCap.model === 'antigravity-claude-sonnet-5-5' &&
+      preparedCap.caller === caller &&
+      preparedCap.owned === true &&
+      typeof preparedCap.bodySha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(preparedCap.bodySha256) &&
+      native[0]?.sessionID === session.id &&
+      native[0]?.model === 'antigravity-claude-sonnet-5-5' &&
+      markers.length === 1 &&
+      markers[0] === caller &&
+      wires[0]?.caller === caller &&
+      typeof envelope.requestId === 'string' &&
+      wires[0]?.requestId === envelope.requestId &&
+      wires[0]?.bodySha256 === sha256(Buffer.from(physical.body)),
+    'Claude cap attribution mismatch in session, captured-placeholder ownership, caller or physical request',
+  )
+  const thinking = record(record(request.generationConfig).thinkingConfig)
+  requireCondition(
+    thinking.includeThoughts === true &&
+      thinking.thinkingBudget === 0 &&
+      thinking.thinkingLevel === 'LOW' &&
+      envelope.model === 'claude-sonnet-5-5-low',
+    'Native Sonnet 5.5 low thinking/model changed',
+  )
+  const cap = preparedCap.maxOutputTokens
+  requireCondition(
+    cap === null ||
+      (typeof cap === 'number' && Number.isSafeInteger(cap) && cap > 0),
+    'Invalid prepared Claude output cap',
+  )
+  requireCondition(
+    record(request.generationConfig).maxOutputTokens ===
+      (cap === null ? 128_000 : Math.min(cap, 128_000)) &&
+      request.providerOptions === undefined,
+    'Native Claude output cap differs from the prepared caller cap/native 128000 limit or retained providerOptions',
+  )
+  assertGaSuccess(result, harness.nonce)
 }
 
 export async function runGaUnrelatedResponse(
@@ -4652,10 +4984,11 @@ export async function runGaTitleScenario(
           ? ['gemini-3.5-flash-extra-low']
           : ['gemini-3.5-flash-extra-low', 'gemini-3.8-flash-medium'],
       ),
-    'Native titles did not use the exact resolver-derived AGY title wire model',
+    'Native titles did not use the exact expected AGY title wire models in order',
   )
   requireCondition(
-    observed[0]?.model === 'gemini-flash-lite-latest',
+    observed[0]?.model === 'gemini-flash-lite-latest' &&
+      observed.every((event) => event.sessionID === session.id),
     'Configured off-catalog title reference was not actually dispatched',
   )
   if (id !== 'title-off-catalog')
@@ -4669,40 +5002,54 @@ export async function runGaTitleScenario(
     .readWrapperEvents()
     .filter((event) => event.event === 'native.title.response')
   requireCondition(
-    JSON.stringify(titleResponses.map((event) => event.status)) ===
-      JSON.stringify(
-        id === 'title-overflow'
-          ? [400, 400]
-          : id === 'title-primary-fallback'
-            ? [400, 200]
-            : [200],
-      ),
+    titleResponses.every(
+      (event, index) =>
+        event.sessionID === session.id &&
+        event.kind === 'title' &&
+        event.model ===
+          (index === 0
+            ? 'gemini-flash-lite-latest'
+            : 'antigravity-gemini-3.8-flash'),
+    ) &&
+      JSON.stringify(titleResponses.map((event) => event.status)) ===
+        JSON.stringify(
+          id === 'title-overflow'
+            ? [400, 400]
+            : id === 'title-primary-fallback'
+              ? [400, 200]
+              : [200],
+        ),
     'Native title response statuses changed or a failed title invented a successful response',
   )
   const failures = harness
     .readWrapperEvents()
     .filter((event) => event.event === 'native.400')
-  if (id === 'title-primary-fallback')
+  if (id !== 'title-off-catalog') {
+    const fixture = loadGaOverflowFixture(resolve('.'), 'gemini')
+    const models =
+      id === 'title-primary-fallback'
+        ? ['gemini-flash-lite-latest']
+        : ['gemini-flash-lite-latest', 'antigravity-gemini-3.8-flash']
     requireCondition(
-      failures.length === 1 && failures[0]?.status === 400,
-      'First title attempt did not retain its HTTP 400',
+      failures.length === models.length &&
+        failures.every(
+          (event, index) =>
+            event.status === 400 &&
+            event.kind === 'title' &&
+            event.sessionID === session.id &&
+            event.model === models[index] &&
+            event.contentType === fixture.contentType &&
+            event.bytes === fixture.bytes.toString('base64') &&
+            event.contextErrorHeader === null,
+        ),
+      'Title refusal bytes or attribution differ from the nonempty canned native HTTP 400',
     )
+  }
   if (id === 'title-overflow') {
     const after = await harness.native.get(session)
     requireCondition(
       after.title === before.title,
       'Failed native title changed the session title',
-    )
-    const fixture = loadGaOverflowFixture(resolve('.'), 'gemini')
-    requireCondition(
-      failures.length === 2 &&
-        failures.every(
-          (event) =>
-            event.status === 400 &&
-            event.contentType === fixture.contentType &&
-            event.bytes === fixture.bytes.toString('base64'),
-        ),
-      'Title overflow bytes were not preserved',
     )
   }
 }
@@ -4969,46 +5316,59 @@ export function gaInstalledCompiledTui(prefix: string): string {
   )
   const runtimeTargets: string[] = []
   let setupCalls = 0
-  const walk = (node: Node, visit: (node: Node) => void) => {
-    visit(node)
-    forEachChild(node, (child) => walk(child, visit))
-  }
+  const unparen = (node: Node): Node =>
+    isParenthesizedExpression(node) ? unparen(node.expression) : node
   for (const statement of tree.statements) {
     if (isFunctionDeclaration(statement) && statement.name?.text === 'loadGa') {
-      walk(statement, (node) => {
+      const [initialize, returned] = statement.body?.statements ?? []
+      if (
+        statement.body?.statements.length !== 2 ||
+        !initialize ||
+        !isExpressionStatement(initialize) ||
+        !isBinaryExpression(initialize.expression) ||
+        initialize.expression.operatorToken.kind !==
+          SyntaxKind.QuestionQuestionEqualsToken ||
+        !isIdentifier(initialize.expression.left) ||
+        !returned ||
+        !isReturnStatement(returned) ||
+        !returned.expression ||
+        !isIdentifier(returned.expression) ||
+        returned.expression.text !== initialize.expression.left.text
+      )
+        continue
+      const node = initialize.expression.right
+      if (
+        !isCallExpression(node) ||
+        !isIdentifier(node.expression) ||
+        node.expression.text !== 'loadTui'
+      )
+        continue
+      const options = node.arguments[0]
+      if (!options || !isObjectLiteralExpression(options)) continue
+      for (const property of options.properties) {
         if (
-          !isCallExpression(node) ||
-          !isIdentifier(node.expression) ||
-          node.expression.text !== 'loadTui'
+          !isPropertyAssignment(property) ||
+          !isIdentifier(property.name) ||
+          property.name.text !== 'runtimeEntry'
         )
-          return
-        const options = node.arguments[0]
-        if (!options || !isObjectLiteralExpression(options)) return
-        for (const property of options.properties) {
-          if (
-            !isPropertyAssignment(property) ||
-            !isIdentifier(property.name) ||
-            property.name.text !== 'runtimeEntry'
-          )
-            continue
-          const value = property.initializer
-          if (
-            !isPropertyAccessExpression(value) ||
-            value.name.text !== 'href' ||
-            !isNewExpression(value.expression) ||
-            !isIdentifier(value.expression.expression) ||
-            value.expression.expression.text !== 'URL'
-          )
-            continue
-          const [target, base] = value.expression.arguments ?? []
-          if (
-            target &&
-            isStringLiteralLike(target) &&
-            base?.getText(tree) === 'import.meta.url'
-          )
-            runtimeTargets.push(resolve(dirname(loader), target.text))
-        }
-      })
+          continue
+        const value = property.initializer
+        if (
+          !isPropertyAccessExpression(value) ||
+          value.name.text !== 'href' ||
+          !isNewExpression(value.expression) ||
+          !isIdentifier(value.expression.expression) ||
+          value.expression.expression.text !== 'URL'
+        )
+          continue
+        const [target, base] = value.expression.arguments ?? []
+        if (
+          target &&
+          isStringLiteralLike(target) &&
+          base?.getText(tree) === 'import.meta.url'
+        )
+          runtimeTargets.push(resolve(dirname(loader), target.text))
+      }
     }
     if (
       isExportAssignment(statement) &&
@@ -5020,14 +5380,40 @@ export function gaInstalledCompiledTui(prefix: string): string {
           isIdentifier(property.name) &&
           property.name.text === 'setup'
         ) {
-          walk(property, (node) => {
-            if (
-              isCallExpression(node) &&
-              isIdentifier(node.expression) &&
-              node.expression.text === 'loadGa'
-            )
-              setupCalls++
-          })
+          const [returned] = property.body?.statements ?? []
+          const context = property.parameters[0]?.name
+          if (
+            property.body?.statements.length !== 1 ||
+            !returned ||
+            !isReturnStatement(returned) ||
+            !returned.expression ||
+            property.parameters.length !== 1 ||
+            !context ||
+            !isIdentifier(context)
+          )
+            continue
+          const invocation = unparen(returned.expression)
+          if (
+            !isCallExpression(invocation) ||
+            !isPropertyAccessExpression(invocation.expression) ||
+            invocation.expression.name.text !== 'setup'
+          )
+            continue
+          const argument = invocation.arguments[0]
+          const receiver = unparen(invocation.expression.expression)
+          if (!isAwaitExpression(receiver)) continue
+          const loaded = unparen(receiver.expression)
+          if (
+            isCallExpression(loaded) &&
+            isIdentifier(loaded.expression) &&
+            loaded.expression.text === 'loadGa' &&
+            loaded.arguments.length === 0 &&
+            invocation.arguments.length === 1 &&
+            argument &&
+            isIdentifier(argument) &&
+            argument.text === context.text
+          )
+            setupCalls++
         }
       }
     }
@@ -5231,12 +5617,82 @@ export async function runGaPtyScenario(
     } else if (id === 'pty-reauthorize-listener') {
       await gaPtyReauthorize(harness, pty, sessionA, accounts)
     } else if (id === 'pty-interrupt-recovery') {
+      const eventOffset = harness.mock.events.length
+      const requestOffset = harness.mock.requests.length
       pty.process.stdin.write(`Hold this stream ${harness.nonce}\r`)
       await waitForGaObservation(
-        () => gaPrimaryRequests(harness).length >= 2,
-        'PTY primary genuinely started',
+        () =>
+          harness.mock.events
+            .slice(eventOffset)
+            .some(
+              (event) =>
+                event.event === 'held-content' &&
+                event.requestIndex >= requestOffset,
+            ),
+        'PTY primary held peer genuinely started',
       )
+      const heldEvents = harness.mock.events
+        .slice(eventOffset)
+        .filter((event) => event.event === 'held-content')
+      const held = heldEvents[0]
+      const heldRequest = held && harness.mock.requests[held.requestIndex]
+      requireCondition(
+        heldEvents.length === 1 &&
+          held &&
+          heldRequest?.kind === 'primary' &&
+          heldRequest.peer === held.peer &&
+          held.requestIndex >= requestOffset &&
+          bodyHasPrimaryNonce(heldRequest.body, harness.nonce),
+        'PTY held peer is missing or not the exercised primary',
+      )
+      const samePeer = (event: GaMock['events'][number]) =>
+        event.peer === held.peer && event.requestIndex === held.requestIndex
+      requireCondition(
+        !harness.mock.events.some(
+          (event) =>
+            samePeer(event) &&
+            (event.event === 'forced-close' || event.event === 'peer-close'),
+        ),
+        'PTY held peer closed before Escape',
+      )
+      const interruptedAt = gaTimestamp()
       pty.process.stdin.write('\x1b')
+      await waitForGaObservation(
+        () => {
+          requireCondition(
+            !harness.mock.events.some(
+              (event) => samePeer(event) && event.event === 'forced-close',
+            ),
+            'PTY held peer required forced cleanup',
+          )
+          return harness.mock.events.some(
+            (event) =>
+              samePeer(event) &&
+              event.event === 'peer-close' &&
+              event.at >= interruptedAt &&
+              event.at - interruptedAt <= 2000,
+          )
+        },
+        'PTY held peer natural-close after Escape before teardown',
+        2000,
+      )
+      requireCondition(
+        !harness.mock.events.some(
+          (event) => samePeer(event) && event.event === 'forced-close',
+        ),
+        'PTY held peer required forced cleanup',
+      )
+      writeFileSync(
+        join(harness.paths.state, 'pty-interrupt-peer.json'),
+        JSON.stringify({
+          held,
+          interruptedAt,
+          close: harness.mock.events.filter(
+            (event) => samePeer(event) && event.event === 'peer-close',
+          ),
+        }),
+        { mode: 0o600 },
+      )
       requireCondition(
         pty.process.exitCode === null,
         'PTY interrupt killed the process',

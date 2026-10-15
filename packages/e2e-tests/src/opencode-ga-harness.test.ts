@@ -33,20 +33,27 @@ import {
   assertGaImagePreparationPlatform,
   assertGaNoDirectProvider,
   assertGaPinnedHostnameMappings,
+  assertGaSuccess,
   captureGaPlaceholder,
+  collectGaCompletion,
   GA_CASE_IDS,
   type GaHarness,
+  type GaRunResult,
   gaAllowsDirectProvider,
   gaChildEnvironment,
   gaFreshLoginCase,
   gaInstalledCompiledTui,
+  gaNativeControl,
   gaNativeRequest,
   gaPlaceholderImportPolicy,
+  gaTimestamp,
   importGaPlaceholder,
   loadGaOverflowFixture,
   prepareGaRoot,
+  record,
   refreshGaFixtureCredentials,
   runGaCoreScenario,
+  runGaPtyScenario,
   runGaTitleScenario,
   seedGaHost,
   verifiedArchiveFiles,
@@ -62,6 +69,212 @@ import {
 } from './opencode-ga-host-inputs.ts'
 
 const roots: string[] = []
+
+function parseLockForEquality(path: string, source: string): unknown {
+  const result = parseConfigFileTextToJson(path, source)
+  if (result.error) throw new Error('Malformed Bun lock syntax')
+  return result.config
+}
+
+function completedRun() {
+  const assistant = {
+    id: 'msg-fresh',
+    type: 'assistant' as const,
+    agent: 'build',
+    model: { providerID: 'google', id: 'fixture' },
+    time: { created: 3, completed: 4 },
+    finish: 'stop' as const,
+    content: [{ type: 'text' as const, text: 'GA_OK_fixture' }],
+  }
+  const idle = {
+    id: 'idle-fresh',
+    type: 'idle' as const,
+    time: { created: 5 },
+    outcome: 'succeeded' as const,
+  }
+  return {
+    code: 0,
+    signal: null,
+    stderr: '',
+    timedOut: false,
+    outputCapExceeded: false,
+    stdout: JSON.stringify({
+      type: 'text',
+      sessionID: 'ses-exercised',
+      part: {
+        type: 'text',
+        sessionID: 'ses-exercised',
+        messageID: assistant.id,
+        text: 'GA_OK_fixture',
+        time: { start: 3, end: 4 },
+      },
+    }),
+    completion: {
+      sessionID: 'ses-exercised',
+      prompt: 'Reply with GA_OK_fixture. Primary nonce fixture',
+      beforeMessageIDs: ['msg-old', 'idle-old'],
+      messageID: assistant.id,
+      assistant,
+      messages: [assistant, idle],
+    },
+  }
+}
+
+describe('GA pinned CLI assistant and persisted terminal completion oracle', () => {
+  it('accepts attributed text plus a fresh completed assistant and succeeded idle, without inventing a terminal stdout event', () => {
+    expect(() =>
+      assertGaSuccess(completedRun() as unknown as GaRunResult, 'fixture'),
+    ).not.toThrow()
+  })
+  const faults: Record<string, (run: ReturnType<typeof completedRun>) => void> =
+    {
+      'missing SDK receipt': (run) => {
+        Reflect.deleteProperty(run, 'completion')
+      },
+      'prompt echo': (run) => {
+        run.stdout = JSON.stringify({
+          type: 'user',
+          sessionID: 'ses-exercised',
+          text: run.completion.prompt,
+        })
+      },
+      'arbitrary stdout token': (run) => {
+        run.stdout = JSON.stringify({ debug: 'GA_OK_fixture' })
+      },
+      'wrong session': (run) => {
+        run.stdout = run.stdout.replaceAll('ses-exercised', 'ses-other')
+      },
+      'wrong message': (run) => {
+        run.stdout = run.stdout.replaceAll('msg-fresh', 'msg-other')
+      },
+      'missing assistant text': (run) => {
+        run.completion.assistant.content = []
+      },
+      'prompt as assistant': (run) => {
+        run.completion.assistant.content[0]!.text = run.completion.prompt
+        run.stdout = run.stdout.replace('GA_OK_fixture', run.completion.prompt)
+      },
+      'missing completed time': (run) => {
+        Reflect.deleteProperty(run.completion.assistant.time, 'completed')
+      },
+      'missing finish': (run) => {
+        Reflect.deleteProperty(run.completion.assistant, 'finish')
+      },
+      'missing terminal result': (run) => {
+        run.completion.messages.pop()
+      },
+      'failed terminal state': (run) => {
+        Reflect.set(run.completion.messages[1]!, 'outcome', 'failed')
+      },
+      'interrupted terminal state': (run) => {
+        Reflect.set(run.completion.messages[1]!, 'outcome', 'interrupted')
+      },
+      'stale earlier assistant': (run) => {
+        run.completion.beforeMessageIDs.push('msg-fresh')
+      },
+      'stale idle': (run) => {
+        run.completion.beforeMessageIDs.push('idle-fresh')
+      },
+      'assistant error': (run) => {
+        Reflect.set(run.completion.assistant, 'error', {
+          type: 'provider.transport',
+          message: 'primary failed',
+        })
+      },
+      'wrong returned message': (run) => {
+        run.completion.assistant.id = 'msg-other'
+      },
+      'synthetic success beside failing primary': (run) => {
+        run.completion.messages.splice(
+          1,
+          0,
+          Object.assign({}, run.completion.assistant, {
+            id: 'msg-failing',
+            finish: 'error',
+            error: { type: 'provider.transport', message: 'primary failed' },
+          }),
+        )
+      },
+    }
+  for (const [fault, mutate] of Object.entries(faults))
+    it(`rejects completion with ${fault}`, () => {
+      const run = completedRun()
+      mutate(run)
+      expect(() =>
+        assertGaSuccess(run as unknown as GaRunResult, 'fixture'),
+      ).toThrow()
+    })
+  it('uses the pinned singular message.list and session.message.get shapes for the requested session', async () => {
+    const run = completedRun()
+    const paths: string[] = []
+    let prompted = false
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        expect(request.headers.get('authorization')).toBe(
+          `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
+        )
+        paths.push(`${request.method} ${url.pathname}`)
+        if (url.pathname.endsWith('/wait'))
+          return new Response(null, { status: 204 })
+        if (url.pathname.endsWith('/message')) {
+          expect(url.searchParams.get('order')).toBe('asc')
+          expect(url.searchParams.get('limit')).toBe('100')
+          return Response.json({
+            data: prompted ? run.completion.messages : [],
+            cursor: {},
+          })
+        }
+        return Response.json({ data: run.completion.assistant })
+      },
+    })
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      const session = { id: 'ses-exercised', directory: '/owned/project' }
+      const before = await native.messages(session)
+      prompted = true
+      const completion = await collectGaCompletion(
+        native,
+        session,
+        run.completion.prompt,
+        before,
+        run.stdout,
+      )
+      expect(completion.assistant).toEqual(run.completion.assistant)
+      expect(() =>
+        assertGaSuccess({ ...run, completion }, 'fixture'),
+      ).not.toThrow()
+      expect(paths).toEqual([
+        'GET /api/session/ses-exercised/message',
+        'POST /api/experimental/session/ses-exercised/wait',
+        'GET /api/session/ses-exercised/message',
+        'GET /api/session/ses-exercised/message/msg-fresh',
+      ])
+      await expect(
+        collectGaCompletion(
+          native,
+          { ...session, id: 'ses-other' },
+          run.completion.prompt,
+          before,
+          run.stdout,
+        ),
+      ).rejects.toThrow('requested session')
+      await expect(
+        collectGaCompletion(
+          native,
+          session,
+          run.completion.prompt,
+          [completion.assistant],
+          run.stdout,
+        ),
+      ).rejects.toThrow('stale earlier assistant')
+    } finally {
+      await server.stop(true)
+    }
+  })
+})
 const root = () => {
   const value = realpathSync(mkdtempSync(join(tmpdir(), 'ga-native-source-')))
   roots.push(value)
@@ -199,17 +412,34 @@ describe('native-job source/parser controls, not official-host certification', (
   })
   it('pins the actual 2.0.22 platform package to the tracked SRI without .bin stubs', () => {
     expect(() => assertGaFixturePins(resolve('.'))).not.toThrow()
-    const fixture = JSON.parse(
-      readFileSync(join(GA_OFFLINE_FIXTURE, 'bun.lock'), 'utf8'),
+    const fixture = record(
+      parseLockForEquality(
+        join(GA_OFFLINE_FIXTURE, 'bun.lock'),
+        readFileSync(join(GA_OFFLINE_FIXTURE, 'bun.lock'), 'utf8'),
+      ),
     )
-    const tracked = parseConfigFileTextToJson(
-      'bun.lock',
-      readFileSync('bun.lock', 'utf8'),
-    ).config
-    for (const [name, entry] of Object.entries(fixture.packages)) {
+    const tracked = record(
+      parseLockForEquality('bun.lock', readFileSync('bun.lock', 'utf8')),
+    )
+    const fixturePackages = record(fixture.packages)
+    const trackedPackages = record(tracked.packages)
+    for (const [name, entry] of Object.entries(fixturePackages)) {
       if (name === '@opencode/cli-linux-x64') continue
-      expect(entry).toEqual(tracked.packages[name])
+      expect(entry).toEqual(trackedPackages[name])
     }
+  })
+  it('rejects malformed lock syntax even when JSONC parsing recovers matching package rows', () => {
+    const valid = '{"packages":{"kept":["package@1",],},}'
+    expect(record(parseLockForEquality('bun.lock', valid)).packages).toEqual({
+      kept: ['package@1'],
+    })
+    const malformed = '{"packages":{"kept":["package@1",],},"broken":}'
+    const recovered = parseConfigFileTextToJson('bun.lock', malformed)
+    expect(recovered.error).toBeDefined()
+    expect(record(recovered.config).packages).toEqual({ kept: ['package@1'] })
+    expect(() => parseLockForEquality('bun.lock', malformed)).toThrow(
+      'Malformed Bun lock syntax',
+    )
   })
   it('uses genuine SDK declaration exports from its isolated dependency layout', () => {
     const paths = gaSdkDeclarationPaths(resolve('.'))
@@ -764,12 +994,12 @@ describe('GA native oracle fixtures (synthetic records, not native proof)', () =
     const events: Record<string, unknown>[] = []
     const selected: string[] = []
     const session = { id: 'oracle-session', directory: paths.project }
-    const success = {
-      code: 0,
-      stdout: JSON.stringify({ type: 'text', text: 'GA_OK_fixture' }),
-      timedOut: false,
-      outputCapExceeded: false,
-    }
+    const success = completedRun()
+    success.completion.sessionID = 'oracle-session'
+    success.stdout = success.stdout.replaceAll(
+      'ses-exercised',
+      'oracle-session',
+    )
     const harness = {
       paths,
       nonce: 'fixture',
@@ -815,6 +1045,144 @@ describe('GA native oracle fixtures (synthetic records, not native proof)', () =
         },
       },
     }
+  }
+  function capRun(
+    f: ReturnType<typeof fixture>,
+    preparedCap: number | null,
+    expected: number,
+    fault = '',
+  ) {
+    const envelope = {
+      ...wire('google/antigravity-claude-sonnet-5-5#low', expected),
+      requestId: 'synthetic-wire-request',
+    }
+    f.harness.run = async (model, prompt, _continuation, session) => {
+      f.selected.push(model)
+      const caller = /GA_CAP_CALLER_[a-f0-9]{32}/.exec(prompt ?? '')?.[0]
+      Object.assign(envelope.request, {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      })
+      const prepared = {
+        event: 'native.prepared-output-cap',
+        kind: 'primary',
+        model: 'antigravity-claude-sonnet-5-5',
+        sessionID: session?.id,
+        caller,
+        owned: true,
+        bodySha256: 'a'.repeat(64),
+        maxOutputTokens: preparedCap,
+      }
+      const body = JSON.stringify(envelope)
+      const physical = { kind: 'primary', body }
+      const native = {
+        event: 'native.request',
+        kind: 'primary',
+        model: 'antigravity-claude-sonnet-5-5',
+        sessionID: session?.id,
+      }
+      const observedWire = {
+        event: 'native.primary-wire',
+        kind: 'primary',
+        caller,
+        requestId: envelope.requestId,
+        bodySha256: createHash('sha256').update(body).digest('hex'),
+      }
+      if (fault === 'session') prepared.sessionID = 'foreign-session'
+      if (fault === 'ownership') prepared.owned = false
+      if (fault === 'swapped')
+        prepared.caller = `GA_CAP_CALLER_${'b'.repeat(32)}`
+      if (fault === 'wire-hash') observedWire.bodySha256 = 'f'.repeat(64)
+      if (fault === 'wire-request')
+        observedWire.requestId = 'unrelated-wire-request'
+      if (fault === 'native-session') native.sessionID = 'foreign-session'
+      if (fault !== 'missing') f.events.push(prepared)
+      if (fault !== 'missing-native') f.events.push(native)
+      f.events.push(observedWire)
+      f.requests.push(physical)
+      if (fault === 'extra-primary') f.requests.push({ ...physical })
+      if (fault === 'extra-prepared') f.events.push({ ...prepared })
+      if (fault === 'extra-wire') f.events.push({ ...observedWire })
+      return f.success as Awaited<ReturnType<GaHarness['run']>>
+    }
+    return envelope
+  }
+  for (const close of ['missing', 'wrong-peer', 'forced', 'natural'] as const) {
+    it(`requires the PTY held peer natural-close before cleanup: ${close}`, async () => {
+      const f = fixture()
+      const events: Array<Record<string, unknown>> = []
+      Object.assign(f.harness.mock, { events })
+      writeFileSync(join(f.paths.state, 'tui.ndjson'), '{"event":"ui.setup"}\n')
+      let stopped = false
+      f.harness.startPty = () =>
+        ({
+          process: {
+            exitCode: null,
+            stdin: {
+              write: (text: string) => {
+                if (text.startsWith('Hold')) {
+                  f.requests.push({
+                    kind: 'primary',
+                    body: JSON.stringify({
+                      model: 'gemini-3.5-flash',
+                      request: {
+                        contents: [
+                          {
+                            role: 'user',
+                            parts: [
+                              { text: `Hold this stream ${f.harness.nonce}` },
+                            ],
+                          },
+                        ],
+                      },
+                    }),
+                    peer: 41,
+                  } as (typeof f.requests)[number])
+                  events.push({
+                    event: 'held-content',
+                    peer: 41,
+                    requestIndex: 1,
+                    at: gaTimestamp(),
+                  })
+                }
+                if (text === '\x1b' && close !== 'missing')
+                  events.push({
+                    event: close === 'forced' ? 'forced-close' : 'peer-close',
+                    peer: close === 'wrong-peer' ? 42 : 41,
+                    requestIndex: 1,
+                    at: gaTimestamp(),
+                  })
+              },
+            },
+          },
+          output: () => ({ stdout: 'Antigravity 75%', stderr: '' }),
+          signal: () => {
+            stopped = true
+          },
+          result: Promise.resolve(f.success),
+        }) as unknown as ReturnType<GaHarness['startPty']>
+      f.harness.run = async () => {
+        f.requests.push({ kind: 'primary', body: '{}' })
+        return f.success as Awaited<ReturnType<GaHarness['run']>>
+      }
+      const accounts = {
+        snapshot: async () => ({
+          rows: [{ publicId: 'owned-row' }],
+          sidebarPullMs: 1000,
+        }),
+        assertNoPortOrSidebarFiles: async () => {},
+      } as unknown as Parameters<typeof runGaPtyScenario>[2]
+      if (close === 'natural')
+        await runGaPtyScenario(f.harness, 'pty-interrupt-recovery', accounts)
+      else
+        await expect(
+          runGaPtyScenario(f.harness, 'pty-interrupt-recovery', accounts),
+        ).rejects.toThrow(
+          close === 'forced'
+            ? 'held peer required forced cleanup'
+            : 'held peer natural-close',
+        )
+      expect(stopped).toBe(true)
+    })
   }
   it('keeps all seven public IDs and every enabled catalog variant with deliberate off-catalog titles', async () => {
     const f = fixture()
@@ -868,13 +1236,24 @@ describe('GA native oracle fixtures (synthetic records, not native proof)', () =
       )
       f.events.push(
         ...['gemini-flash-lite-latest', 'antigravity-gemini-3.8-flash'].map(
-          (model) => ({ event: 'native.request', kind: 'title', model }),
+          (model) => ({
+            event: 'native.request',
+            kind: 'title',
+            model,
+            sessionID: 'oracle-session',
+          }),
         ),
       )
       f.events.push(
-        ...[400, id === 'title-overflow' ? 400 : 200].map((status) => ({
+        ...[400, id === 'title-overflow' ? 400 : 200].map((status, index) => ({
           event: 'native.title.response',
           status,
+          kind: 'title',
+          sessionID: 'oracle-session',
+          model:
+            index === 0
+              ? 'gemini-flash-lite-latest'
+              : 'antigravity-gemini-3.8-flash',
         })),
       )
       const overflow = loadGaOverflowFixture(resolve('.'), 'gemini')
@@ -883,44 +1262,69 @@ describe('GA native oracle fixtures (synthetic records, not native proof)', () =
         status: 400,
         contentType: overflow.contentType,
         bytes: overflow.bytes.toString('base64'),
+        kind: 'title',
+        sessionID: 'oracle-session',
+        model: 'gemini-flash-lite-latest',
+        contextErrorHeader: null,
       }
       f.events.push(error)
-      if (id === 'title-overflow') f.events.push({ ...error })
+      if (id === 'title-overflow')
+        f.events.push({ ...error, model: 'antigravity-gemini-3.8-flash' })
       await runGaTitleScenario(f.harness, id)
       expect(f.selected).toEqual(
         Array(2).fill('google/antigravity-gemini-3.8-flash#medium'),
       )
+      for (const bad of [
+        { ...error, bytes: '' },
+        { ...error, bytes: Buffer.from('wrong body').toString('base64') },
+        { ...error, contentType: 'text/plain' },
+        { ...error, kind: 'primary' },
+        { ...error, sessionID: 'other-session' },
+        { ...error, model: 'other-model' },
+        { ...error, contextErrorHeader: 'invented' },
+      ]) {
+        f.events[4] = bad
+        await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+          'Title refusal bytes or attribution',
+        )
+      }
+      f.events[4] = error
       const config = JSON.parse(
         readFileSync(join(f.paths.opencodeConfig, 'opencode.json'), 'utf8'),
       )
       expect(config.agents.title.model).toBe('google/gemini-flash-lite-latest')
       f.requests.reverse()
       await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
-        'exact resolver-derived',
+        'exact expected AGY title wire models',
       )
       f.requests.reverse()
       f.events.splice(4)
       await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
-        id === 'title-overflow' ? 'overflow bytes' : 'HTTP 400',
+        'Title refusal bytes or attribution',
       )
       if (id === 'title-overflow') {
-        f.events.push(error, { ...error, contentType: 'text/plain' })
+        f.events.push(error, {
+          ...error,
+          model: 'antigravity-gemini-3.8-flash',
+          contentType: 'text/plain',
+        })
         await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
-          'overflow bytes',
+          'Title refusal bytes or attribution',
         )
         f.events[5] = {
           ...error,
+          model: 'antigravity-gemini-3.8-flash',
           bytes: Buffer.from('invented title').toString('base64'),
         }
         await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
-          'overflow bytes',
+          'Title refusal bytes or attribution',
         )
-        f.events[5] = error
-        f.events[3] = { event: 'native.title.response', status: 200 }
+        f.events[5] = { ...error, model: 'antigravity-gemini-3.8-flash' }
+        f.events[3]!.status = 200
         await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
           'invented a successful response',
         )
-        f.events[3] = { event: 'native.title.response', status: 400 }
+        f.events[3]!.status = 400
         // Return a different title only on the second read of this invocation.
         let reads = 0
         f.harness.native.get = async () =>
@@ -940,30 +1344,41 @@ describe('GA native oracle fixtures (synthetic records, not native proof)', () =
       [null, 128_000],
     ] as const) {
       const f = fixture()
-      const envelope = wire(
-        'google/antigravity-claude-sonnet-5-5#low',
-        expected,
-      )
-      f.requests.push({ kind: 'primary', body: JSON.stringify(envelope) })
-      f.events.push({
-        event: 'native.prepared-output-cap',
-        kind: 'primary',
-        model: 'antigravity-claude-sonnet-5-5',
-        maxOutputTokens: prepared,
-      })
+      const envelope = capRun(f, prepared, expected)
       await runGaCoreScenario(f.harness, 'claude-thinking')
-      expect(f.selected).toEqual(['google/antigravity-claude-sonnet-5-5#low'])
+      expect(f.selected).toEqual(
+        Array(2).fill('google/antigravity-claude-sonnet-5-5#low'),
+      )
       envelope.request.generationConfig.maxOutputTokens = expected - 1
-      f.requests[0]!.body = JSON.stringify(envelope)
       await expect(
         runGaCoreScenario(f.harness, 'claude-thinking'),
       ).rejects.toThrow('prepared caller cap')
       envelope.request.generationConfig.maxOutputTokens = expected
       envelope.request.generationConfig.thinkingConfig.thinkingBudget = 1024
-      f.requests[0]!.body = JSON.stringify(envelope)
       await expect(
         runGaCoreScenario(f.harness, 'claude-thinking'),
       ).rejects.toThrow('Sonnet 5.5 low')
+    }
+  })
+  it('rejects missing, swapped, unowned and duplicate Claude cap attribution', async () => {
+    for (const fault of [
+      'session',
+      'ownership',
+      'missing',
+      'swapped',
+      'extra-primary',
+      'extra-prepared',
+      'native-session',
+      'missing-native',
+      'extra-wire',
+      'wire-request',
+      'wire-hash',
+    ]) {
+      const f = fixture()
+      capRun(f, 8192, 8192, fault)
+      await expect(
+        runGaCoreScenario(f.harness, 'claude-thinking'),
+      ).rejects.toThrow('Claude cap attribution')
     }
   })
 })
@@ -1037,6 +1452,19 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
       'compiled GA arm is missing',
     )
   })
+  it('refuses a decoy loadGa call when setup returns another renderer', () => {
+    const c = consumer()
+    writeFileSync(
+      c.loader,
+      c.source.replace(
+        'return (await loadGa()).setup(context)',
+        'await loadGa(); return (await loadV1()).setup(context)',
+      ),
+    )
+    expect(() => gaInstalledCompiledTui(c.prefix)).toThrow(
+      'public ./tui setup runtime selection',
+    )
+  })
   it('records the host-prepared cap before plugin transformation, without consuming the request', async () => {
     const c = consumer()
     writeFileSync(
@@ -1051,6 +1479,21 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
     }`,
     )
     const paths = prepareGaRoot(root())
+    const placeholderFixture = join(paths.state, 'captured-placeholder.json')
+    const value = {
+      type: 'oauth',
+      methodID: 'antigravity-auth-pool-browser',
+      access: 'synthetic-captured-placeholder',
+    }
+    writeFileSync(
+      placeholderFixture,
+      JSON.stringify({
+        value,
+        valueSha256: createHash('sha256')
+          .update(JSON.stringify(value))
+          .digest('hex'),
+      }),
+    )
     const wrapper = writeGaWrapper({
       paths,
       consumerPrefix: c.prefix,
@@ -1058,6 +1501,7 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
       mockUrl: 'http://127.0.0.1:1234',
       rawSender: false,
       recordPreparedOutputCap: true,
+      placeholderFixture,
     })
     const hooks: Array<
       (event: {
@@ -1087,8 +1531,14 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
       'http://127.0.0.1:1234/direct/v1/models/claude:streamGenerateContent',
       {
         method: 'POST',
+        headers: { 'x-goog-api-key': value.access },
         body: JSON.stringify({
-          contents: [],
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: `GA_CAP_CALLER_${'a'.repeat(32)}` }],
+            },
+          ],
           generationConfig: { maxOutputTokens: 8192 },
         }),
       },
@@ -1110,7 +1560,21 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
       .map((line) => JSON.parse(line))
     expect(
       events.find((entry) => entry.event === 'native.prepared-output-cap'),
-    ).toMatchObject({ maxOutputTokens: 8192, sessionID: 'prepared-session' })
+    ).toMatchObject({
+      maxOutputTokens: 8192,
+      sessionID: 'prepared-session',
+      owned: true,
+      caller: `GA_CAP_CALLER_${'a'.repeat(32)}`,
+    })
+    await expect(
+      hooks[0]!({
+        ...event,
+        request: new Request('http://127.0.0.1:1234/rewritten', {
+          method: 'POST',
+          body: '{"request":{}}',
+        }),
+      }),
+    ).rejects.toThrow('expected the host-prepared Google body before rewrite')
     await cleanup()
     expect(disposed).toBe(3)
   })
