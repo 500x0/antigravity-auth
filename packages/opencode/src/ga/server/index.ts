@@ -1,6 +1,6 @@
 /**
  * OpenCode 2 (2.0.22) server plugin. It sends the host's Google model
- * requests for this plugin's models to Antigravity accounts through a
+ * requests carrying the common-auth placeholder to Antigravity accounts through a
  * loopback bridge, and serves the `antigravity-auth` v1 RPC with each
  * location's account state and commands. `createGaAntigravityPlugin` is the
  * plugin the host loads; `createGaPluginFromServices` builds one over a
@@ -40,7 +40,7 @@ import type {
   SessionRequestKind,
   SessionRetry,
 } from '@opencode/plugin/promise/session'
-
+import { placeholderSecret } from '../../common-auth-embedded/opencode2/index.js'
 import { createGaLocationServices } from '../../plugin/ga-location-services.ts'
 import type { persistAccountPool } from '../../plugin/persist-account-pool.ts'
 import {
@@ -1370,29 +1370,52 @@ export interface GaHttpResponseEvent {
 
 /** The fields the retry hook reads and writes. */
 export interface GaRetryEvent {
+  readonly sessionID: string
   readonly model: { readonly id: string; readonly providerID: string }
   decision: { retry: false } | { retry: true; delay: number }
 }
 
-/**
- * Whether the plugin owns a Google request: every title request (the host
- * may pick an off-catalog title model) and any request for a model this
- * plugin registered or withdrew. Withdrawn selections must reach shared
- * admission rather than passing through to the host's Google transport.
- */
+/** Ownership follows the host-prepared credential, never the active connection. */
 export function isGaOwnedRequest(
-  event: Pick<GaHttpRequestEvent, 'kind' | 'model'>,
-  isRegisteredModel: (modelID: string) => boolean,
+  event: Pick<GaHttpRequestEvent, 'request'>,
 ): boolean {
-  // The hooks are registered for the Google provider only; the provider
-  // check repeats that scope so a host that widened it still passes other
-  // providers through untouched.
-  if (event.model.providerID !== GA_PROVIDER_ID) return false
   return (
-    event.kind === 'title' ||
-    isRegisteredModel(event.model.id) ||
-    isRetiredAgyModel(event.model.id)
+    event.request.headers.get('x-goog-api-key') === placeholderSecret('google')
   )
+}
+
+export const GA_RETRY_OWNERSHIP_LIMIT = 512
+export const GA_UNSUPPORTED_REQUEST_MESSAGE =
+  'This request cannot use Antigravity. Choose a supported Antigravity model.'
+
+/**
+ * The retry API has no attempt identity, so only the latest Google transport
+ * per session is known. Updating an entry makes it newest; eviction makes
+ * ownership unknown rather than assuming a retry belongs to Antigravity.
+ */
+export class GaRequestOwnership {
+  private readonly latest = new Map<string, boolean>()
+
+  record(sessionID: string, owned: boolean): void {
+    this.latest.delete(sessionID)
+    this.latest.set(sessionID, owned)
+    if (this.latest.size > GA_RETRY_OWNERSHIP_LIMIT) {
+      const oldest = this.latest.keys().next().value
+      if (oldest !== undefined) this.latest.delete(oldest)
+    }
+  }
+
+  get(sessionID: string): boolean | undefined {
+    return this.latest.get(sessionID)
+  }
+
+  delete(sessionID: string): void {
+    this.latest.delete(sessionID)
+  }
+
+  clear(): void {
+    this.latest.clear()
+  }
 }
 
 /**
@@ -1408,11 +1431,25 @@ export async function rewriteGaHttpRequest(
     readonly bridge: Pick<GaLoopbackBridge, 'rewrite'>
     readonly isRegisteredModel: (modelID: string) => boolean
     readonly env: LoopbackProxyEnv
+    readonly ownership: GaRequestOwnership
   },
 ): Promise<void> {
-  if (!isGaOwnedRequest(event, input.isRegisteredModel)) return
+  if (event.model.providerID !== GA_PROVIDER_ID) return
+  const owned = isGaOwnedRequest(event)
+  input.ownership.record(event.sessionID, owned)
+  if (!owned) return
   const original = event.request
-  if (!isGaGoogleContentRequest(original)) return
+  if (!isGaGoogleContentRequest(original)) {
+    throw new Error(GA_UNSUPPORTED_REQUEST_MESSAGE)
+  }
+  // Titles must reach the engine's title router even for retired or foreign IDs.
+  if (
+    event.kind !== 'title' &&
+    !input.isRegisteredModel(event.model.id) &&
+    !isRetiredAgyModel(event.model.id)
+  ) {
+    throw new Error(GA_UNSUPPORTED_REQUEST_MESSAGE)
+  }
   const job: GaBridgeJob = {
     sessionID: event.sessionID,
     parentSessionID: headerValue(original, PARENT_SESSION_HEADERS),
@@ -1437,15 +1474,16 @@ export function adaptGaHttpResponse(
 /**
  * Retry hook body. The bridge's job runner rotates accounts and retries
  * endpoints itself; a host retry on top would repeat that whole sequence.
- * Registered and withdrawn models are affected; withdrawn selections must not retry.
+ * Response adaptation cannot clear ownership: the host classifies status and
+ * consumes the body only after its response hook has run.
  */
 export function decideGaRetry(
   event: GaRetryEvent,
-  isRegisteredModel: (modelID: string) => boolean,
+  ownership: Pick<GaRequestOwnership, 'get'>,
 ): void {
   if (
     event.model.providerID === GA_PROVIDER_ID &&
-    (isRegisteredModel(event.model.id) || isRetiredAgyModel(event.model.id))
+    ownership.get(event.sessionID) === true
   ) {
     event.decision = { retry: false }
   }
@@ -1464,6 +1502,7 @@ export interface GaHostContext {
   readonly command: Pick<Plugin.Context['command'], 'transform' | 'reload'>
   readonly integration?: Pick<Plugin.Context['integration'], 'connection'> &
     Partial<Pick<Plugin.Context['integration'], 'transform'>>
+  readonly event?: Plugin.Context['event']
 }
 
 // Model registration
@@ -1578,7 +1617,7 @@ function headerValue(
  * the location runtime, the RPC activation and the loopback bridge for the
  * host-owned location directory; registers the `antigravity-auth` RPC, the
  * public catalog models on the Google provider, the `http.request` rewrite,
- * the `http.response` post-header error adapter and the registered-model
+ * the `http.response` post-header error adapter and the latest-owned-session
  * retry policy (all scoped to the Google provider);
  * and returns a Cleanup that removes only this activation's hooks and RPC
  * and stops everything else: producers are stopped and awaited, queued
@@ -1672,6 +1711,39 @@ export async function setupGaActivation(
     runtime.scope.add(bridge, 'producer')
     runtime.scope.add(activation, 'producer')
 
+    const ownership = new GaRequestOwnership()
+    const events = new AbortController()
+    const eventSurface = context.event
+    const eventTask = eventSurface
+      ? (async () => {
+          try {
+            for await (const event of eventSurface.subscribe({
+              signal: events.signal,
+            })) {
+              if (event.type === 'session.deleted') {
+                ownership.delete(event.data.sessionID)
+              }
+            }
+          } catch {
+            if (!events.signal.aborted) {
+              runtime.logger
+                .createLogger('ownership')
+                .warn('Session cleanup subscription stopped')
+            }
+          }
+        })()
+      : undefined
+    runtime.scope.add(
+      {
+        dispose: async () => {
+          events.abort()
+          await eventTask
+          ownership.clear()
+        },
+      },
+      'producer',
+    )
+
     const handlers: RpcHandlers<typeof ANTIGRAVITY_RPC_DEFINITION> = {
       state: (input, call) => activation.handlers.state(input, call.signal),
       apply: (input, call) => activation.handlers.apply(input, call.signal),
@@ -1728,7 +1800,7 @@ export async function setupGaActivation(
 
     const retryHook: Registration = await context.session.hook(
       'retry',
-      (event: SessionRetry) => decideGaRetry(event, isRegisteredModel),
+      (event: SessionRetry) => decideGaRetry(event, ownership),
       { providerID: GA_PROVIDER_ID },
     )
     runtime.scope.add(retryHook, 'producer')
@@ -1744,6 +1816,7 @@ export async function setupGaActivation(
           bridge,
           isRegisteredModel,
           env: process.env,
+          ownership,
         }),
       { providerID: GA_PROVIDER_ID },
     )

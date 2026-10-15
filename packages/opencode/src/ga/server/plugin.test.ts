@@ -14,7 +14,15 @@
  * under a disposable test root.
  */
 
-import { afterEach, beforeAll, describe, expect, it, mock } from 'bun:test'
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test'
 import {
   mkdirSync,
   mkdtempSync,
@@ -26,6 +34,12 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 import type * as Core from '@cortexkit/antigravity-auth-core'
+import type {
+  SessionHooks,
+  SessionHttpRequest,
+  SessionRetry,
+} from '@opencode/plugin/promise/session'
+import { placeholderSecret } from '../../common-auth-embedded/opencode2/index.js'
 
 type SenderCall = {
   url: string
@@ -464,10 +478,12 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 describe('hook bodies', () => {
   let bridge: GaLoopbackBridge | null = null
+  const ownership = new server.GaRequestOwnership()
 
   afterEach(async () => {
     await bridge?.dispose()
     bridge = null
+    ownership.clear()
   })
 
   const registered = (modelID: string) =>
@@ -476,7 +492,11 @@ describe('hook bodies', () => {
   function requestEvent(
     kind: GaHttpRequestEvent['kind'],
     modelID: string,
-    request: Request = hostRequest(),
+    request: Request = new Request(JOB.url, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': placeholderSecret('google') },
+      body: JOB.body,
+    }),
   ): GaHttpRequestEvent {
     return {
       sessionID: 'ses_child',
@@ -496,7 +516,47 @@ describe('hook bodies', () => {
     return bridge
   }
 
-  it('rewrites a registered primary and every title, and leaves other requests alone', async () => {
+  it('leaves prepared real keys and native OAuth untouched before title or model handling', async () => {
+    const active = await startBridge()
+    for (const key of [
+      'synthetic-ga-key',
+      'native-google-oauth-access',
+      `${placeholderSecret('google')}-not-exact`,
+    ]) {
+      for (const [kind, id] of [
+        ['title', 'gemini-off-catalog-title-model'],
+        ['primary', 'antigravity-gemini-3.5-flash'],
+        ['generate', 'antigravity-gemini-3.1-pro'],
+      ] as const) {
+        const original = new Request(JOB.url, {
+          method: 'POST',
+          headers: { 'x-goog-api-key': key, 'x-native-header': 'preserve' },
+          body: '{ "native" : "bytes é" }',
+        })
+        const headers = [...original.headers]
+        const clone = spyOn(original, 'clone')
+        const text = spyOn(original, 'text')
+        const event = requestEvent(kind, id, original)
+        await server.rewriteGaHttpRequest(event, {
+          bridge: active,
+          ownership,
+          isRegisteredModel: () => {
+            throw new Error('unowned model inspected')
+          },
+          env: NO_PROXY_ENV,
+        })
+        expect(event.request).toBe(original)
+        expect(original.bodyUsed).toBe(false)
+        expect(clone).not.toHaveBeenCalled()
+        expect(text).not.toHaveBeenCalled()
+        expect(await original.text()).toBe('{ "native" : "bytes é" }')
+        expect([...original.headers]).toEqual(headers)
+        expect(active.pendingJobs()).toBe(0)
+      }
+    }
+  })
+
+  it('bridges registered kinds, retired IDs and every title', async () => {
     const active = await startBridge()
     const cases: Array<[GaHttpRequestEvent['kind'], string, boolean]> = [
       ['primary', 'antigravity-gemini-3.5-flash', true],
@@ -513,14 +573,15 @@ describe('hook bodies', () => {
       ['primary', 'gemini-3.7-flash-medium', true],
       ['primary', 'gemini-3.7-flash-high', true],
       ['title', 'gemini-off-catalog-title-model', true],
-      ['primary', 'gemini-2.5-pro', false],
-      ['compaction', 'gemini-2.5-pro', false],
+      ['compaction', 'antigravity-gemini-3.5-flash', true],
+      ['generate', 'antigravity-gemini-3.5-flash', true],
     ]
     for (const [kind, modelID, rewritten] of cases) {
       const event = requestEvent(kind, modelID)
       const original = event.request
       await server.rewriteGaHttpRequest(event, {
         bridge: active,
+        ownership,
         isRegisteredModel: registered,
         env: NO_PROXY_ENV,
       })
@@ -539,36 +600,53 @@ describe('hook bodies', () => {
     const original = event.request
     await server.rewriteGaHttpRequest(event, {
       bridge: active,
+      ownership,
       isRegisteredModel: registered,
       env: NO_PROXY_ENV,
     })
     expect(event.request).toBe(original)
     const retry: GaRetryEvent = {
+      sessionID: 'ses_child',
       model: { id: 'antigravity-gemini-3.5-flash', providerID: 'openrouter' },
       decision: { retry: true, delay: 2_000 },
     }
-    server.decideGaRetry(retry, registered)
+    server.decideGaRetry(retry, ownership)
     expect(retry.decision).toEqual({ retry: true, delay: 2_000 })
   })
 
-  it('leaves non-content Google requests alone even for registered models', async () => {
+  it('refuses owned non-content before model handling and records retry ownership', async () => {
     const active = await startBridge()
-    const request = new Request(
-      'https://generativelanguage.googleapis.com/v1beta/models/x:countTokens',
-      { method: 'POST', body: '{}' },
-    )
-    const event = requestEvent(
+    for (const kind of [
       'primary',
-      'antigravity-gemini-3.5-flash',
-      request,
-    )
-    await server.rewriteGaHttpRequest(event, {
-      bridge: active,
-      isRegisteredModel: registered,
-      env: NO_PROXY_ENV,
-    })
-    expect(event.request).toBe(request)
-    expect(active.pendingJobs()).toBe(0)
+      'compaction',
+      'title',
+      'generate',
+    ] as const) {
+      const request = new Request(
+        'https://generativelanguage.googleapis.com/v1beta/models/x:countTokens',
+        {
+          method: 'POST',
+          headers: { 'x-goog-api-key': placeholderSecret('google') },
+          body: '{}',
+        },
+      )
+      const event = requestEvent(kind, 'antigravity-gemini-3.1-pro', request)
+      await expect(
+        server.rewriteGaHttpRequest(event, {
+          bridge: active,
+          ownership,
+          isRegisteredModel: () => {
+            throw new Error('non-content model inspected')
+          },
+          env: NO_PROXY_ENV,
+        }),
+      ).rejects.toThrow(server.GA_UNSUPPORTED_REQUEST_MESSAGE)
+      expect(ownership.get(event.sessionID)).toBe(true)
+      expect(retryFor(event.sessionID).decision).toEqual({ retry: false })
+      expect(event.request).toBe(request)
+      expect(request.bodyUsed).toBe(false)
+      expect(active.pendingJobs()).toBe(0)
+    }
   })
 
   it('records the original body, kind and parent session, and null without a parent header', async () => {
@@ -580,6 +658,7 @@ describe('hook bodies', () => {
     const withParent = requestEvent('title', 'any-title-model')
     await server.rewriteGaHttpRequest(withParent, {
       bridge: active,
+      ownership,
       isRegisteredModel: registered,
       env: NO_PROXY_ENV,
     })
@@ -587,10 +666,15 @@ describe('hook bodies', () => {
     const noParent = requestEvent(
       'primary',
       'antigravity-gemini-3.5-flash',
-      new Request(JOB.url, { method: 'POST', body: JOB.body }),
+      new Request(JOB.url, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': placeholderSecret('google') },
+        body: JOB.body,
+      }),
     )
     await server.rewriteGaHttpRequest(noParent, {
       bridge: active,
+      ownership,
       isRegisteredModel: registered,
       env: NO_PROXY_ENV,
     })
@@ -607,11 +691,15 @@ describe('hook bodies', () => {
       new Request(JOB.url, {
         method: 'POST',
         body: JOB.body,
-        headers: { 'x-opencode-parent-session-id': 'ses_parent' },
+        headers: {
+          'x-opencode-parent-session-id': 'ses_parent',
+          'x-goog-api-key': placeholderSecret('google'),
+        },
       }),
     )
     await server.rewriteGaHttpRequest(parented, {
       bridge: active,
+      ownership,
       isRegisteredModel: registered,
       env: NO_PROXY_ENV,
     })
@@ -627,6 +715,7 @@ describe('hook bodies', () => {
     await expect(
       server.rewriteGaHttpRequest(event, {
         bridge: active,
+        ownership,
         isRegisteredModel: registered,
         env: { http_proxy: 'http://proxy:3128' },
       }),
@@ -782,24 +871,133 @@ describe('hook bodies', () => {
     expect(event.response).toBe(response)
   })
 
-  it('disables host retries only for registered models', () => {
+  function retryFor(sessionID: string): GaRetryEvent {
+    const event: GaRetryEvent = {
+      sessionID,
+      model: { id: 'gemini-off-catalog', providerID: 'google' },
+      decision: { retry: true, delay: 1234 },
+    }
+    server.decideGaRetry(event, ownership)
+    return event
+  }
+
+  it('tracks interleaved sessions and both ownership switch directions before retry', async () => {
+    const active = await startBridge()
+    const transport = async (sessionID: string, owned: boolean) => {
+      const event = requestEvent('primary', 'antigravity-gemini-3.5-flash')
+      const prepared = event.request
+      if (!owned) prepared.headers.set('x-goog-api-key', 'native-key')
+      await server.rewriteGaHttpRequest(
+        { ...event, sessionID },
+        {
+          bridge: active,
+          ownership,
+          isRegisteredModel: registered,
+          env: NO_PROXY_ENV,
+        },
+      )
+    }
+    expect(retryFor('missing').decision).toEqual({ retry: true, delay: 1234 })
+    await transport('a', true)
+    await transport('b', false)
+    expect(retryFor('a').decision).toEqual({ retry: false })
+    expect(retryFor('b').decision).toEqual({ retry: true, delay: 1234 })
+    await transport('a', false)
+    await transport('b', true)
+    expect(retryFor('a').decision).toEqual({ retry: true, delay: 1234 })
+    expect(retryFor('b').decision).toEqual({ retry: false })
+  })
+
+  it('retains title-before-primary and response-before-retry ownership without owning unrelated responses', async () => {
+    const active = await startBridge(
+      async () => new Response('upstream error', { status: 503 }),
+    )
+    const title = requestEvent('title', 'gemini-off-catalog')
+    await server.rewriteGaHttpRequest(title, {
+      bridge: active,
+      ownership,
+      isRegisteredModel: registered,
+      env: NO_PROXY_ENV,
+    })
+    expect(retryFor(title.sessionID).decision).toEqual({ retry: false })
+    const primary = requestEvent('primary', 'antigravity-gemini-3.5-flash')
+    await server.rewriteGaHttpRequest(primary, {
+      bridge: active,
+      ownership,
+      isRegisteredModel: registered,
+      env: NO_PROXY_ENV,
+    })
+    const response = {
+      request: primary.request,
+      response: await fetch(primary.request),
+    }
+    server.adaptGaHttpResponse(response, active)
+    expect(response.response.status).toBe(503)
+    await response.response.text()
+    expect(retryFor(primary.sessionID).decision).toEqual({ retry: false })
+    const foreignResponse = new Response('native success')
+    const foreign = { request: hostRequest(), response: foreignResponse }
+    server.adaptGaHttpResponse(foreign, active)
+    expect(foreign.response).toBe(foreignResponse)
+  })
+
+  it('refuses every owned off-catalog non-title kind locally without consuming bytes or allowing host retry', async () => {
+    const active = await startBridge()
+    for (const kind of ['primary', 'compaction', 'generate'] as const) {
+      const event = requestEvent(kind, 'gemini-off-catalog')
+      const original = event.request
+      await expect(
+        server.rewriteGaHttpRequest(event, {
+          bridge: active,
+          ownership,
+          isRegisteredModel: registered,
+          env: NO_PROXY_ENV,
+        }),
+      ).rejects.toThrow(server.GA_UNSUPPORTED_REQUEST_MESSAGE)
+      expect(original.bodyUsed).toBe(false)
+      expect(event.request).toBe(original)
+      expect(active.pendingJobs()).toBe(0)
+      expect(retryFor(event.sessionID).decision).toEqual({ retry: false })
+    }
+  })
+
+  it('evicts the oldest-updated session at the named 512-entry bound', () => {
+    expect(server.GA_RETRY_OWNERSHIP_LIMIT).toBe(512)
+    for (let i = 0; i < 512; i++) ownership.record(`session-${i}`, true)
+    ownership.record('session-0', false)
+    ownership.record('new-session', true)
+    expect(ownership.get('session-1')).toBeUndefined()
+    expect(ownership.get('session-0')).toBe(false)
+    expect(retryFor('session-1').decision).toEqual({ retry: true, delay: 1234 })
+    expect(retryFor('session-2').decision).toEqual({ retry: false })
+    ownership.record('newer-session', false)
+    expect(ownership.get('session-2')).toBeUndefined()
+    expect(ownership.get('session-3')).toBe(true)
+  })
+
+  it('disables host retries only for latest-owned sessions, independent of model', () => {
     // Typed as the hook's event so `decision` keeps its declared union and
     // the hook's write of `{ retry: false }` is observable to the matcher.
+    ownership.record('owned', true)
+    ownership.record('unowned', false)
     const own: GaRetryEvent = {
+      sessionID: 'owned',
       model: { id: 'antigravity-gemini-3.5-flash', providerID: 'google' },
       decision: { retry: true, delay: 2_000 },
     }
     const other: GaRetryEvent = {
+      sessionID: 'unowned',
       model: { id: 'gemini-2.5-pro', providerID: 'google' },
       decision: { retry: true, delay: 2_000 },
     }
-    server.decideGaRetry(own, registered)
-    server.decideGaRetry(other, registered)
+    server.decideGaRetry(own, ownership)
+    server.decideGaRetry(other, ownership)
     expect(own.decision).toEqual({ retry: false })
     expect(other.decision).toEqual({ retry: true, delay: 2_000 })
   })
 
-  it('disables host retries for withdrawn Gemini selectors and native routes', () => {
+  it('keeps latest-owned retry policy for withdrawn Gemini selectors and native routes', () => {
+    ownership.record('owned', true)
     for (const id of [
       'antigravity-gemini-3.1-pro',
       'gemini-3.1-pro-low',
@@ -815,10 +1013,11 @@ describe('hook bodies', () => {
       'gemini-3.7-flash-high',
     ]) {
       const event: GaRetryEvent = {
+        sessionID: 'owned',
         model: { id, providerID: 'google' },
         decision: { retry: true, delay: 2000 },
       }
-      server.decideGaRetry(event, registered)
+      server.decideGaRetry(event, ownership)
       expect(event.decision).toEqual({ retry: false })
     }
   })
@@ -866,12 +1065,16 @@ describe('setup against a host context', () => {
   type RegisteredCommand = Parameters<
     Parameters<Parameters<GaHostContext['command']['transform']>[0]>[0]['add']
   >[0]
+  type HookCallbacks = Partial<{
+    [K in keyof SessionHooks]: (event: SessionHooks[K]) => void | Promise<void>
+  }>
 
   function fakeHost(
     directory: string,
     log: string[],
     failures: { register?: Error; hook?: string } = {},
     commands: RegisteredCommand[] = [],
+    hooks: HookCallbacks = {},
   ): GaHostContext {
     const registration = (name: string) => ({
       dispose: async () => {
@@ -884,10 +1087,11 @@ describe('setup against a host context', () => {
     return {
       location: { directory },
       session: {
-        hook: async (name, _callback, options) => {
+        hook: async (name, callback, options) => {
           const label = `hook ${String(name)} ${JSON.stringify(options)}`
           if (failures.hook === String(name)) throw new Error(`no ${label}`)
           log.push(label)
+          Object.assign(hooks, { [name]: callback })
           return registration(`hook ${String(name)}`)
         },
       },
@@ -942,6 +1146,7 @@ describe('setup against a host context', () => {
   function fakeServices(
     log: string[],
     opened: Array<{ scope: AntigravityRpcScope; signal: AbortSignal }> = [],
+    execute: GaJobExecutor = async () => new Response('{}'),
   ): GaLocationServicesFactory & { calls: string[] } {
     const calls: string[] = []
     const factory: GaLocationServicesFactory = async ({ directory }) => {
@@ -953,7 +1158,7 @@ describe('setup against a host context', () => {
           refreshToken: async () => undefined,
         },
         start: async () => ({
-          execute: async () => new Response('{}'),
+          execute,
           state: {
             read: async () => ({
               readSeq: 1,
@@ -997,6 +1202,164 @@ describe('setup against a host context', () => {
     }
     return Object.assign(factory, { calls })
   }
+
+  function preparedEvent(key: string): SessionHttpRequest {
+    return {
+      ...JSON.parse(
+        '{"sessionID":"ses_prepared","agent":"build","kind":"primary","model":{"id":"antigravity-gemini-3.5-flash","providerID":"google"}}',
+      ),
+      request: new Request(JOB.url, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': key },
+        body: JOB.body,
+      }),
+    }
+  }
+
+  async function hostRetry(hooks: HookCallbacks): Promise<SessionRetry> {
+    const retry: SessionRetry = JSON.parse(
+      '{"sessionID":"ses_prepared","agent":"build","model":{"id":"antigravity-gemini-3.5-flash","providerID":"google"},"attempt":1,"error":{},"decision":{"retry":true,"delay":1234}}',
+    )
+    await hooks.retry?.(retry)
+    return retry
+  }
+
+  it('uses prepared credentials in both active switch directions with no connection read or event facade', async () => {
+    prepareRoot()
+    const hooks: HookCallbacks = {}
+    const jobs: GaBridgeJob[] = []
+    const log: string[] = []
+    let active = 'native-key'
+    let connectionReads = 0
+    const host = fakeHost(locationDirectory('prepared'), log, {}, [], hooks)
+    const cleanup = await server.setupGaActivation(
+      {
+        ...host,
+        integration: {
+          connection: {
+            active: async () => {
+              connectionReads++
+              return JSON.parse(
+                JSON.stringify({ type: 'credential', id: active }),
+              )
+            },
+            resolve: async () => {
+              connectionReads++
+              throw new Error('must not resolve active connection')
+            },
+            status: async () => {
+              connectionReads++
+              throw new Error('must not inspect connection status')
+            },
+          },
+        },
+      },
+      fakeServices(log, [], async (job) => {
+        jobs.push(job)
+        return new Response('real upstream failure', { status: 503 })
+      }),
+    )
+    if (cleanup) cleanups.push(cleanup)
+    for (const [preparedKey, switchedActive] of [
+      ['native-key', placeholderSecret('google')],
+      [placeholderSecret('google'), 'native-key'],
+      ['native-key', 'native-key'],
+      [placeholderSecret('google'), placeholderSecret('google')],
+    ] as const) {
+      const event = preparedEvent(preparedKey)
+      const original = event.request
+      const clone = spyOn(original, 'clone')
+      const text = spyOn(original, 'text')
+      active = switchedActive
+      const beforeJobs = jobs.length
+      await hooks['http.request']?.(event)
+      if (preparedKey === 'native-key') {
+        expect(event.request).toBe(original)
+        expect(clone).not.toHaveBeenCalled()
+        expect(text).not.toHaveBeenCalled()
+        expect(jobs).toHaveLength(beforeJobs)
+        expect((await hostRetry(hooks)).decision).toEqual({
+          retry: true,
+          delay: 1234,
+        })
+      } else {
+        expect(event.request).not.toBe(original)
+        expect(event.request.headers.has('x-goog-api-key')).toBe(false)
+        expect((await fetch(event.request)).status).toBe(503)
+        expect(jobs).toHaveLength(beforeJobs + 1)
+        expect((await hostRetry(hooks)).decision).toEqual({ retry: false })
+      }
+    }
+    expect(connectionReads).toBe(0)
+  })
+
+  it('clears session ownership on genuine event subscription and aborts the subscriber on teardown', async () => {
+    prepareRoot()
+    const hooks: HookCallbacks = {}
+    const log: string[] = []
+    type HostEvent =
+      ReturnType<
+        NonNullable<GaHostContext['event']>['subscribe']
+      > extends AsyncIterable<infer E>
+        ? E
+        : never
+    let controller!: ReadableStreamDefaultController<HostEvent>
+    let subscriptionSignal: AbortSignal | undefined
+    let stopped = false
+    const stream = new ReadableStream<HostEvent>({
+      start: (value) => {
+        controller = value
+      },
+    })
+    const host = fakeHost(locationDirectory('events'), log, {}, [], hooks)
+    const cleanup = await server.setupGaActivation(
+      {
+        ...host,
+        event: {
+          subscribe: async function* (options) {
+            subscriptionSignal = options?.signal
+            subscriptionSignal?.addEventListener(
+              'abort',
+              () => controller.close(),
+              { once: true },
+            )
+            try {
+              for await (const event of stream) yield event
+            } finally {
+              stopped = true
+            }
+          },
+        },
+      },
+      fakeServices(log),
+    )
+    if (cleanup) cleanups.push(cleanup)
+    await hooks['http.request']?.(preparedEvent(placeholderSecret('google')))
+    expect((await hostRetry(hooks)).decision).toEqual({ retry: false })
+    controller.enqueue(
+      JSON.parse('{"type":"session.deleted","data":{"sessionID":"ses_other"}}'),
+    )
+    await new Promise((resolve) => setImmediate(resolve))
+    expect((await hostRetry(hooks)).decision).toEqual({ retry: false })
+    controller.enqueue(
+      JSON.parse(
+        '{"type":"session.deleted","data":{"sessionID":"ses_prepared"}}',
+      ),
+    )
+    await new Promise((resolve) => setImmediate(resolve))
+    expect((await hostRetry(hooks)).decision).toEqual({
+      retry: true,
+      delay: 1234,
+    })
+    await hooks['http.request']?.(preparedEvent(placeholderSecret('google')))
+    await cleanup?.()
+    expect(subscriptionSignal?.aborted).toBe(true)
+    expect(stopped).toBe(true)
+    expect((await hostRetry(hooks)).decision).toEqual({
+      retry: true,
+      delay: 1234,
+    })
+  })
 
   it('resolves undefined for a legacy context without building anything', async () => {
     const log: string[] = []
