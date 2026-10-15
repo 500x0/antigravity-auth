@@ -357,9 +357,20 @@ async function verify(stage) {
             .update(Buffer.from(bytes, 'base64'))
             .digest('hex')
     result.dryRunFileChanges = changedNames.map((name) => ({
-      relativePath: redactFailureText(name, fixtureSecrets),
+      relativePath: name
+        .split('/')
+        .map((part) => redactFailureText(part, fixtureSecrets))
+        .join('/'),
       beforeSha256: digest(beforePreview[name]),
       afterSha256: digest(afterPreview[name]),
+      beforeBytes:
+        beforePreview[name] === undefined
+          ? null
+          : Buffer.from(beforePreview[name], 'base64').length,
+      afterBytes:
+        afterPreview[name] === undefined
+          ? null
+          : Buffer.from(afterPreview[name], 'base64').length,
     }))
   }
   assert.deepEqual(afterPreview, beforePreview)
