@@ -46,7 +46,7 @@ antigravity-auth rollback --offline [--yes]
 
 Exit codes are `0` for success, `1` for a thrown error, and `2` for parse failure, including unsupported commands/options. `list` and `quota` do not initialize or migrate account storage.
 
-**Known CLI login limitation:** default `login` still attempts to write the retired legacy account file and fails with `LegacyAccountPoolRetiredError` after the shared store is initialized. The default fresh/current-store CLI login path is not verified. Do not skip initialization or migration, recreate the legacy file, or delete store files to work around this error.
+**Pool replacement, not account addition:** standalone `antigravity-auth login` starts or replaces the local account pool; it does not append an account to an existing pool. When setup performs local OpenCode OAuth, it adds accounts; the host's account menu also adds accounts. Use `/antigravity` → Sign in to add an account without replacing the existing pool. Initialize a fresh store or complete offline migration first; do not recreate the legacy file or delete store files to bypass those requirements.
 
 ## Host login routes
 

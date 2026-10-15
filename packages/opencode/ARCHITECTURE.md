@@ -9,7 +9,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 **Key Characteristics:**
 - Single `createAntigravityPlugin` factory in `src/plugin/index.ts` that returns the full OpenCode plugin surface
 - All outbound traffic to `generativelanguage.googleapis.com` is intercepted and rewritten before it leaves the process
-- Two header-style routing paths: `antigravity` (Electron-style UA + fingerprint) and `gemini-cli` (nodejs-client UA)
+- Plugin content requests use Antigravity transport and its User-Agent; the retired Gemini CLI request/quota path is not a fallback
 - All state (accounts, rate-limit counters, health scores) is module-level; the plugin factory runs once per session
 - Config schema is Zod-validated; environment variables always override file config
 
@@ -39,9 +39,9 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 - Used by: `src/plugin/fetch-interceptor.ts`
 
 **Model Resolution & Per-Model Transforms:**
-- Purpose: Map request model names to Antigravity model IDs, choose header style (antigravity vs gemini-cli), apply model-specific config, resolve thinking tier budgets
+- Purpose: Map aliases and public tier names to Antigravity wire model IDs, apply model-specific config, and resolve thinking variants or tier budgets
 - Location: `src/plugin/transform/model-resolver.ts`, `src/plugin/transform/claude.ts`, `src/plugin/transform/gemini.ts`, `src/plugin/transform/cross-model-sanitizer.ts`, `src/plugin/model-registry.ts`
-- Contains: `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `applyClaudeTransforms`, `applyGeminiTransforms`, `sanitizeCrossModelPayload`, `supportsThinkingTiers`, `extractThinkingTierFromModel`
+- Contains: `resolveModelWithTier`, `resolveAntigravityModel`, `resolveModelWithVariant`, `applyClaudeTransforms`, `applyGeminiTransforms`, `sanitizeCrossModelPayload`
 - Depends on: `src/plugin/transform/types.ts`
 - Used by: `src/plugin/request.ts`
 
@@ -60,9 +60,9 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 - Used by: `src/plugin/auth-loader.ts`, `src/plugin/lifecycle.ts`
 
 **Quota:**
-- Purpose: Query Antigravity API for per-account quota usage; populate quota cache used by AccountManager for soft-quota gating; fetch Antigravity and Gemini CLI quotas in parallel; handle sequential endpoint fallback; track per-model quota data; manage stale-cache fail-open scenarios
-- Location: `src/plugin/quota.ts`
-- Contains: `checkAccountsQuota`, `QuotaGroup`, `QuotaGroupSummary`, `fetchGeminiCliQuota`, parallel fetches, wider model matching (gemini-3.5-*, gemini-3.1-*, gemini-2.5-*), `gpt-oss` quota group tracking, sequential endpoint fallbacks across `ANTIGRAVITY_ENDPOINT_FALLBACKS`, per-model quota tracking (`cachedPerModelQuota`), stale-cache fail-open (treating 0% quota as `READY` when reset time is past or missing), and paywall detection (`(unavailable)` status)
+- Purpose: Query Antigravity for per-account quota readings, populate quota caches for soft-quota gating, aggregate group/window and per-model data, and handle endpoint fallback and stale-cache fail-open behavior
+- Location: `src/plugin/quota.ts`, backed by `packages/core/src/quota-manager.ts` in the repository
+- Contains: `checkAccountsQuota` and account quota projections. Core's `fetchQuotaSummary` calls `retrieveUserQuotaSummary`; `aggregateQuotaSummary` builds group/window readings. If summary fetching fails, `fetchAvailableModels` and `aggregateQuota` provide fallback readings. Both sources use Antigravity endpoints, not a parallel Gemini CLI quota source.
 - Depends on: OAuth token utilities, `src/plugin/model-registry.ts`
 - Used by: `src/plugin/fetch-interceptor.ts`, `src/plugin/oauth-methods.ts`, `src/plugin/accounts.ts`
 
@@ -90,7 +90,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 **Configuration:**
 - Purpose: Load, merge, and validate plugin configuration from files and environment variables
 - Location: `src/plugin/config/` (`schema.ts`, `loader.ts`, `models.ts`, `updater.ts`, `index.ts`)
-- Contains: `AntigravityConfigSchema`, `loadConfig`, `initRuntimeConfig`, `AntigravityConfig`, settings for `thinking_warmup`, `max_account_switches`, `quota_style_fallback`
+- Contains: `AntigravityConfigSchema`, `loadConfig`, `initRuntimeConfig`, `AntigravityConfig`, and settings such as `thinking_warmup`, `cache_warmup_on_switch`, and `max_account_switches`. Old settings for selecting Gemini CLI requests or quota fallback, such as `quota_style_fallback`, are no longer part of validated config.
 - Depends on: `zod`
 - Used by: `src/plugin/index.ts`, most `src/plugin/` modules via `getKeepThinking()` etc.
 
@@ -137,7 +137,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 1. OpenCode calls plugin `loader()` with the original request — `src/plugin/auth-loader.ts`
 2. `isGenerativeLanguageRequest()` confirms the URL matches — `src/plugin/request.ts`
 3. `AccountManager.selectAccount()` picks the best OAuth account — `src/plugin/accounts.ts`
-4. `resolveModelWithTier()` maps model name → Antigravity model ID + header style — `src/plugin/transform/model-resolver.ts`
+4. `resolveAntigravityModel()` maps aliases and public tiers to Antigravity wire model IDs; `resolveModelWithVariant()` applies selected variant config — `src/plugin/transform/model-resolver.ts`
 5. `prepareAntigravityRequest()` cleans schema, strips thinking blocks for Claude, injects tool-hardening, and appends Claude thinking hints in a strict stable ordering (original prompt → tool hardening → thinking hint) to maximize prompt cache hits — `src/plugin/request.ts`, `src/plugin/request-helpers.ts`
 6. `buildFingerprintHeaders()` attaches per-account device fingerprint — `src/plugin/fingerprint.ts`
 7. `fetch()` is called against Antigravity endpoint with Bearer token — `src/plugin/fetch-interceptor.ts`
@@ -158,7 +158,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 2. `authorizeAntigravity()` generates authorization URL — `src/antigravity/oauth.ts`
 3. Local HTTP listener or manual URL paste captures callback — `src/plugin/server.ts`
 4. `exchangeAntigravity()` exchanges code → tokens — `src/antigravity/oauth.ts`
-5. `persistAccountPool()` merges into `antigravity-accounts.json` — `src/plugin/persist-account-pool.ts`, `src/plugin/storage.ts`
+5. Login persistence targets the active shared account repository; host account additions use `commitLogins` rather than writing the legacy `antigravity-accounts.json` file — `src/plugin/index.ts`. See [initialization and offline migration](docs/MIGRATION.md).
 
 **Session Recovery:**
 1. `session.error` event fires — `src/plugin/event-handler.ts`
@@ -168,8 +168,8 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 
 **Quota Tracking & Refresh Flow:**
 1. Background refresh or user-triggered update invokes quota management — `src/plugin/fetch-interceptor.ts`, `src/plugin/oauth-methods.ts`
-2. `fetchAvailableModels()` and `fetchGeminiCliQuota()` query endpoints sequentially across `ANTIGRAVITY_ENDPOINT_FALLBACKS` — `src/plugin/quota.ts`
-3. Quota responses map to group-level (`cachedQuota`) and model-level (`cachedPerModelQuota`) summaries — `src/plugin/quota.ts`
+2. Core fetches Antigravity's `retrieveUserQuotaSummary`, with endpoint fallback; if that fails, it falls back to `fetchAvailableModels()` — `packages/core/src/quota-manager.ts`, via `src/plugin/quota.ts`
+3. Quota responses map to group/window and per-model readings for the account — `src/plugin/quota.ts`
 4. Active storage persists the updated summaries — `src/plugin/storage.ts`
 5. The terminal UI `showAuthMenu()` displays the status, treating stale cache values (0% remaining without a future reset time or reset time in the past) as `READY` (fail-open) and displaying paywalled Pro models as `(unavailable)` — `src/plugin/ui/auth-menu.ts`, `src/plugin/ui/quota-status.ts`
 
@@ -187,10 +187,10 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 - Location: `src/plugin/config/schema.ts`, `src/plugin/config/loader.ts`
 - Pattern: Zod schema → `z.infer<>` type, merged from project file + user file + env vars
 
-**`HeaderStyle`:**
-- Purpose: Discriminate between `antigravity` (Electron UA) and `gemini-cli` (nodejs UA) request paths
-- Location: `src/constants.ts`, `src/plugin/transform/model-resolver.ts`
-- Pattern: String literal union; resolved per model name suffix (`:antigravity` vs no suffix)
+**`ResolvedModel`:**
+- Purpose: Carry the Antigravity wire model and resolved thinking/search configuration, not a choice of provider request path
+- Location: `src/plugin/transform/types.ts`, re-exported from core's `transform/types.ts`
+- Pattern: Resolution result with `actualModel` and optional thinking level/budget, tier, image-model flags, config source, and Google Search settings. Request preparation reports `headerStyle: 'antigravity'` as fixed metadata; legacy sidebar `gemini-cli` values normalize to `antigravity` and cannot select a request path. See the [sidebar contract](docs/sidebar-contract.md).
 
 **`ModelFamily`:**
 - Purpose: Route model-specific logic (`claude` vs `gemini`)
@@ -200,7 +200,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 **`ModelQuotaGroup`:**
 - Purpose: Partition available models into four quota tracking groups (`claude`, `gemini-pro`, `gemini-flash`, and `gpt-oss`)
 - Location: `src/plugin/model-registry.ts` (type), `src/plugin/quota.ts` (tracking)
-- Pattern: String literal union mapping physical model IDs to logical quota partitions, allowing parallel quota fetching, aggregated health reporting, and granular per-model status rendering (`cachedPerModelQuota` tracks individual models)
+- Pattern: String literal union mapping physical model IDs to logical quota partitions for aggregated reporting and per-model status
 
 **`AuthDoctor`:**
 - Purpose: Diagnose and self-heal storage inconsistencies and active credentials drift
@@ -243,8 +243,8 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 
 **Logging:** `createLogger("module-name")` from `src/plugin/logger.ts` for structured per-module logging with dual sinks: TUI log panel (`debug_tui`) and debug file (`debug`). Per-message API request counters track request volumes for diagnostic visibility. Post-request logging outputs cached remaining quota percentages, session request rates (average requests per hour), and cache hit/miss statistics (HIT, MISS, WRITE status and hit rate percentage) computed from response usage metadata. `console.log` only in CLI / interactive auth flows.
 
-**Caching:** In-memory signature store for thinking blocks; optional disk persistence via `SignatureCache` when `keep_thinking` is enabled. Auth tokens cached per-account in `AccountManager`. Quota data cached per-account with configurable TTL and background parallel refreshes. Prompt caching utilizes a strict prefix-stabilization ordering (stable system instructions first, dynamic content last) to maximize gateway-level cache hits.
+**Caching:** In-memory signature store for thinking blocks; optional disk persistence via `SignatureCache` when `keep_thinking` is enabled. Auth tokens cached per-account in `AccountManager`. Quota data cached per-account with configurable TTL and background refresh. Prompt caching utilizes a strict prefix-stabilization ordering (stable system instructions first, dynamic content last) to maximize gateway-level cache hits.
 
-**Storage:** Accounts persisted to `antigravity-accounts.json` (XDG data dir) via `src/plugin/storage.ts` with `proper-lockfile` for concurrent-write safety. Current format is version 4, featuring automatic migration from older versions (v1, v2, v3), secure POSIX permissions (0600), and legacy Windows path migration. Persists per-account daily request counters (`dailyRequestCounts`) and per-model granular quota data (`cachedPerModelQuota`). Config loaded from `.opencode/antigravity.json` (project) and `~/.config/opencode/antigravity.json` (user).
+**Storage:** Local accounts use the active shared-store generation selected by a pointer beside the resolved legacy account path. Legacy `antigravity-accounts.json` is offline migration input or successful rollback output, not the active writer target. Keep the pointer, generations, and protected migration files owner-only. Do not recreate the legacy file to bypass initialization or offline migration; rollback also refuses an existing/recreated legacy file. See [migration and rollback](docs/MIGRATION.md). Config loads from `.opencode/antigravity.json` (project) and the user configuration directory.
 
-**Configuration:** Two-level config file hierarchy (project overrides user) plus environment variable overrides. All config is read once at startup via `loadConfig()` and made available globally via `initRuntimeConfig()` and module-level getters. Config supports quota fallback disabling via `quota_style_fallback: false`, switches limit via `max_account_switches: 2`, and thinking warmup option `thinking_warmup: false`.
+**Configuration:** Two-level config file hierarchy (project overrides user) plus environment variable overrides. All config is read once at startup via `loadConfig()` and made available globally via `initRuntimeConfig()` and module-level getters. Active controls include `max_account_switches: 2` and `thinking_warmup: false`; old `cli_first`, `quota_fallback`, `quota_style_fallback`, and `operator.routing` settings are ignored. See [Antigravity routing](docs/MULTI-ACCOUNT.md#antigravity-routing) for the consumer Gemini CLI retirement and its effect on these settings.

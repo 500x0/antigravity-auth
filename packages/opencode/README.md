@@ -1,6 +1,6 @@
 # `@cortexkit/opencode-antigravity-auth`
 
-One package for OpenCode 1.x (V1) and OpenCode 2.x general availability (GA), with server and terminal user interface (TUI) entries. Use Google sign-in for the Antigravity model catalog, a local account pool with rotation and quota limits, and the `/antigravity` menu/sidebar. The bundled `antigravity-auth` CLI provides account and quota commands; see its [current login limitation](docs/COMMANDS.md#standalone-cli).
+One package for OpenCode 1.x (V1) and OpenCode 2.x general availability (GA), with server and terminal user interface (TUI) entries. Use Google sign-in for the Antigravity model catalog, a local account pool with rotation and quota limits, and the `/antigravity` menu/sidebar. The bundled `antigravity-auth` CLI provides account and quota commands; read its [standalone login pool-replacement behavior](docs/COMMANDS.md#standalone-cli) before using it with an existing pool.
 
 > Using this plugin or any proxy for Antigravity violates Google's Terms of Service. Account holders have reported suspensions, bans, and shadow-bans. The project is not endorsed by Google; use it at your own risk. Never include credentials, account files, or raw request/response dumps in Git or support reports.
 

@@ -109,7 +109,7 @@ The harness-agnostic core ships as `@cortexkit/antigravity-auth-core`. `src/inde
 - `packages/core/src/transform/claude.ts` — `applyClaudeTransforms`, `appendClaudeThinkingHint`, `buildClaudeThinkingConfig`, `computeClaudeMaxOutputTokens`, `ensureClaudeMaxOutputTokens`, `isClaudeModel`, `isClaudeThinkingModel`, `normalizeClaudeTools`, `configureClaudeToolConfig`.
 - `packages/core/src/transform/gemini.ts` — `applyGeminiTransforms`, `buildGemini3ThinkingConfig`, `buildGemini25ThinkingConfig`, `buildImageGenerationConfig`, `isGemini3Model`, `isGemini25Model`, `isGeminiModel`, `isImageGenerationModel`, `normalizeGeminiTools`, `toGeminiSchema`.
 - `packages/core/src/transform/cross-model-sanitizer.ts` — payload cleanup before family switch (`sanitizeCrossModelPayload`, `sanitizeCrossModelPayloadInPlace`, `stripClaudeThinkingFields`, `stripGeminiThinkingMetadata`, `getModelFamily`).
-- `packages/core/src/transform/model-resolver.ts` — `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `MODEL_ALIASES`, `GEMINI_3_THINKING_LEVELS`, `THINKING_TIER_BUDGETS`.
+- `packages/core/src/transform/model-resolver.ts` — `resolveModelWithTier`, `resolveAntigravityModel`, `resolveModelWithVariant`, `MODEL_ALIASES`, `GEMINI_3_THINKING_LEVELS`, `THINKING_TIER_BUDGETS`; resolves Antigravity wire models and thinking config, not a Gemini CLI request path.
 
 ### Co-located tests
 
@@ -166,13 +166,12 @@ packages/opencode/
 - `packages/opencode/src/plugin/background-vault-quota-refresh.ts`, `vault-quota-refresh.ts`, `vault-sidebar-projection.ts` — OpenCode 1 vault-only abortable producer whose distinct renewable lock deduplicates checks across processes. Its freshness gate reads the oldest matching durable quota observation, never sidebar publication time; missing readings are due. Manual/automatic checks share sidebar publication after accepted quota writes, and projection uses the same account/route/credential match. No local credential refresh path.
 - `packages/opencode/src/plugin/command-data.ts` — cache-only, privacy-safe account-row projection for account OAuth replies; the shared menu and repository collaborators own refresh and mutations.
 - `packages/opencode/src/plugin/storage.ts` — host-path adapter and lease-repository opening/composition, plus pool-file compatibility operations and `.gitignore` synchronization.
-- `packages/opencode/src/plugin/persist-account-pool.ts` — lock-held append-and-rewrite of `antigravity-accounts.json` used after a fresh OAuth login.
+- `packages/opencode/src/plugin/persist-account-pool.ts` — legacy JSON compatibility writer; current-store login persistence uses repository operations rather than rewriting the retired file.
 - `packages/opencode/src/plugin/fetch-interceptor.ts` — V1 local/vault credential and host-effect bindings to the shared executor. Retirement refuses new generative requests and drains admitted work/bodies; final disposal aborts.
-- `packages/opencode/src/plugin/shared/request-services.ts` — shared V1/GA selection, retries, endpoint/header fallback, warmups, transforms and native error handling. Policy/unavailability can return native 401/412/502; exhausted transport throws or returns the saved upstream failure, never synthetic HTTP 200 assistant success.
+- `packages/opencode/src/plugin/shared/request-services.ts` — shared OpenCode 1/2 account selection, retries, Antigravity endpoint fallback, warmups, transforms and native error handling. Policy/unavailability can return native 401/412/502; exhausted transport throws or returns the saved upstream failure, never synthetic HTTP 200 assistant success.
 - `packages/opencode/src/plugin/shared/runtime.ts`, `local-grant.ts`, `request-cancellation.ts`, `vault-request-credentials.ts`, `source-sidebar.ts`, `vault-menu.ts` — runtime/credential admission, cancellation, source projection and vault menu collaborators.
 - `packages/opencode/src/plugin/fetch/retry-state.ts` — per-interceptor `RetryState` (rate-limit toast debounce, retry counts).
 - `packages/opencode/src/plugin/fetch/warmup.ts` — `WarmupState` (probe accounts under load to detect soft-quota cliffs before they surprise the dispatcher).
-- `packages/opencode/src/plugin/fetch-routing.ts` — `resolveHeaderRoutingDecision`, `resolveQuotaFallbackHeaderStyle`, `getCurrentRoutingDecision` (live override from operator settings).
 - `packages/opencode/src/plugin/request.ts` — outbound transform pipeline (sanitize → resolve → inject metadata → order payload → harden).
 - `packages/opencode/src/plugin/request-helpers.ts` — `cleanGenerativeLanguageRequest`, thinking-block filtering, tool-id orphan recovery glue.
 - `packages/opencode/src/plugin/agy-request-metadata.ts` — host-side adapter around `core/agy-request-metadata.ts` with the session registry host binding.
