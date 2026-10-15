@@ -104,7 +104,7 @@ function sendInput(signal: AbortSignal): GaSendInput {
       userAgent: 'antigravity',
       requestType: 'agent',
     },
-    auth: { type: 'oauth', refresh: 'fake-refresh', access: 'fake-access' },
+    auth: { access: 'fake-access' },
     endpoint: 'https://fake-endpoint.invalid',
     signal,
     kind: 'primary',

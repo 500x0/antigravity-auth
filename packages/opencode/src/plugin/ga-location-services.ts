@@ -1410,7 +1410,9 @@ export function createGaRouteBook(limit = 256): GaRouteBook {
 /** Runs one bridged job through the shared request engine. */
 export function createGaJobExecutor(
   executor: Pick<AntigravityRequestExecutor, 'execute'>,
+  overrides: Pick<GaPluginOverrides, 'send'> = {},
 ): GaJobExecutor {
+  const send = overrides.send
   return (job, context) =>
     executor.execute(
       job.url,
@@ -1425,6 +1427,32 @@ export function createGaJobExecutor(
           sessionId: job.sessionID,
           parentSessionId: job.parentSessionID,
         },
+        ...(send
+          ? {
+              transport: async (url, init, options) => {
+                const signal = options?.signal
+                const authorization = new Headers(init?.headers).get(
+                  'authorization',
+                )
+                if (
+                  typeof init?.body !== 'string' ||
+                  !authorization?.startsWith('Bearer ') ||
+                  !signal
+                ) {
+                  throw new Error('The prepared Antigravity send is incomplete')
+                }
+                // The engine has prepared the body and bearer for this send,
+                // whether it is a warmup probe or the main request.
+                return send({
+                  envelope: JSON.parse(init.body),
+                  auth: { access: authorization.slice('Bearer '.length) },
+                  endpoint: new URL(url).origin,
+                  signal,
+                  kind: job.kind,
+                })
+              },
+            }
+          : {}),
       },
     )
 }
@@ -1544,7 +1572,7 @@ export async function createGaLocalRequestPipeline(
     ...(quotaFetch ? { transport: () => quotaFetch } : {}),
   })
   return {
-    execute: createGaJobExecutor(executor),
+    execute: createGaJobExecutor(executor, input.overrides),
     refreshQuota: (refs) => storeQuota.checkStoreQuota(refs),
     refreshAccounts: () => manager.refreshFromRepository(),
     async dispose() {
@@ -1604,7 +1632,7 @@ export async function createGaVaultRequestPipeline(input: {
     execute: async (job, context) => {
       await input.assertAdmission?.()
       await pool.sync()
-      return createGaJobExecutor(executor)(job, context)
+      return createGaJobExecutor(executor, input.overrides)(job, context)
     },
     rows: () => pool.selector.rows,
     refreshAccounts: async () => {
