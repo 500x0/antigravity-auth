@@ -43,6 +43,7 @@ import {
 } from '../../opencode/src/plugin/storage'
 import type { Provider } from '../../opencode/src/plugin/types'
 import type { SidebarStateV1 } from '../../opencode/src/sidebar-state'
+import { phase, runDiagnosticCase } from './e2e-phase-diagnostic'
 import { runFetchRouter } from './fetch-router'
 import { createE2eHarness, type E2eHarness } from './harness'
 import { cleanupE2eRootsForCurrentFile } from './setup'
@@ -95,6 +96,13 @@ async function withHarness(
   fn: (harness: E2eHarness, repository: AccountRepository) => Promise<void>,
   mode: 'accounts' | 'expired-a' | 'empty' | 'legacy' = 'accounts',
 ): Promise<void> {
+  await runDiagnosticCase(() => withHarnessBody(fn, mode))
+}
+
+async function withHarnessBody(
+  fn: (harness: E2eHarness, repository: AccountRepository) => Promise<void>,
+  mode: 'accounts' | 'expired-a' | 'empty' | 'legacy' = 'accounts',
+): Promise<void> {
   const root = process.env.ANTIGRAVITY_TEST_ROOT
   if (!root) throw new Error('ANTIGRAVITY_TEST_ROOT not set by preload')
   const previousConfigDir = process.env.OPENCODE_CONFIG_DIR
@@ -111,17 +119,27 @@ async function withHarness(
     const operations = createDefaultAccountStoreOperations()
     expect(operations.legacyPath()).toBe(path)
     if (mode === 'empty') {
+      phase('store.initialize.start')
       const outcome = await operations.initialize(path)
+      phase('store.initialize.end')
       expect(outcome.status).toBe('completed')
     } else {
+      phase('store.seed.start')
       await seedAccounts(FIXED_NOW)
+      phase('store.seed.end')
       if (mode !== 'legacy') {
+        phase('store.migration.start')
         const outcome = await operations.migrate(path)
+        phase('store.migration.end')
         expect(outcome.status).toBe('completed')
       }
     }
+    phase('store.modules.start')
     const modules = await loadCommonAuthStoreModules()
+    phase('store.modules.end')
+    phase('repository.binding.start')
     const binding = await readAccountStoreBinding(path, modules, Date.now)
+    phase('repository.binding.end')
     if (mode !== 'legacy') expect(binding.status).toBe('bound')
     repository = createAccountRepositoryFactory(modules)({
       paths:
@@ -144,16 +162,20 @@ async function withHarness(
       },
     })
     if (mode !== 'legacy') {
+      phase('repository.read.start')
       const state = await repository.read()
+      phase('repository.read.end')
       expect(state.status).toBe('ready')
       if (state.status !== 'ready')
         throw new Error('expected initialized store')
       expect(state.rows).toHaveLength(mode === 'empty' ? 0 : 2)
+      phase('repository.bearer-preparation.start')
       for (const row of state.rows) {
         expect(row.usable).toBe(true)
         expect(row.stamp).toBe('bound')
         expect((await repository.refresh(row.ref)).status).toBe('rotated')
       }
+      phase('repository.bearer-preparation.end')
       const prepared = await repository.read()
       if (prepared.status !== 'ready')
         throw new Error('expected prepared store')
@@ -198,7 +220,9 @@ async function withHarness(
         ])
       }
     }
+    phase('mock-harness.start')
     harness = await createE2eHarness('plugin-flow')
+    phase('mock-harness.end')
     expect(harness.server.requests).toHaveLength(0)
     // Repository token exchange and quota use global fetch, whereas model sends
     // use the plugin's injected transport. Only account API calls consult the
@@ -212,6 +236,8 @@ async function withHarness(
         const url = new URL(
           input instanceof Request ? input.url : String(input),
         )
+        if (url.pathname === '/v1internal:retrieveUserQuotaSummary')
+          phase('quota.request.observed')
         const accountApi =
           url.pathname === '/token' || url.pathname.startsWith('/v1internal:')
         return (
@@ -221,20 +247,28 @@ async function withHarness(
       },
       previousFetch,
     )
+    phase('router.installed')
+    phase('test.callback.start')
     await fn(harness, repository)
+    phase('test.callback.end')
   } finally {
     try {
+      phase('harness.disposal.start')
       await harness?.dispose()
+      phase('harness.disposal.end')
     } finally {
       harness = undefined
       try {
+        phase('repository.disposal.start')
         await repository?.dispose()
+        phase('repository.disposal.end')
       } finally {
         globalThis.fetch = previousFetch
         if (previousConfigDir === undefined)
           delete process.env.OPENCODE_CONFIG_DIR
         else process.env.OPENCODE_CONFIG_DIR = previousConfigDir
         rmSync(configDir, { recursive: true, force: true })
+        phase('profile.cleanup.end')
       }
     }
   }
@@ -607,6 +641,7 @@ describe('plugin flow (e2e)', () => {
       // updates asynchronously on quota refresh).
       await new Promise((resolve) => setTimeout(resolve, 50))
       const parsed = readSidebar()
+      phase('sidebar.observable.read')
       expect(parsed.accounts?.length).toBeGreaterThanOrEqual(1)
       expect(parsed.accounts.map(({ id, label }) => ({ id, label }))).toEqual([
         { id: 'acct-0', label: 'Account 1' },
@@ -670,6 +705,7 @@ describe('plugin flow (e2e)', () => {
         }),
       )
       enqueueQuota(h)
+      phase('quota.queue.ready')
 
       // Capture pollBefore AFTER the stale write. Now the ONLY write that
       // can advance checkedAt past this point is the poller's first tick.
@@ -677,6 +713,7 @@ describe('plugin flow (e2e)', () => {
 
       const deadline = pollBefore + 5_000
       let sidebarCheckedAt = 0
+      phase('quota.observable.await')
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100))
         try {
@@ -691,8 +728,10 @@ describe('plugin flow (e2e)', () => {
               (account) =>
                 typeof account.quota.gemini?.remainingPercent === 'number',
             )
-          )
+          ) {
+            phase('quota.observable.ready')
             break
+          }
         } catch {
           // File not written yet — retry.
         }

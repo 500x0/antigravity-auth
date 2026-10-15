@@ -22,6 +22,7 @@ import {
   createAntigravityPlugin,
   type PluginResult,
 } from '../../opencode/src/plugin/index'
+import { phase } from './e2e-phase-diagnostic'
 import { installFetchRouter } from './fetch-router'
 import type { MockServerHandle } from './mock-antigravity-server'
 import { startMockAntigravityServer } from './mock-antigravity-server'
@@ -134,17 +135,30 @@ export async function createE2eHarness(
         ...(pluginOptions.extraDependencies ?? {}),
       }
       const factory = createAntigravityPlugin('google', { dependencies })
+      phase('plugin.construction.start')
       const result = await factory({
         client: client as unknown as Parameters<typeof factory>[0]['client'],
         directory,
       } as Parameters<typeof factory>[0])
+      phase('plugin.construction.end')
+      const loader = result.auth.loader
+      result.auth.loader = async (...args) => {
+        // Loader completion includes its awaited runtime/sidebar publication;
+        // the factory exposes no separate completion observer for those phases.
+        phase('auth.loader.admission-runtime-sidebar.start')
+        const loaded = await loader.apply(result.auth, args)
+        phase('auth.loader.admission-runtime-sidebar.end')
+        return loaded
+      }
       plugins.push(result)
       return result
     },
     async dispose() {
       for (const plugin of plugins) {
         try {
+          phase('plugin.disposal.start')
           await plugin.dispose()
+          phase('plugin.disposal.end')
         } catch {
           /* plugin already torn down — best-effort */
         }
