@@ -6,8 +6,8 @@
  * directory, with a deterministic token exchange. No network or host.
  */
 
-import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { describe, expect, it, mock, spyOn } from 'bun:test'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,8 +24,45 @@ import {
   sameRowRef,
 } from '@cortexkit/antigravity-auth-core'
 
-import type { HarnessAccountsObservation } from '../ga/server/index.ts'
+import type {
+  GaBridgeJob,
+  GaPluginOverrides,
+  GaSendInput,
+  HarnessAccountsObservation,
+} from '../ga/server/index.ts'
+import type { LocationDebug } from './debug.ts'
 import {
+  createOperatorSettingsRegistry,
+  emptyOperatorSettings,
+  type OperatorSettings,
+} from './operator-settings.ts'
+import { createLocationRuntime } from './shared/runtime.ts'
+
+const realCore = await import('@cortexkit/antigravity-auth-core')
+const networkCalls: {
+  url: string
+  init?: RequestInit
+  options?: import('@cortexkit/antigravity-auth-core').AgyTransportOptions
+}[] = []
+function terminalResponse() {
+  return new Response(
+    'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"transport reached"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}}\n\n',
+    { headers: { 'content-type': 'text/event-stream' } },
+  )
+}
+mock.module('@cortexkit/antigravity-auth-core', () => ({
+  ...realCore,
+  fetchWithAgyCliTransport: (
+    url: string,
+    init?: RequestInit,
+    options?: import('@cortexkit/antigravity-auth-core').AgyTransportOptions,
+  ) => {
+    networkCalls.push({ url, init, options })
+    return Promise.resolve(terminalResponse())
+  },
+}))
+
+const {
   accessBlockOf,
   authorizeGaQuotaCheck,
   createGaAccountStateSource,
@@ -42,13 +79,7 @@ import {
   createGaSelectorRegistry,
   GA_ACCOUNTS_FILE,
   gaSettingsOf,
-} from './ga-location-services.ts'
-import {
-  createOperatorSettingsRegistry,
-  emptyOperatorSettings,
-  type OperatorSettings,
-} from './operator-settings.ts'
-import { createLocationRuntime } from './shared/runtime.ts'
+} = await import('./ga-location-services.ts')
 
 function row(ref: RowRef, overrides: Partial<AccountRow> = {}): AccountRow {
   return {
@@ -413,6 +444,31 @@ describe('GA request pipeline pieces', () => {
     ])
   })
 
+  it('adds only a per-request transport when the send override exists', async () => {
+    const calls: unknown[] = []
+    const executor = {
+      execute: async (_input: unknown, _init: unknown, options: unknown) => {
+        calls.push(options)
+        return new Response('ok')
+      },
+    }
+    const context = {
+      signal: new AbortController().signal,
+      send: async () => terminalResponse(),
+    }
+    await createGaJobExecutor(executor)(transportJob, context)
+    await createGaJobExecutor(executor, {
+      send: async () => terminalResponse(),
+    })(transportJob, context)
+    expect(calls).toEqual([
+      { session: { sessionId: transportJob.sessionID, parentSessionId: null } },
+      {
+        session: { sessionId: transportJob.sessionID, parentSessionId: null },
+        transport: expect.any(Function),
+      },
+    ])
+  })
+
   it('refreshes through the genuine repository and stores the successor there', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-credentials-')))
     try {
@@ -519,6 +575,400 @@ async function freshRepository() {
     },
   }
 }
+
+const transportJob: GaBridgeJob = {
+  sessionID: 'transport-session',
+  parentSessionID: null,
+  kind: 'generate',
+  modelID: 'antigravity-gemini-3.5-flash',
+  variant: null,
+  url: 'https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-3.5-flash:streamGenerateContent?alt=sse',
+  body: JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: 'Exact transport bytes: é' }] }],
+  }),
+}
+
+/** Uses the location factory and shared request engine, with disposable local logins or a stand-in vault source. */
+async function transportLocation(
+  domain: 'local' | 'vault',
+  overrides: GaPluginOverrides,
+  accountCount = 1,
+) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-transport-')))
+  const previous = {
+    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  }
+  process.env.OPENCODE_CONFIG_DIR = join(root, 'config')
+  process.env.XDG_CONFIG_HOME = join(root, 'xdg')
+  const directory = join(root, 'location')
+  mkdirSync(join(directory, '.opencode'), { recursive: true })
+  await writeFile(
+    join(directory, '.opencode', 'antigravity.json'),
+    JSON.stringify({
+      background_quota_refresh: false,
+      proactive_token_refresh: false,
+      request_jitter_max_ms: 0,
+      ...(accountCount > 1
+        ? { switch_on_first_rate_limit: true, switch_account_delay_ms: 0 }
+        : {}),
+    }),
+  )
+  const admitted: { signal?: AbortSignal; credentialId: string }[] = []
+  if (domain === 'local') {
+    const legacyPath = join(root, 'config', GA_ACCOUNTS_FILE)
+    const modules = await loadCommonAuthStoreModules()
+    await initializeFreshAccountStore(modules, { legacyPath, now: Date.now })
+    const admission = await readAccountStoreAdmission(
+      legacyPath,
+      modules,
+      Date.now,
+    )
+    if (admission.status !== 'active') throw new Error(admission.status)
+    const seed = createAccountRepositoryFactory(modules)({
+      paths: admission.paths,
+      now: Date.now,
+      exchange: async () => {
+        throw new Error('seed must not refresh')
+      },
+    })
+    try {
+      for (let i = 0; i < accountCount; i++) {
+        await seed.login({
+          id: crypto.randomUUID(),
+          refreshToken: `refresh-${i}`,
+          metadata: {
+            addedAt: i + 1,
+            lastUsed: i + 1,
+            managedProjectId: `project-${i}`,
+          },
+        })
+      }
+    } finally {
+      await seed.dispose()
+    }
+  }
+  const route = {
+    routeId: 'route-0',
+    credentialId: 'credential-0',
+    accountIdentity: 'identity-0',
+    label: 'Vault account',
+  }
+  const source = {
+    refresh: async () => undefined,
+    routes: () => [route],
+    admit: async (ref: typeof route, signal?: AbortSignal) => {
+      admitted.push({ signal, credentialId: ref.credentialId })
+      return {
+        ...ref,
+        recordVersion: 1,
+        accessToken: 'vault-access',
+        projectId: 'vault-project',
+        expiresAtMs: null,
+      }
+    },
+    reportServedStatus: async () => false,
+    send: async () => {
+      throw new Error('vault source must use the composed transport')
+    },
+    attribution: () => ({ ...route, recordVersion: 1 }),
+    commitState: async () => ({ status: 'unchanged' as const }),
+  }
+  const factory =
+    domain === 'local'
+      ? createGaLocationServices
+      : createGaLocationServicesFactory({
+          loadStoreModules: async () => {
+            throw new Error('vault must not open a local store')
+          },
+          resolveAccountFile: () => join(root, 'config', GA_ACCOUNTS_FILE),
+          now: Date.now,
+          runtime: (input) =>
+            createGaRuntimeCollaborators({
+              ...input,
+              accounts: { current: null, quotaLogger: null },
+              now: Date.now,
+            }),
+          createPipeline: async () => {
+            throw new Error('vault must not construct a local pipeline')
+          },
+          custody: () => ({
+            readMode: async () => ({
+              ok: true,
+              record: { version: 1, mode: 'custody' },
+            }),
+            custodySource: async () => source,
+            readState: async () => ({ schemaVersion: 1, accounts: {} }),
+            menuSection: () => ({
+              id: 'vault',
+              title: 'Vault',
+              build: () => ({ lines: [], actions: [] }),
+            }),
+            dispose: async () => {},
+          }),
+        })
+  const services = await factory({
+    directory,
+    overrides: {
+      refreshAccessToken: async (refresh) => ({
+        access: `access-${refresh}`,
+        refresh,
+        expires: Date.now() + 3_600_000,
+      }),
+      ...overrides,
+    },
+  })
+  const runtime = await createLocationRuntime({
+    ...services.runtime,
+    directory,
+    operatorSettingsRegistry: createOperatorSettingsRegistry(),
+  })
+  // This debug method receives the prepared body and headers before the engine sends them.
+  const prepared = spyOn(runtime.debug, 'startAntigravityDebugRequest')
+  const serving = await services.start({
+    runtime,
+    generation: 'transport-generation',
+    send: async () => {
+      throw new Error('legacy send plumbing must stay unused')
+    },
+    notify: () => null,
+    isConnected: () => false,
+  })
+  networkCalls.length = 0
+  return {
+    serving,
+    runtime,
+    admitted,
+    prepared,
+    async dispose() {
+      prepared.mockRestore()
+      const manager = runtime.accounts()
+      if (manager instanceof AccountManager) await manager.flushSaveToDisk()
+      await services.dispose()
+      await runtime.dispose()
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(root, { recursive: true, force: true })
+    },
+  }
+}
+
+function expectFinalizedSend(
+  sent: GaSendInput,
+  prepared: Parameters<LocationDebug['startAntigravityDebugRequest']>[0],
+) {
+  expect(prepared.body).toBe(JSON.stringify(sent.envelope))
+  expect(new Headers(prepared.headers).get('authorization')).toBe(
+    `Bearer ${sent.auth.access}`,
+  )
+  expect(sent.endpoint).toBe(new URL(prepared.resolvedUrl).origin)
+  expect(sent.kind).toBe(transportJob.kind)
+}
+
+describe('GA composed transport', () => {
+  it('sends the switched-account warmup probe and main request through the override', async () => {
+    const sends: GaSendInput[] = []
+    let probeCancelled = 0
+    let observations = 0
+    const location = await transportLocation(
+      'local',
+      {
+        send: async (input) => {
+          sends.push(input)
+          if (sends.length === 1)
+            return new Response(
+              '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"rate limit exceeded"}}',
+              {
+                status: 429,
+                headers: {
+                  'retry-after': '3600',
+                  'content-type': 'application/json',
+                },
+              },
+            )
+          if (sends.length !== 2) return terminalResponse()
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('data: {}\n\n'))
+              },
+              cancel() {
+                probeCancelled++
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
+        },
+        observeRawSenderSignal: () => {
+          observations++
+          return undefined
+        },
+      },
+      2,
+    )
+    try {
+      expect(location.runtime.config.config.cache_warmup_on_switch).toBe(true)
+      const context = {
+        signal: new AbortController().signal,
+        send: async () => terminalResponse(),
+      }
+      expect(
+        await (await location.serving.execute(transportJob, context)).text(),
+      ).toContain('transport reached')
+      expect(sends).toHaveLength(3)
+      const probe = sends[1]
+      const main = sends[2]
+      const prepared = location.prepared.mock.calls[1]?.[0]
+      if (!probe || !main || !prepared)
+        throw new Error('missing switched sends')
+      expectFinalizedSend(probe, prepared)
+      expectFinalizedSend(main, prepared)
+      expect(probe.auth.access).not.toBe(sends[0]?.auth.access)
+      expect(probe.auth.access).toBe(main.auth.access)
+      expect(probe.envelope.project).not.toBe(sends[0]?.envelope.project)
+      expect(probe.envelope.project).toBe(main.envelope.project)
+      expect(probe.signal).toBe(main.signal)
+      expect(probeCancelled).toBe(1)
+      expect(networkCalls).toHaveLength(0)
+      expect(observations).toBe(0)
+    } finally {
+      await location.dispose()
+    }
+  })
+
+  it('preserves finalized bytes, signal and idle timeout without an override', async () => {
+    const observed: AbortSignal[] = []
+    const location = await transportLocation('local', {
+      observeRawSenderSignal: (signal) => {
+        expect(networkCalls).toHaveLength(0)
+        observed.push(signal)
+        return undefined
+      },
+    })
+    try {
+      const controller = new AbortController()
+      const response = await location.serving.execute(transportJob, {
+        signal: controller.signal,
+        send: async () => {
+          throw new Error('unused')
+        },
+      })
+      expect(await response.text()).toContain('transport reached')
+      expect(networkCalls).toHaveLength(1)
+      const call = networkCalls[0]
+      const prepared = location.prepared.mock.calls[0]?.[0]
+      if (!call || !prepared) throw new Error('missing physical send')
+      expect(call.url).toBe(prepared.resolvedUrl)
+      expect(call.url).toBe(
+        'https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
+      )
+      expect(call.init?.body).toBe(prepared.body)
+      expect([...new Headers(call.init?.headers)]).toEqual([
+        ...new Headers(prepared.headers),
+      ])
+      expect(new Headers(call.init?.headers).get('authorization')).toBe(
+        'Bearer access-refresh-0',
+      )
+      expect(JSON.parse(String(call.init?.body)).project).toBe('project-0')
+      expect(call.options?.signal).toBe(call.init?.signal)
+      expect(observed).toHaveLength(1)
+      expect(call.options?.signal).toBe(observed[0])
+      expect(call.options?.idleTimeoutMs).toBe(300_000)
+    } finally {
+      await location.dispose()
+    }
+  })
+
+  for (const domain of ['local', 'vault'] as const) {
+    it(`reaches the ${domain} send override with the finalized physical attempt`, async () => {
+      const sends: GaSendInput[] = []
+      const observed: AbortSignal[] = []
+      const location = await transportLocation(domain, {
+        send: async (input) => {
+          sends.push(input)
+          return terminalResponse()
+        },
+        observeRawSenderSignal: (signal) => {
+          observed.push(signal)
+          return undefined
+        },
+      })
+      try {
+        const response = await location.serving.execute(transportJob, {
+          signal: new AbortController().signal,
+          send: async () => {
+            throw new Error('unused')
+          },
+        })
+        expect(await response.text()).toContain('transport reached')
+        expect(sends).toHaveLength(1)
+        const sent = sends[0]
+        const prepared = location.prepared.mock.calls[0]?.[0]
+        if (!sent || !prepared) throw new Error('missing override send')
+        expectFinalizedSend(sent, prepared)
+        expect(sent.auth.access).toBe(
+          domain === 'local' ? 'access-refresh-0' : 'vault-access',
+        )
+        expect(sent.envelope.project).toBe(
+          domain === 'local' ? 'project-0' : 'vault-project',
+        )
+        expect(Object.keys(sent.auth)).toEqual(['access'])
+        expect(networkCalls).toHaveLength(0)
+        expect(observed).toHaveLength(0)
+        if (domain === 'vault') {
+          expect(location.admitted).toEqual([
+            { signal: sent.signal, credentialId: 'credential-0' },
+          ])
+        }
+      } finally {
+        await location.dispose()
+      }
+    })
+
+    it(`cancels an in-flight ${domain} override through the real request signal`, async () => {
+      const reached = Promise.withResolvers<AbortSignal>()
+      const observed: AbortSignal[] = []
+      const location = await transportLocation(domain, {
+        send: ({ signal }) =>
+          new Promise<Response>((_resolve, reject) => {
+            reached.resolve(signal)
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            })
+          }),
+        observeRawSenderSignal: (signal) => {
+          observed.push(signal)
+          return undefined
+        },
+      })
+      try {
+        const controller = new AbortController()
+        const pending = location.serving.execute(transportJob, {
+          signal: controller.signal,
+          send: async () => {
+            throw new Error('unused')
+          },
+        })
+        const failure = pending.catch((error: unknown) => error)
+        const physical = await reached.promise
+        const reason = new DOMException(
+          'host cancelled transport',
+          'AbortError',
+        )
+        controller.abort(reason)
+        expect(physical.aborted).toBe(true)
+        expect(physical.reason).toBe(reason)
+        expect(await failure).toBe(reason)
+        expect(networkCalls).toHaveLength(0)
+        expect(observed).toHaveLength(0)
+      } finally {
+        await location.dispose()
+      }
+    })
+  }
+})
 
 describe('GA quota check authorization', () => {
   it('refuses a target without a captured ref', async () => {

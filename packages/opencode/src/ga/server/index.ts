@@ -27,7 +27,6 @@ import {
   isRetiredAgyModel,
   loadCommonAuthCommands,
   type loadManagedProject,
-  type OAuthAuthDetails,
   type OpencodeModelDefinition,
   type refreshAntigravityToken,
 } from '@cortexkit/antigravity-auth-core'
@@ -121,7 +120,8 @@ export interface GaAgyEnvelope {
 
 export interface GaSendInput {
   readonly envelope: GaAgyEnvelope
-  readonly auth: OAuthAuthDetails
+  /** The access token sent in the Authorization header; no refresh token or expiry is available here. */
+  readonly auth: { readonly access: string }
   /** One of the Antigravity endpoint origins, without a trailing path. */
   readonly endpoint: string
   readonly signal: AbortSignal
