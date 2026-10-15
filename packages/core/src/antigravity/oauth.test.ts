@@ -9,6 +9,7 @@ import {
   spyOn,
 } from 'bun:test'
 import { createHash } from 'node:crypto'
+import type { AgyTransportOptions } from '../agy-transport.ts'
 
 import {
   ANTIGRAVITY_CLIENT_ID,
@@ -20,6 +21,15 @@ import {
   exchangeAntigravity,
   refreshAntigravityToken,
 } from './oauth.ts'
+
+// Project discovery, token requests and userinfo requests all use the same mocked fetch.
+mock.module('../agy-transport.ts', () => ({
+  fetchWithAgyCliTransport: (
+    url: string,
+    init?: RequestInit,
+    options?: AgyTransportOptions,
+  ) => fetch(url, { ...init, signal: options?.signal }),
+}))
 
 /**
  * Build a minimal token-exchange response body. Google issues access_token /
@@ -242,6 +252,126 @@ describe('Antigravity OAuth', () => {
       if (result.type !== 'success') throw new Error('expected success')
       expect(result.refresh).toBe('refresh-1|')
       expect(result.projectId).toBe('')
+    })
+
+    for (const stage of ['token', 'userinfo'] as const) {
+      it(`refuses authority revoked while the ${stage} response is pending without a project call`, async () => {
+        const entered = Promise.withResolvers<void>()
+        const response = Promise.withResolvers<Response>()
+        let calls = 0
+        let allowed = true
+        fetchSpy.mockImplementation(async () => {
+          calls++
+          if (calls === (stage === 'token' ? 1 : 2)) {
+            entered.resolve()
+            return response.promise
+          }
+          if (calls === 1) return new Response(tokenResponseBody())
+          throw new Error('No later provider call is admitted')
+        })
+        const { url } = await authorizeAntigravity()
+        const pending = exchangeAntigravity(
+          'code',
+          new URL(url).searchParams.get('state')!,
+          {
+            admit: async () => {
+              if (!allowed) throw new Error('secret must not escape')
+            },
+          },
+        )
+        await entered.promise
+        allowed = false
+        response.resolve(
+          new Response(
+            stage === 'token' ? tokenResponseBody() : userInfoBody(),
+          ),
+        )
+        expect(await pending).toEqual({
+          type: 'failed',
+          error: 'Antigravity sign-in is no longer authorized.',
+        })
+        expect(calls).toBe(stage === 'token' ? 1 : 2)
+      })
+    }
+
+    for (const refusal of ['admit', 'abort'] as const) {
+      it(`propagates ${refusal} from project discovery instead of succeeding with an empty project`, async () => {
+        const controller = new AbortController()
+        let calls = 0
+        let refuse = false
+        fetchSpy.mockImplementation(async () => {
+          calls++
+          if (calls === 1) return new Response(tokenResponseBody())
+          if (calls === 2) return new Response(userInfoBody())
+          if (calls === 3) {
+            refuse = true
+            if (refusal === 'abort')
+              controller.abort(new Error('secret abort reason'))
+            return new Response('transient error', { status: 503 })
+          }
+          throw new Error('Project fallback must not run after revocation')
+        })
+        const { url } = await authorizeAntigravity()
+        const result = await exchangeAntigravity(
+          'code',
+          new URL(url).searchParams.get('state')!,
+          {
+            signal: controller.signal,
+            admit: async () => {
+              // Refuse admission once so project discovery cannot retry after suppressing the error.
+              if (refuse && refusal === 'admit') {
+                refuse = false
+                throw new Error('secret admission detail')
+              }
+            },
+          },
+        )
+        expect(result).toEqual({
+          type: 'failed',
+          error: 'Antigravity sign-in is no longer authorized.',
+        })
+        expect(calls).toBe(3)
+      })
+    }
+
+    it('checks admission before each project fallback and aborts its physical fetch', async () => {
+      const controller = new AbortController()
+      const entered = Promise.withResolvers<void>()
+      const checked: number[] = []
+      let calls = 0
+      fetchSpy.mockImplementation(
+        async (_url: RequestInfo | URL, init?: RequestInit) => {
+          expect(checked.length).toBeGreaterThan(0)
+          expect(checked.at(-1)).toBe(calls)
+          calls++
+          if (calls === 1) return new Response(tokenResponseBody())
+          if (calls === 2) return new Response(userInfoBody())
+          if (calls === 3) return new Response('transient', { status: 503 })
+          const signal = init?.signal
+          if (!signal) throw new Error('Missing physical request signal')
+          entered.resolve()
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            })
+          })
+        },
+      )
+      const { url } = await authorizeAntigravity()
+      const pending = exchangeAntigravity(
+        'code',
+        new URL(url).searchParams.get('state')!,
+        {
+          signal: controller.signal,
+          admit: async () => {
+            checked.push(calls)
+          },
+        },
+      )
+      await entered.promise
+      controller.abort()
+      expect((await pending).type).toBe('failed')
+      expect(calls).toBe(4)
     })
   })
 

@@ -1,15 +1,19 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, spyOn } from 'bun:test'
 import type {
   IntegrationEditor,
   IntegrationMethodRegistration,
   IntegrationOAuthMethodRegistration,
 } from '@opencode/plugin/promise/integration'
-
+import {
+  OPENCODE2_POOL_AUTH_LABEL,
+  OPENCODE2_VAULT_AUTH_LABEL,
+} from '../../auth-method-labels.ts'
 import {
   isPlaceholderCredential,
   placeholderCredential,
 } from '../../common-auth-embedded/opencode2/index.js'
-import { GA_VAULT_METHOD_ID, registerGaVaultActivation } from './auth.ts'
+import { GA_VAULT_METHOD_ID, registerGaAuthMethods } from './auth.ts'
+import { GA_POOL_METHOD_ID } from './pool-login.ts'
 
 function host() {
   const methods: IntegrationMethodRegistration[] = []
@@ -65,18 +69,279 @@ function vaultMethod(
   return method
 }
 
+function poolMethod(
+  methods: IntegrationMethodRegistration[],
+): IntegrationOAuthMethodRegistration {
+  const method = methods.find(
+    ({ method }) => method.type === 'oauth' && method.id === GA_POOL_METHOD_ID,
+  )
+  if (!method || !('authorize' in method))
+    throw new Error('Pool browser method missing')
+  return method
+}
+
+const login = {
+  type: 'success' as const,
+  refresh: 'synthetic-refresh|project',
+  access: 'synthetic-access',
+  expires: Date.now() + 3_600_000,
+  email: 'pool@example.test',
+  projectId: 'project',
+}
+
+describe('GA pool browser registration', () => {
+  it('persists before issuing only a placeholder to the host', async () => {
+    const native = host()
+    const committing = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let writes = 0
+    const registration = await registerGaAuthMethods(
+      native.context,
+      undefined,
+      {
+        local: {
+          assertAdmission: async () => {},
+          persist: async (result) => {
+            expect(result).toEqual(login)
+            committing.resolve()
+            await release.promise
+            writes++
+          },
+        },
+        oauth: { waitForCode: async () => 'code', exchange: async () => login },
+      },
+    )
+    try {
+      const authorization = await poolMethod(native.methods).authorize({})
+      expect(authorization.mode).toBe('auto')
+      if (authorization.mode !== 'auto') throw new Error('Expected auto login')
+      let issued = false
+      void authorization.callback.then(() => {
+        issued = true
+      })
+      await committing.promise
+      expect(issued).toBe(false)
+      expect(writes).toBe(0)
+      release.resolve()
+      const credential = await authorization.callback
+      expect(writes).toBe(1)
+      expect(isPlaceholderCredential(credential, 'google')).toBe(true)
+      expect(String(credential.methodID)).toBe(GA_POOL_METHOD_ID)
+      expect(JSON.stringify(credential)).not.toContain(login.access)
+      expect(JSON.stringify(credential)).not.toContain(login.refresh)
+    } finally {
+      release.resolve()
+      await registration.dispose()
+    }
+  })
+
+  for (const mode of ['vault', 'unreadable'] as const) {
+    it(`refuses ${mode} authority at authorize without OAuth or writes`, async () => {
+      const native = host()
+      let oauth = 0
+      let writes = 0
+      const registration = await registerGaAuthMethods(
+        native.context,
+        async () => mode,
+        {
+          local: {
+            assertAdmission: async () => {
+              throw new Error('authority refused')
+            },
+            persist: async () => {
+              writes++
+            },
+          },
+          oauth: {
+            authorize: async () => {
+              oauth++
+              throw new Error('must not start')
+            },
+          },
+        },
+      )
+      try {
+        await expect(poolMethod(native.methods).authorize({})).rejects.toThrow(
+          'The Antigravity pool login could not be completed.',
+        )
+        expect(oauth).toBe(0)
+        expect(writes).toBe(0)
+      } finally {
+        await registration.dispose()
+      }
+    })
+  }
+
+  for (const stage of ['callback', 'token', 'userinfo'] as const) {
+    it(`revokes local authority at ${stage} without a later project call, write or placeholder`, async () => {
+      const native = host()
+      let allowed = true
+      let writes = 0
+      const code = Promise.withResolvers<string>()
+      const entered = Promise.withResolvers<void>()
+      const response = Promise.withResolvers<Response>()
+      const calls: string[] = []
+      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (
+        url: RequestInfo | URL,
+      ) => {
+        calls.push(String(url))
+        if (calls.length === (stage === 'token' ? 1 : 2)) {
+          entered.resolve()
+          return response.promise
+        }
+        if (calls.length === 1)
+          return Response.json({
+            access_token: 'access',
+            refresh_token: 'refresh',
+            expires_in: 3600,
+          })
+        throw new Error('No later project call is admitted')
+      }) as typeof fetch)
+      const registration = await registerGaAuthMethods(
+        native.context,
+        undefined,
+        {
+          local: {
+            assertAdmission: async () => {
+              if (!allowed) throw new Error('revoked')
+            },
+            persist: async () => {
+              writes++
+            },
+          },
+          oauth: { waitForCode: () => code.promise },
+        },
+      )
+      try {
+        const authorization = await poolMethod(native.methods).authorize({})
+        if (authorization.mode !== 'auto')
+          throw new Error('Expected auto login')
+        const rejected = authorization.callback.then(
+          () => 'unexpected placeholder',
+          (error: Error) => error.message,
+        )
+        if (stage !== 'callback') {
+          code.resolve('code')
+          await entered.promise
+        }
+        allowed = false
+        code.resolve('code')
+        response.resolve(
+          Response.json(
+            stage === 'token'
+              ? {
+                  access_token: 'access',
+                  refresh_token: 'refresh',
+                  expires_in: 3600,
+                }
+              : { email: 'pool@example.test' },
+          ),
+        )
+        expect(await rejected).toBe(
+          'The Antigravity pool login could not be completed.',
+        )
+        expect(writes).toBe(0)
+        expect(calls.length).toBe(
+          stage === 'callback' ? 0 : stage === 'token' ? 1 : 2,
+        )
+        expect(calls.some((url) => url.includes('loadCodeAssist'))).toBe(false)
+      } finally {
+        code.resolve('cleanup')
+        response.resolve(new Response('{}'))
+        await registration.dispose()
+        fetchSpy.mockRestore()
+      }
+    })
+  }
+
+  it('refuses a second bound 51121 login with the listener message and releases it on disposal', async () => {
+    const native = host()
+    let writes = 0
+    const options = {
+      local: {
+        assertAdmission: async () => {},
+        persist: async () => {
+          writes++
+        },
+      },
+      oauth: { exchange: async () => login },
+    }
+    const registration = await registerGaAuthMethods(
+      native.context,
+      undefined,
+      options,
+    )
+    const first = await poolMethod(native.methods).authorize({})
+    if (first.mode !== 'auto') throw new Error('Expected auto login')
+    const rejected = first.callback.then(
+      () => 'unexpected placeholder',
+      (error: Error) => error.message,
+    )
+    try {
+      await expect(poolMethod(native.methods).authorize({})).rejects.toThrow(
+        'Port 51121 is already in use. Another process is occupying this port. Please terminate the process or try again later.',
+      )
+    } finally {
+      await registration.dispose()
+    }
+    expect(await rejected).toBe(
+      'The Antigravity pool login could not be completed.',
+    )
+    expect(writes).toBe(0)
+    const next = host()
+    const nextRegistration = await registerGaAuthMethods(
+      next.context,
+      undefined,
+      options,
+    )
+    try {
+      const authorization = await poolMethod(next.methods).authorize({})
+      if (authorization.mode !== 'auto') throw new Error('Expected auto login')
+      const state = new URL(authorization.url).searchParams.get('state')!
+      await fetch(
+        `http://127.0.0.1:51121/oauth-callback?state=${encodeURIComponent(state)}&code=code`,
+      )
+      expect(
+        isPlaceholderCredential(await authorization.callback, 'google'),
+      ).toBe(true)
+      expect(writes).toBe(1)
+    } finally {
+      await nextRegistration.dispose()
+    }
+  })
+})
+
 describe('GA native vault activation', () => {
-  it('adds only its own method and returns an owned placeholder without a local login or credential mutation', async () => {
+  it('registers exactly the pool browser and vault methods under Antigravity and activates without a local login', async () => {
     const native = host()
     let activations = 0
-    const registration = await registerGaVaultActivation(
+    const registration = await registerGaAuthMethods(
       native.context,
       async () => {
         activations++
         return 'vault'
       },
     )
-    expect(native.methods).toHaveLength(1)
+    expect(
+      native.methods.map(({ method }) =>
+        method.type === 'oauth' ? [method.id, method.label] : method.type,
+      ),
+    ).toEqual([
+      ['antigravity-auth-pool-browser', OPENCODE2_POOL_AUTH_LABEL],
+      [GA_VAULT_METHOD_ID, OPENCODE2_VAULT_AUTH_LABEL],
+    ])
+    for (const method of native.methods) {
+      if (!('authorize' in method)) throw new Error('Expected OAuth method')
+      expect(
+        await method.label?.(
+          placeholderCredential({
+            integrationID: 'google',
+            methodID: 'test',
+            now: 0,
+          }),
+        ),
+      ).toBe('Antigravity')
+    }
     const method = vaultMethod(native.methods)
     expect(method.integrationID).toBe('google')
     expect(method.method.id).toBe(GA_VAULT_METHOD_ID)
@@ -96,7 +361,7 @@ describe('GA native vault activation', () => {
   for (const authority of ['local', 'unreadable'] as const) {
     it(`refuses ${authority} authority before the host receives a placeholder`, async () => {
       const native = host()
-      const registration = await registerGaVaultActivation(
+      const registration = await registerGaAuthMethods(
         native.context,
         async () => authority,
       )
@@ -115,7 +380,7 @@ describe('GA native vault activation', () => {
 
   it('refuses a foreign Google credential on refresh without changing its bytes', async () => {
     const native = host()
-    const registration = await registerGaVaultActivation(
+    const registration = await registerGaAuthMethods(
       native.context,
       async () => 'vault',
     )

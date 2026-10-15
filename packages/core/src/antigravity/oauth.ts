@@ -181,7 +181,30 @@ export async function authorizeAntigravity(
   }
 }
 
-async function fetchProjectID(accessToken: string): Promise<string> {
+export interface AntigravityExchangeOptions {
+  readonly signal?: AbortSignal
+  readonly admit?: () => Promise<void> | void
+}
+
+class ExchangeAdmissionError extends Error {}
+const EXCHANGE_REFUSED = 'Antigravity sign-in is no longer authorized.'
+
+async function admitExchange(
+  options: AntigravityExchangeOptions,
+): Promise<void> {
+  options.signal?.throwIfAborted()
+  try {
+    await options.admit?.()
+  } catch {
+    throw new ExchangeAdmissionError(EXCHANGE_REFUSED)
+  }
+  options.signal?.throwIfAborted()
+}
+
+async function fetchProjectID(
+  accessToken: string,
+  options: AntigravityExchangeOptions,
+): Promise<string> {
   const errors: string[] = []
   const loadHeaders = buildAntigravityHarnessBootstrapHeaders(accessToken)
 
@@ -193,6 +216,7 @@ async function fetchProjectID(accessToken: string): Promise<string> {
   )
 
   for (const baseEndpoint of loadEndpoints) {
+    await admitExchange(options)
     try {
       const url = `${baseEndpoint}/v1internal:loadCodeAssist`
       const response = await fetchWithAgyCliTransport(
@@ -204,11 +228,13 @@ async function fetchProjectID(accessToken: string): Promise<string> {
             metadata: buildAntigravityLoadCodeAssistMetadata(),
           }),
         },
-        { timeoutMs: 10000 },
+        { timeoutMs: 10000, signal: options.signal },
       )
+      await admitExchange(options)
 
       if (!response.ok) {
         const message = await response.text().catch(() => '')
+        await admitExchange(options)
         errors.push(
           `loadCodeAssist ${response.status} at ${baseEndpoint}${
             message ? `: ${message}` : ''
@@ -218,6 +244,7 @@ async function fetchProjectID(accessToken: string): Promise<string> {
       }
 
       const data = await response.json()
+      await admitExchange(options)
       if (
         typeof data.cloudaicompanionProject === 'string' &&
         data.cloudaicompanionProject
@@ -234,6 +261,9 @@ async function fetchProjectID(accessToken: string): Promise<string> {
 
       errors.push(`loadCodeAssist missing project id at ${baseEndpoint}`)
     } catch (e) {
+      // A discovery failure may fall back, but lost authority must stop OAuth.
+      if (e instanceof ExchangeAdmissionError) throw e
+      await admitExchange(options)
       errors.push(
         `loadCodeAssist error at ${baseEndpoint}: ${
           e instanceof Error ? e.message : String(e)
@@ -256,15 +286,18 @@ async function fetchProjectID(accessToken: string): Promise<string> {
 export async function exchangeAntigravity(
   code: string,
   state: string,
+  options: AntigravityExchangeOptions = {},
 ): Promise<AntigravityTokenExchangeResult> {
   try {
     const { verifier, projectId } = decodeState(state)
 
+    await admitExchange(options)
     const startTime = Date.now()
     const tokenResponse = await fetchWithActiveTimeout(
       'https://oauth2.googleapis.com/token',
       {
         method: 'POST',
+        signal: options.signal,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
           Accept: '*/*',
@@ -281,28 +314,34 @@ export async function exchangeAntigravity(
         }),
       },
     )
+    await admitExchange(options)
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text()
+      await admitExchange(options)
       return { type: 'failed', error: errorText }
     }
 
     const tokenPayload =
       (await tokenResponse.json()) as AntigravityTokenResponse
 
+    await admitExchange(options)
     const userInfoResponse = await fetchWithActiveTimeout(
       'https://www.googleapis.com/oauth2/v1/userinfo?alt=json',
       {
+        signal: options.signal,
         headers: {
           Authorization: `Bearer ${tokenPayload.access_token}`,
           'User-Agent': buildAntigravityHarnessUserAgent(),
         },
       },
     )
+    await admitExchange(options)
 
     const userInfo = userInfoResponse.ok
       ? ((await userInfoResponse.json()) as AntigravityUserInfo)
       : {}
+    await admitExchange(options)
 
     const refreshToken = tokenPayload.refresh_token
     if (!refreshToken) {
@@ -311,7 +350,11 @@ export async function exchangeAntigravity(
 
     let effectiveProjectId = projectId
     if (!effectiveProjectId) {
-      effectiveProjectId = await fetchProjectID(tokenPayload.access_token)
+      effectiveProjectId = await fetchProjectID(
+        tokenPayload.access_token,
+        options,
+      )
+      await admitExchange(options)
     }
 
     const storedRefresh = `${refreshToken}|${effectiveProjectId || ''}`
@@ -328,7 +371,12 @@ export async function exchangeAntigravity(
   } catch (error) {
     return {
       type: 'failed',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error:
+        error instanceof ExchangeAdmissionError || options.signal?.aborted
+          ? EXCHANGE_REFUSED
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error',
     }
   }
 }

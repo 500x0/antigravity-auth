@@ -977,12 +977,72 @@ async function transportLocation(
   networkCalls.length = 0
   return {
     serving,
+    services: configured,
     runtime: locationRuntime,
     admitted,
     prepared,
     dispose,
   }
 }
+
+describe('GA pool login request visibility', () => {
+  ownedIt(
+    'refreshes an already started empty pipeline so the next physical request uses the committed account',
+    async (scope) => {
+      const sent: GaSendInput[] = []
+      const location = await transportLocation(
+        scope,
+        'local',
+        {
+          send: async (input) => {
+            sent.push(input)
+            return terminalResponse()
+          },
+          ensureProjectContext: async (auth) => ({
+            auth,
+            effectiveProjectId: 'pool-project',
+          }),
+        },
+        0,
+      )
+      const before = await scope.step(() =>
+        location.serving.state.read({
+          scope: { kind: 'sessionless' },
+          signal: scope.controller().signal,
+        }),
+      )
+      expect(before.accounts).toMatchObject({ kind: 'complete', rows: [] })
+      const login = location.services.localLogin
+      if (!login) throw new Error('Local pool login missing')
+      await scope.step(() =>
+        login.persist(
+          {
+            type: 'success',
+            refresh: 'new-refresh|pool-project',
+            access: 'new-access',
+            expires: Date.now() + 3_600_000,
+            email: 'new@example.test',
+            projectId: 'pool-project',
+          },
+          login.assertAdmission,
+        ),
+      )
+      const response = await scope.step(() =>
+        location.serving.execute(transportJob, {
+          signal: scope.controller().signal,
+          send: async () => {
+            throw new Error('Legacy send must stay unused')
+          },
+        }),
+      )
+      expect(await response.text()).toContain('transport reached')
+      expect(sent).toHaveLength(1)
+      expect(sent[0]?.auth.access).toBe('access-new-refresh')
+      expect(sent[0]?.envelope.project).toBe('pool-project')
+      expect(networkCalls).toHaveLength(0)
+    },
+  )
+})
 
 function expectFinalizedSend(
   sent: GaSendInput,

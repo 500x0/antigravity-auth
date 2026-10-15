@@ -87,7 +87,8 @@ import {
   type AntigravityStateReset,
   type AntigravityStatusDto,
 } from '../rpc/protocol.ts'
-import { registerGaVaultActivation } from './auth.ts'
+import { registerGaAuthMethods } from './auth.ts'
+import type { GaLocalLogin } from './pool-login.ts'
 
 // Overrides
 
@@ -1317,6 +1318,8 @@ export interface GaServingServices {
  */
 export interface GaLocationServices {
   readonly runtime: GaRuntimeCollaborators
+  /** Rechecks local authority and persists logins using this location's own repository. */
+  readonly localLogin?: GaLocalLogin
   /**
    * Start serving on the built runtime. `notify` and `isConnected` belong to
    * this activation's RPC store, for opening the Antigravity menu and toasts.
@@ -1616,9 +1619,13 @@ export async function setupGaActivation(
   try {
     if (context.integration?.transform) {
       runtime.scope.add(
-        await registerGaVaultActivation({
-          integration: { transform: context.integration.transform },
-        }),
+        await registerGaAuthMethods(
+          {
+            integration: { transform: context.integration.transform },
+          },
+          undefined,
+          { local: services.localLogin, oauth: overrides.oauth },
+        ),
         'producer',
       )
     }
