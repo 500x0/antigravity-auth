@@ -11,6 +11,7 @@ import { sameRowRef } from '../../core/src/account-identity.ts'
 import {
   createAccountMigrationFactory,
   readAccountStoreAdmission,
+  readAccountStoreBinding,
   resolvePublishedAccountStorePaths,
 } from '../../core/src/account-migration.ts'
 import { createAccountRepositoryFactory } from '../../core/src/account-repository.ts'
@@ -34,6 +35,7 @@ import {
   type GaAccountObservation,
   type GaAccountRpcJoin,
   type GaCapturedMenuItem,
+  type GaCaseId,
   type GaHarness,
   type GaHostIntegrationInputs,
   type GaMenu,
@@ -44,6 +46,7 @@ import {
   type GaSessionRef,
   gaChildEnvironment,
   gaDriverTypeFixture,
+  gaFreshLoginCase,
   gaObserverTypeFixtures,
   ownedPath,
   prepareGaRoot,
@@ -342,7 +345,7 @@ async function openOwnedRepository(paths: GaPaths): Promise<AccountRepository> {
   })
 }
 
-async function seedOwnedCurrentStore(
+export async function seedOwnedCurrentStore(
   paths: GaPaths,
   scenario: string,
 ): Promise<void> {
@@ -352,6 +355,10 @@ async function seedOwnedCurrentStore(
     !existsSync(legacyPath),
     'Current-store fixture refuses pre-existing legacy/profile data',
   )
+  if (gaFreshLoginCase(scenario)) {
+    await assertOwnedCurrentStoreInput(paths, scenario)
+    return
+  }
   const count =
     /validation|required|ineligible|quota-429|two-location|account|stale-handle/.test(
       scenario,
@@ -428,6 +435,34 @@ async function seedOwnedCurrentStore(
         'Actual repository did not establish the required reauthorization block',
       )
     }
+  } finally {
+    await repository.dispose()
+  }
+}
+
+export async function assertOwnedCurrentStoreInput(
+  paths: GaPaths,
+  scenario: string,
+): Promise<void> {
+  if (gaFreshLoginCase(scenario)) {
+    const modules = await loadCommonAuthStoreModules()
+    const binding = await readAccountStoreBinding(
+      join(paths.opencodeConfig, 'antigravity-accounts.json'),
+      modules,
+      Date.now,
+    )
+    assertInput(
+      binding.status === 'initialization-required',
+      'GA_FRESH_STORE_REQUIRED: login fixture is not initialization-required',
+    )
+    return
+  }
+  const repository = await openOwnedRepository(paths)
+  try {
+    assertInput(
+      (await repository.read()).status === 'ready',
+      'Current store is not ready',
+    )
   } finally {
     await repository.dispose()
   }
@@ -535,17 +570,8 @@ export async function createGaHostIntegrationInputs(): Promise<GaHostIntegration
   const accounts: GaAccountRpcJoin = {
     seedCurrentStore: (paths, scenario) =>
       seedOwnedCurrentStore(paths, scenario),
-    async assertCurrentStoreInput(paths) {
-      const repository = await openOwnedRepository(paths)
-      try {
-        assertInput(
-          (await repository.read()).status === 'ready',
-          'Current store is not ready',
-        )
-      } finally {
-        await repository.dispose()
-      }
-    },
+    assertCurrentStoreInput: (paths, scenario: GaCaseId) =>
+      assertOwnedCurrentStoreInput(paths, scenario),
     async snapshot(harness, session) {
       const result = await client(harness).state(session)
       return normalizeSameReadState(

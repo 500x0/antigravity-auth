@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,16 +26,24 @@ import {
   startOwnedCommand,
 } from './fixtures/opencode-ga-host/owned-command.ts'
 import {
+  assertGaActivePlaceholder,
   assertGaImagePreparationPlatform,
+  assertGaNoDirectProvider,
   assertGaPinnedHostnameMappings,
+  captureGaPlaceholder,
   GA_CASE_IDS,
+  gaAllowsDirectProvider,
   gaChildEnvironment,
+  gaFreshLoginCase,
   gaNativeRequest,
+  gaPlaceholderImportPolicy,
+  importGaPlaceholder,
   prepareGaRoot,
   refreshGaFixtureCredentials,
   seedGaHost,
   verifiedArchiveFiles,
   verifiedArchiveMember,
+  verifyGaOwnershipConfig,
 } from './opencode-ga-harness.ts'
 import {
   assertGaFixturePins,
@@ -201,8 +210,11 @@ describe('native-job source/parser controls, not official-host certification', (
     )
     for (const targets of Object.values(paths)) expect(targets).toHaveLength(1)
   })
-  it('keeps the complete 102-case inventory and the Docker network-none path', () => {
-    expect(GA_CASE_IDS).toHaveLength(102)
+  it('keeps the complete 105-case inventory and the Docker network-none path', () => {
+    expect(GA_CASE_IDS).toHaveLength(105)
+    expect(GA_CASE_IDS[0]).toBe('ga-ownership-pool-login')
+    expect(GA_CASE_IDS).toContain('ga-ownership-passthrough')
+    expect(GA_CASE_IDS).toContain('ga-ownership-empty-pool')
     const runner = readFileSync(
       'packages/e2e-tests/docker/run-opencode-ga-test.sh',
       'utf8',
@@ -513,4 +525,224 @@ it('admits Linux x64 artifact preparation without asserting runtime container me
       'Image preparation requires Linux amd64',
     )
   }
+})
+
+describe('GA ownership harness preparation (source controls, not native proof)', () => {
+  it('enforces direct-provider refusal for every case except passthrough at all three sites', () => {
+    for (const id of GA_CASE_IDS) {
+      if (id === 'ga-ownership-passthrough') continue
+      expect(gaAllowsDirectProvider(id)).toBe(false)
+      expect(() => assertGaNoDirectProvider(id, 0)).not.toThrow()
+      expect(() => assertGaNoDirectProvider(id, 1)).toThrow(
+        `Public provider fallthrough: ${id}`,
+      )
+    }
+    expect(gaAllowsDirectProvider('ga-ownership-passthrough')).toBe(true)
+    expect(() =>
+      assertGaNoDirectProvider('ga-ownership-passthrough', 3),
+    ).not.toThrow()
+    for (const count of [-1, 0.5, Number.NaN]) {
+      expect(() =>
+        assertGaNoDirectProvider('ga-ownership-passthrough', count),
+      ).toThrow()
+    }
+    const source = readFileSync(
+      'packages/e2e-tests/src/opencode-ga-harness.ts',
+      'utf8',
+    )
+    for (const argument of ['observation.id', 'caseId', 'id']) {
+      expect(source).toMatch(
+        new RegExp(
+          `assertGaNoDirectProvider\\(\\s*${argument.replace('.', '\\.')}\\s*,`,
+        ),
+      )
+    }
+  })
+
+  it('leaves only pool-login and empty-pool fresh in the host seeding hook', () => {
+    for (const id of GA_CASE_IDS) {
+      expect(gaFreshLoginCase(id)).toBe(
+        id === 'ga-ownership-pool-login' || id === 'ga-ownership-empty-pool',
+      )
+    }
+    for (const id of [
+      'ga-ownership-pool-login',
+      'ga-ownership-empty-pool',
+      'ga-ownership-passthrough',
+    ] as const) {
+      const paths = prepareGaRoot(root())
+      const accountFile = seedGaHost(
+        paths,
+        '/owned/wrapper',
+        'http://127.0.0.1:1234',
+        1,
+        false,
+        id,
+      )
+      expect(existsSync(accountFile)).toBe(id === 'ga-ownership-passthrough')
+      if (existsSync(accountFile))
+        expect(
+          JSON.parse(readFileSync(accountFile, 'utf8')).accounts,
+        ).toHaveLength(1)
+    }
+  })
+
+  it('uses the public loader in bounded case environments with both refresh timers disabled', async () => {
+    const before = { ...process.env }
+    for (const id of [
+      'ga-ownership-pool-login',
+      'ga-ownership-passthrough',
+      'ga-ownership-empty-pool',
+    ] as const) {
+      const paths = prepareGaRoot(root())
+      seedGaHost(paths, '/owned/wrapper', 'http://127.0.0.1:1234', 0, false, id)
+      await verifyGaOwnershipConfig(paths)
+      const receipt = JSON.parse(
+        readFileSync(join(paths.state, 'ownership-config-loader.json'), 'utf8'),
+      )
+      expect(receipt.background_quota_refresh).toBe(false)
+      expect(receipt.proactive_token_refresh).toBe(false)
+      expect(receipt.environment.HOME).toBe(paths.home)
+      expect(receipt.environment.OPENCODE_DB).toBe(paths.database)
+      expect(receipt.environment.OPENCODE_CONFIG_DIR).toBe(paths.opencodeConfig)
+      expect(receipt.limitation).toContain('not production timer behavior')
+    }
+    expect({ ...process.env }).toEqual(before)
+  })
+
+  it('rejects loader defaults instead of mistaking a written fixture for loaded false values', async () => {
+    const paths = prepareGaRoot(root())
+    seedGaHost(
+      paths,
+      '/owned/wrapper',
+      'http://127.0.0.1:1234',
+      0,
+      false,
+      'terminal-frame',
+    )
+    expect(existsSync(join(paths.opencodeConfig, 'antigravity.json'))).toBe(
+      false,
+    )
+    await expect(verifyGaOwnershipConfig(paths)).rejects.toThrow(
+      'GA_CONFIG_NOT_ISOLATED',
+    )
+  })
+
+  it('pins the single import policy for primary and nested harness creation', () => {
+    for (const id of GA_CASE_IDS) {
+      const policy = gaPlaceholderImportPolicy(id)
+      if (
+        id === 'ga-ownership-pool-login' ||
+        id === 'ga-ownership-empty-pool' ||
+        id === 'ga-ownership-passthrough'
+      )
+        expect(policy).toBe('never')
+      else if (id === 'late-unrelated-response')
+        expect(policy).toBe('after-foreign-held')
+      else expect(policy).toBe('before-prompt')
+    }
+    const source = readFileSync(
+      'packages/e2e-tests/src/opencode-ga-harness.ts',
+      'utf8',
+    )
+    expect(source).toMatch(
+      /host = await startGaHost[\s\S]*?gaPlaceholderImportPolicy\(caseId\) === 'before-prompt'[\s\S]*?await importGaPlaceholder/,
+    )
+  })
+
+  it('captures and imports the exact host-returned value object with provenance and verifies activation', async () => {
+    const paths = prepareGaRoot(root())
+    const placeholderFixture = join(paths.root, 'pool-login-placeholder.json')
+    // Synthetic HTTP contract server only; no real login or native-host result is claimed here.
+    const value = {
+      type: 'oauth',
+      methodID: 'antigravity-auth-pool-browser',
+      access: 'synthetic-host-value',
+      refresh: '',
+      expires: 0,
+      metadata: { source: 'synthetic-host' },
+    }
+    let selected = {
+      id: 'credential-original',
+      integrationID: 'google',
+      label: 'Antigravity',
+      active: true,
+      value,
+    }
+    let activateImports = true
+    const imports: unknown[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        expect(new URL(request.url).pathname).toBe('/api/credential')
+        if (request.method === 'POST') {
+          const body = await request.json()
+          imports.push(body)
+          const entry = {
+            ...selected,
+            id: 'credential-imported',
+            value: body.value,
+          }
+          if (activateImports) selected = entry
+          return Response.json({ data: entry })
+        }
+        return Response.json({ data: [selected] })
+      },
+    })
+    const url = `http://127.0.0.1:${server.port}`
+    try {
+      await captureGaPlaceholder(
+        {
+          caseId: 'ga-ownership-pool-login',
+          host: { url },
+          paths,
+          placeholderFixture,
+          readWrapperEvents: () => [
+            { event: 'oauth.exchange', codePresent: true },
+          ],
+        },
+        selected.id,
+      )
+      const fixture = JSON.parse(readFileSync(placeholderFixture, 'utf8'))
+      expect(fixture.caseId).toBe('ga-ownership-pool-login')
+      expect(fixture.credentialId).toBe('credential-original')
+      expect(fixture.value).toEqual(value)
+      expect(fixture.valueSha256).toBe(
+        createHash('sha256').update(JSON.stringify(value)).digest('hex'),
+      )
+      expect(fixture.provenance.api).toBe('GET /api/credential')
+      expect(fixture.provenance.databaseFile).toBe(paths.database)
+      await importGaPlaceholder(url, placeholderFixture, paths)
+      expect(imports).toEqual([
+        {
+          integrationID: 'google',
+          label: 'Antigravity',
+          value,
+          activate: true,
+        },
+      ])
+      expect(selected.id).toBe('credential-imported')
+      selected = { ...selected, id: 'other-active-credential' }
+      activateImports = false
+      await expect(
+        importGaPlaceholder(url, placeholderFixture, paths),
+      ).rejects.toThrow('GA_ACTIVE_PLACEHOLDER_MISSING')
+      fixture.value.access = 'altered'
+      writeFileSync(placeholderFixture, JSON.stringify(fixture))
+      await expect(
+        importGaPlaceholder(url, placeholderFixture, paths),
+      ).rejects.toThrow('GA_PLACEHOLDER_PROVENANCE_INVALID')
+      expect(imports).toHaveLength(2)
+      await expect(
+        importGaPlaceholder(url, join(paths.root, 'missing.json'), paths),
+      ).rejects.toThrow('GA_PLACEHOLDER_FIXTURE_MISSING')
+      selected.active = false
+      await expect(assertGaActivePlaceholder(url)).rejects.toThrow(
+        'GA_ACTIVE_PLACEHOLDER_MISSING',
+      )
+    } finally {
+      await server.stop(true)
+    }
+  })
 })
