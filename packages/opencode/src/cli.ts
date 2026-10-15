@@ -9,6 +9,7 @@ import {
   type AccountMetadataV3,
   type AccountMigrationOutcome,
   type AccountQuotaResult,
+  type AccountRepository,
   type AccountRow,
   type AccountStorageV4,
   createAccountMigrationFactory,
@@ -30,11 +31,17 @@ import {
   type OAuthLoginRequest,
   performOAuthLogin,
 } from './plugin/oauth-login'
-import { persistAccountPool } from './plugin/persist-account-pool'
+import { commitLogins, replacePoolLogins } from './plugin/persist-account-pool'
 import { checkAccountsQuotaStandalone } from './plugin/quota'
 import { startOAuthListener } from './plugin/server'
-import { getStoragePath, loadAccounts } from './plugin/storage'
 import {
+  getStoragePath,
+  initializeFreshAccountStoreFor,
+  loadAccounts,
+  openAccountStore,
+} from './plugin/storage'
+import {
+  assertLocalOpenCodeLogin,
   assertSetupHostsStopped,
   persistPiSetupLogin,
   runPluginSetup,
@@ -463,29 +470,104 @@ export function createDefaultCliDependencies(): CliDependencies {
         throw new Error(
           'Pi setup requires its detected native agent directory.',
         )
-      return performOAuthLogin(request, {
-        authorize: authorizeAntigravity,
-        exchange: exchangeAntigravity,
-        startListener: startOAuthListener,
-        openBrowser,
-        upsert: async (result) => {
-          if (host === 'pi') {
-            await persistPiSetupLogin(result, context!)
-            return
-          }
-          if (host === 'opencode') await assertSetupHostsStopped()
-          await persistAccountPool(
-            [result],
-            request.startFresh && request.accounts.length === 0,
-          )
-        },
-      })
+      const legacyPath = resolve(getStoragePath())
+      const repository =
+        host === 'pi'
+          ? undefined
+          : await prepareCliLoginStore(legacyPath, context?.opencodeGeneration)
+      try {
+        return await performOAuthLogin(request, {
+          authorize: authorizeAntigravity,
+          exchange: exchangeAntigravity,
+          startListener: startOAuthListener,
+          openBrowser,
+          upsert: async (result) => {
+            if (host === 'pi') {
+              await persistPiSetupLogin(result, context!)
+              return
+            }
+            if (host === 'opencode') await assertSetupHostsStopped()
+            await assertLocalOpenCodeLogin(
+              legacyPath,
+              context?.opencodeGeneration,
+            )
+            await persistCliStoreLogin(
+              repository!,
+              result,
+              request.startFresh && request.accounts.length === 0,
+            )
+          },
+        })
+      } finally {
+        await repository?.dispose()
+      }
     },
     loadAccounts,
     getQuota: (accounts, options) =>
       checkAccountsQuotaStandalone(accounts, options),
     accountStore: createDefaultAccountStoreOperations(),
   }
+}
+
+async function prepareCliLoginStore(
+  legacyPath: string,
+  generation?: SetupCallbackContext['opencodeGeneration'],
+): Promise<AccountRepository> {
+  await assertLocalOpenCodeLogin(legacyPath, generation)
+  const modules = await loadCommonAuthStoreModules()
+  const options = {
+    legacyPath,
+    modules,
+    createRepository: createAccountRepositoryFactory(modules),
+    exchange: async ({ refreshToken }: { refreshToken: string }) => {
+      const result = await refreshAntigravityToken(refreshToken)
+      return {
+        accessToken: result.access,
+        refreshToken: result.refresh,
+        expiresAt: result.expires,
+      }
+    },
+  }
+  let opened = await openAccountStore(options)
+  if (opened.status === 'initialization-required') {
+    const outcome = await initializeFreshAccountStoreFor(modules, {
+      legacyPath,
+    })
+    if (outcome.status !== 'completed')
+      throw new Error(describeOutcome('Initialization', outcome).text.trim())
+    opened = await openAccountStore(options)
+  }
+  if (opened.status !== 'ready')
+    throw new Error(
+      opened.status === 'initialization-required'
+        ? 'The account store changed while it was initialized; try again.'
+        : opened.message,
+    )
+  return opened.repository
+}
+
+async function persistCliStoreLogin(
+  repository: AccountRepository,
+  result: AntigravityTokenExchangeSuccess,
+  replaceAll: boolean,
+): Promise<void> {
+  if (replaceAll) {
+    const receipt = await replacePoolLogins(repository, [result])
+    if (receipt.outcome !== 'completed')
+      throw new Error(
+        'Account pool replacement is pending; finish it before using the accounts.',
+      )
+    return
+  }
+  const [login] = await commitLogins(repository, [result])
+  if (login?.status === 'refused')
+    throw new Error(
+      `Login refused: ${login.message} Use re-authentication for an existing account.`,
+    )
+  if (login?.status !== 'committed')
+    throw new Error(
+      'Login returned no usable refresh token; no account was saved.',
+    )
 }
 
 function present<T>(value: T | null | undefined): T | undefined {
