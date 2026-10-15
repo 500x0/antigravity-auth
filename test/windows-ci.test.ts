@@ -40,7 +40,18 @@ afterEach(async () => {
 })
 
 type Workflow = {
-  jobs: Record<string, { steps: { run?: string }[] }>
+  jobs: Record<
+    string,
+    {
+      strategy: { matrix: { os: string[] } }
+      steps: {
+        run?: string
+        uses?: string
+        if?: string
+        with?: Record<string, string>
+      }[]
+    }
+  >
 }
 const workflow = Bun.YAML.parse(
   await readFile(join(root, '.github/workflows/windows-migration.yml'), 'utf8'),
@@ -184,3 +195,40 @@ test('Windows checkout preserves the embedded generator self-hash and manifest b
   expect(actualBytes.equals(expectedBytes)).toBe(true)
   await emitter.embedCommonAuth(target, true)
 }, 120000)
+
+test('Windows Pi preflight runs on both vault runners and retains its result', () => {
+  const job = workflow.jobs.vault!
+  expect(job.strategy.matrix.os).toEqual(['windows-latest', 'windows-2022'])
+  const proof = job.steps.find((step) =>
+    step.run?.includes('node test/windows-pi-preflight/verify.mjs $evidence'),
+  )
+  expect(proof).toBeDefined()
+  expect(proof?.run).toContain('exit $LASTEXITCODE')
+  expect(proof?.run).toContain('AGY_PI_PREFLIGHT_EVIDENCE=$evidence')
+  expect(job.steps).toContainEqual({
+    uses: 'actions/upload-artifact@v4',
+    if: 'always()',
+    with: {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expands this expression, not JavaScript.
+      name: 'windows-pi-preflight-${{ matrix.os }}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expands this expression, not JavaScript.
+      path: '${{ env.AGY_PI_PREFLIGHT_EVIDENCE }}',
+      'if-no-files-found': 'error',
+    },
+  })
+})
+
+test('Windows Pi preflight builds verify embeddings before installing compiler dependencies', () => {
+  const preparation = workflow.jobs.vault!.steps.find((step) =>
+    step.run?.includes('bun install --cwd tools/common-auth-build'),
+  )?.run
+  expect(preparation).toBeDefined()
+  const check = preparation!.indexOf(
+    'bun packages/opencode/scripts/embed-common-auth.ts --check',
+  )
+  const install = preparation!.indexOf(
+    'bun install --cwd tools/common-auth-build',
+  )
+  expect(check).toBeGreaterThanOrEqual(0)
+  expect(install).toBeGreaterThan(check)
+})

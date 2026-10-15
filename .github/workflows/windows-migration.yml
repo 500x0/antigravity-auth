@@ -37,6 +37,8 @@ jobs:
         run: |
           bun install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun packages/opencode/scripts/embed-common-auth.ts --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun install --cwd tools/common-auth-build --frozen-lockfile --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun run --cwd packages/core build
@@ -56,6 +58,19 @@ jobs:
           "AGY_VAULT_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           node --experimental-import-meta-resolve test/windows-vault/verify.mjs $root $evidence
           exit $LASTEXITCODE
+      - name: Verify Pi setup privacy repairs and dry-run isolation
+        shell: pwsh
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'agy-pi-preflight-evidence\result.json'
+          "AGY_PI_PREFLIGHT_EVIDENCE=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node test/windows-pi-preflight/verify.mjs $evidence
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-pi-preflight-${{ matrix.os }}
+          path: ${{ env.AGY_PI_PREFLIGHT_EVIDENCE }}
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
