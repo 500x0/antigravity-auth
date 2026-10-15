@@ -6,11 +6,17 @@
  * directory, with a deterministic token exchange. No network or host.
  */
 
-import { describe, expect, it, mock, spyOn } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   AccountManager,
   AccountRepositoryError,
@@ -26,6 +32,7 @@ import {
 
 import type {
   GaBridgeJob,
+  GaLocationServices,
   GaPluginOverrides,
   GaSendInput,
   HarnessAccountsObservation,
@@ -36,9 +43,173 @@ import {
   emptyOperatorSettings,
   type OperatorSettings,
 } from './operator-settings.ts'
-import { createLocationRuntime } from './shared/runtime.ts'
+import {
+  createLocationRuntime,
+  type LocationRuntime,
+} from './shared/runtime.ts'
+
+const activeCases = new Set<GaTestCase>()
+
+/** Bun timeouts leave test promises running; afterEach drains owned work before releasing global paths. */
+class GaTestCase {
+  private readonly controllers = new Set<AbortController>()
+  private readonly pending = new Set<Promise<unknown>>()
+  private readonly cleanup: (() => Promise<void>)[] = []
+  private readonly cancelled = new DOMException(
+    'GA test case closed',
+    'AbortError',
+  )
+  private closing = false
+  private closed?: Promise<void>
+
+  defer(cleanup: () => Promise<void>) {
+    this.check()
+    this.cleanup.push(cleanup)
+  }
+
+  controller() {
+    this.check()
+    const controller = new AbortController()
+    this.controllers.add(controller)
+    return controller
+  }
+
+  check() {
+    if (this.closing) throw this.cancelled
+  }
+
+  track<T>(work: () => Promise<T>): Promise<T> {
+    this.check()
+    const pending = Promise.resolve().then(() => {
+      this.check()
+      return work()
+    })
+    this.pending.add(pending)
+    void pending.then(
+      () => this.pending.delete(pending),
+      () => this.pending.delete(pending),
+    )
+    return pending
+  }
+
+  async step<T>(work: () => Promise<T>): Promise<T> {
+    const result = await this.track(work)
+    this.check()
+    return result
+  }
+
+  async wait<T>(pending: Promise<T>): Promise<T> {
+    const controller = this.controller()
+    const cancelled = Promise.withResolvers<never>()
+    const abort = () => cancelled.reject(controller.signal.reason)
+    controller.signal.addEventListener('abort', abort, { once: true })
+    try {
+      return await Promise.race([pending, cancelled.promise])
+    } finally {
+      controller.signal.removeEventListener('abort', abort)
+    }
+  }
+
+  close(): Promise<void> {
+    if (this.closed) return this.closed
+    this.closing = true
+    for (const controller of this.controllers) controller.abort(this.cancelled)
+    this.closed = (async () => {
+      const errors: unknown[] = []
+      while (this.pending.size > 0) {
+        const results = await Promise.allSettled([...this.pending])
+        for (const result of results) {
+          // A timeout is already red; cancellation merely stops its continuation.
+          if (result.status === 'rejected' && result.reason !== this.cancelled)
+            errors.push(result.reason)
+        }
+      }
+      for (const cleanup of this.cleanup.reverse()) {
+        try {
+          await cleanup()
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      if (errors.length)
+        throw new AggregateError(errors, 'GA test case cleanup failed')
+    })()
+    return this.closed
+  }
+}
+
+function ownedIt(
+  name: string,
+  work: (scope: GaTestCase) => Promise<void>,
+  timeout?: number,
+) {
+  it(
+    name,
+    () => {
+      const scope = new GaTestCase()
+      activeCases.add(scope)
+      return scope.track(() => work(scope))
+    },
+    timeout,
+  )
+}
+
+afterEach(async () => {
+  for (const scope of activeCases) {
+    try {
+      await scope.close()
+    } finally {
+      activeCases.delete(scope)
+    }
+  }
+})
+
+let environmentOwner: GaTestCase | undefined
+
+function caseEnvironment(
+  scope: GaTestCase,
+  prefix: string,
+  dispose: () => Promise<void>,
+) {
+  let root: string | undefined
+  let previous:
+    | { OPENCODE_CONFIG_DIR?: string; XDG_CONFIG_HOME?: string }
+    | undefined
+  // Register before creating files, changing globals, or starting asynchronous setup.
+  scope.defer(async () => {
+    try {
+      await dispose()
+    } finally {
+      if (environmentOwner === scope && previous) {
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+        environmentOwner = undefined
+      }
+      if (root) rmSync(root, { recursive: true, force: true })
+    }
+  })
+  if (environmentOwner)
+    throw new Error(
+      'A previous GA test case still owns the configuration paths',
+    )
+  root = mkdtempSync(join(tmpdir(), prefix))
+  root = realpathSync(root)
+  previous = {
+    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  }
+  environmentOwner = scope
+  process.env.OPENCODE_CONFIG_DIR = join(root, 'config')
+  process.env.XDG_CONFIG_HOME = join(root, 'xdg')
+  return root
+}
 
 const realCore = await import('@cortexkit/antigravity-auth-core')
+const lifetimeControl = process.env.ANTIGRAVITY_GA_TEST_LIFETIME
+let failedSetupRoot: string | undefined
+const initializeStore = realCore.initializeFreshAccountStore
 const networkCalls: {
   url: string
   init?: RequestInit
@@ -52,6 +223,20 @@ function terminalResponse() {
 }
 mock.module('@cortexkit/antigravity-auth-core', () => ({
   ...realCore,
+  ...(lifetimeControl === 'setup'
+    ? {
+        initializeFreshAccountStore: async (
+          ...args: Parameters<typeof initializeStore>
+        ) => {
+          const result = await initializeStore(...args)
+          if (!failedSetupRoot) {
+            failedSetupRoot = dirname(dirname(args[1].legacyPath))
+            throw new Error('injected setup failure')
+          }
+          return result
+        },
+      }
+    : {}),
   fetchWithAgyCliTransport: (
     url: string,
     init?: RequestInit,
@@ -469,16 +654,18 @@ describe('GA request pipeline pieces', () => {
     ])
   })
 
-  it('refreshes through the genuine repository and stores the successor there', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-credentials-')))
-    try {
+  ownedIt(
+    'refreshes through the genuine repository and stores the successor there',
+    async (scope) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-credentials-')))
+      scope.defer(async () => rmSync(root, { recursive: true, force: true }))
       const legacyPath = join(root, 'antigravity-accounts.json')
-      const modules = await loadCommonAuthStoreModules()
-      await initializeFreshAccountStore(modules, { legacyPath, now: Date.now })
-      const admission = await readAccountStoreAdmission(
-        legacyPath,
-        modules,
-        Date.now,
+      const modules = await scope.step(() => loadCommonAuthStoreModules())
+      await scope.step(() =>
+        initializeFreshAccountStore(modules, { legacyPath, now: Date.now }),
+      )
+      const admission = await scope.step(() =>
+        readAccountStoreAdmission(legacyPath, modules, Date.now),
       )
       if (admission.status !== 'active') throw new Error(admission.status)
       const exchanged: string[] = []
@@ -494,46 +681,48 @@ describe('GA request pipeline pieces', () => {
           }
         },
       })
-      try {
-        await repository.login({
+      scope.defer(async () => {
+        await repository.dispose()
+      })
+      await scope.step(() =>
+        repository.login({
           id: crypto.randomUUID(),
           refreshToken: 'refresh-original',
           metadata: { addedAt: 1, lastUsed: 1, projectId: 'project-1' },
-        })
-        await repository.login({
+        }),
+      )
+      await scope.step(() =>
+        repository.login({
           id: crypto.randomUUID(),
           refreshToken: 'refresh-other',
           metadata: { addedAt: 2, lastUsed: 2, projectId: 'project-2' },
-        })
-        const manager = AccountManager.fromRepository(await repository.read(), {
-          repository,
-        })
-        const credentials = createGaLocalCredentials(manager, {
-          repository,
-          overrides: {},
-        })
-        const [first, second] = manager.getAccounts()
-        if (!first || !second) throw new Error('missing accounts')
-        const refreshed = await credentials.refresh(second)
-        // The selected account itself is refreshed; no row is looked up again
-        // by token.
-        expect(exchanged).toEqual(['refresh-other'])
-        expect(refreshed?.access).toBe('access-new')
-        expect(refreshed?.refresh).toBe('refresh-successor|project-2')
-        const read = await repository.read()
-        if (read.status !== 'ready') throw new Error(read.status)
-        expect(read.rows.map((row) => row.credential?.refreshToken)).toEqual([
-          'refresh-original',
-          'refresh-successor',
-        ])
-        expect(first.parts.refreshToken).toBe('refresh-original')
-      } finally {
-        await repository.dispose()
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
+        }),
+      )
+      const manager = AccountManager.fromRepository(
+        await scope.step(() => repository.read()),
+        { repository },
+      )
+      scope.defer(() => manager.dispose())
+      const credentials = createGaLocalCredentials(manager, {
+        repository,
+        overrides: {},
+      })
+      const [first, second] = manager.getAccounts()
+      if (!first || !second) throw new Error('missing accounts')
+      const refreshed = await scope.step(() => credentials.refresh(second))
+      // The selected account itself is refreshed; no row is looked up again by token.
+      expect(exchanged).toEqual(['refresh-other'])
+      expect(refreshed?.access).toBe('access-new')
+      expect(refreshed?.refresh).toBe('refresh-successor|project-2')
+      const read = await scope.step(() => repository.read())
+      if (read.status !== 'ready') throw new Error(read.status)
+      expect(read.rows.map((row) => row.credential?.refreshToken)).toEqual([
+        'refresh-original',
+        'refresh-successor',
+      ])
+      expect(first.parts.refreshToken).toBe('refresh-original')
+    },
+  )
 })
 
 async function freshRepository() {
@@ -590,51 +779,82 @@ const transportJob: GaBridgeJob = {
 
 /** Uses the location factory and shared request engine, with disposable local logins or a stand-in vault source. */
 async function transportLocation(
+  scope: GaTestCase,
   domain: 'local' | 'vault',
   overrides: GaPluginOverrides,
   accountCount = 1,
 ) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-transport-')))
-  const previous = {
-    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
-    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  let services: GaLocationServices | undefined
+  let runtime: LocationRuntime | undefined
+  let seed:
+    | ReturnType<ReturnType<typeof createAccountRepositoryFactory>>
+    | undefined
+  let restorePrepared: (() => void) | undefined
+  let disposal: Promise<void> | undefined
+  const dispose = () => {
+    disposal ??= (async () => {
+      const errors: unknown[] = []
+      for (const cleanup of [
+        () => restorePrepared?.(),
+        () => seed?.dispose(),
+        () => {
+          const manager = runtime?.accounts()
+          return manager instanceof AccountManager
+            ? manager.flushSaveToDisk()
+            : undefined
+        },
+        () => services?.dispose(),
+        () => runtime?.dispose(),
+      ]) {
+        try {
+          await cleanup()
+        } catch (error) {
+          errors.push(error)
+        }
+      }
+      if (errors.length)
+        throw new AggregateError(errors, 'GA transport fixture disposal failed')
+    })()
+    return disposal
   }
-  process.env.OPENCODE_CONFIG_DIR = join(root, 'config')
-  process.env.XDG_CONFIG_HOME = join(root, 'xdg')
+  const root = caseEnvironment(scope, 'ga-transport-', dispose)
   const directory = join(root, 'location')
   mkdirSync(join(directory, '.opencode'), { recursive: true })
-  await writeFile(
-    join(directory, '.opencode', 'antigravity.json'),
-    JSON.stringify({
-      background_quota_refresh: false,
-      proactive_token_refresh: false,
-      request_jitter_max_ms: 0,
-      ...(accountCount > 1
-        ? { switch_on_first_rate_limit: true, switch_account_delay_ms: 0 }
-        : {}),
-    }),
+  await scope.step(() =>
+    writeFile(
+      join(directory, '.opencode', 'antigravity.json'),
+      JSON.stringify({
+        background_quota_refresh: false,
+        proactive_token_refresh: false,
+        request_jitter_max_ms: 0,
+        ...(accountCount > 1
+          ? { switch_on_first_rate_limit: true, switch_account_delay_ms: 0 }
+          : {}),
+      }),
+    ),
   )
   const admitted: { signal?: AbortSignal; credentialId: string }[] = []
   if (domain === 'local') {
     const legacyPath = join(root, 'config', GA_ACCOUNTS_FILE)
-    const modules = await loadCommonAuthStoreModules()
-    await initializeFreshAccountStore(modules, { legacyPath, now: Date.now })
-    const admission = await readAccountStoreAdmission(
-      legacyPath,
-      modules,
-      Date.now,
+    const modules = await scope.step(() => loadCommonAuthStoreModules())
+    await scope.step(() =>
+      initializeFreshAccountStore(modules, { legacyPath, now: Date.now }),
+    )
+    const admission = await scope.step(() =>
+      readAccountStoreAdmission(legacyPath, modules, Date.now),
     )
     if (admission.status !== 'active') throw new Error(admission.status)
-    const seed = createAccountRepositoryFactory(modules)({
+    seed = createAccountRepositoryFactory(modules)({
       paths: admission.paths,
       now: Date.now,
       exchange: async () => {
         throw new Error('seed must not refresh')
       },
     })
-    try {
-      for (let i = 0; i < accountCount; i++) {
-        await seed.login({
+    const repository = seed
+    for (let i = 0; i < accountCount; i++) {
+      await scope.step(() =>
+        repository.login({
           id: crypto.randomUUID(),
           refreshToken: `refresh-${i}`,
           metadata: {
@@ -642,11 +862,11 @@ async function transportLocation(
             lastUsed: i + 1,
             managedProjectId: `project-${i}`,
           },
-        })
-      }
-    } finally {
-      await seed.dispose()
+        }),
+      )
     }
+    await scope.step(() => repository.dispose())
+    seed = undefined
   }
   const route = {
     routeId: 'route-0',
@@ -707,51 +927,51 @@ async function transportLocation(
             dispose: async () => {},
           }),
         })
-  const services = await factory({
-    directory,
-    overrides: {
-      refreshAccessToken: async (refresh) => ({
-        access: `access-${refresh}`,
-        refresh,
-        expires: Date.now() + 3_600_000,
-      }),
-      ...overrides,
-    },
+  const configured = await scope.step(async () => {
+    const configured = await factory({
+      directory,
+      overrides: {
+        refreshAccessToken: async (refresh) => ({
+          access: `access-${refresh}`,
+          refresh,
+          expires: Date.now() + 3_600_000,
+        }),
+        ...overrides,
+      },
+    })
+    services = configured
+    return configured
   })
-  const runtime = await createLocationRuntime({
-    ...services.runtime,
-    directory,
-    operatorSettingsRegistry: createOperatorSettingsRegistry(),
+  const locationRuntime = await scope.step(async () => {
+    const created = await createLocationRuntime({
+      ...configured.runtime,
+      directory,
+      operatorSettingsRegistry: createOperatorSettingsRegistry(),
+    })
+    runtime = created
+    return created
   })
   // This debug method receives the prepared body and headers before the engine sends them.
-  const prepared = spyOn(runtime.debug, 'startAntigravityDebugRequest')
-  const serving = await services.start({
-    runtime,
-    generation: 'transport-generation',
-    send: async () => {
-      throw new Error('legacy send plumbing must stay unused')
-    },
-    notify: () => null,
-    isConnected: () => false,
-  })
+  const prepared = spyOn(locationRuntime.debug, 'startAntigravityDebugRequest')
+  restorePrepared = () => prepared.mockRestore()
+  const serving = await scope.step(() =>
+    configured.start({
+      runtime: locationRuntime,
+      generation: 'transport-generation',
+      send: async () => {
+        throw new Error('legacy send plumbing must stay unused')
+      },
+      notify: () => null,
+      isConnected: () => false,
+    }),
+  )
   networkCalls.length = 0
   return {
     serving,
-    runtime,
+    runtime: locationRuntime,
     admitted,
     prepared,
-    async dispose() {
-      prepared.mockRestore()
-      const manager = runtime.accounts()
-      if (manager instanceof AccountManager) await manager.flushSaveToDisk()
-      await services.dispose()
-      await runtime.dispose()
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key]
-        else process.env[key] = value
-      }
-      rmSync(root, { recursive: true, force: true })
-    },
+    dispose,
   }
 }
 
@@ -767,206 +987,344 @@ function expectFinalizedSend(
   expect(sent.kind).toBe(transportJob.kind)
 }
 
-describe('GA composed transport', () => {
-  it('sends the switched-account warmup probe and main request through the override', async () => {
-    const sends: GaSendInput[] = []
-    let probeCancelled = 0
-    let observations = 0
-    const location = await transportLocation(
-      'local',
-      {
-        send: async (input) => {
-          sends.push(input)
-          if (sends.length === 1)
-            return new Response(
-              '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"rate limit exceeded"}}',
-              {
-                status: 429,
-                headers: {
-                  'retry-after': '3600',
-                  'content-type': 'application/json',
-                },
+if (lifetimeControl) {
+  const baseline = {
+    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  }
+  const events: string[] = []
+  let firstRoot: string | undefined
+  describe('GA case lifetime child', () => {
+    ownedIt(
+      'first case fails without abandoning its admitted work',
+      async (scope) => {
+        if (lifetimeControl === 'timeout') {
+          firstRoot = caseEnvironment(scope, 'ga-held-case-', async () => {
+            events.push('cleanup')
+          })
+          await scope.step(
+            () =>
+              new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  events.push('drained')
+                  resolve()
+                }, 100)
+              }),
+          )
+          events.push('late continuation')
+        } else {
+          const location = await transportLocation(scope, 'local', {})
+          firstRoot = dirname(process.env.OPENCODE_CONFIG_DIR ?? '')
+          const dispose = location.runtime.dispose.bind(location.runtime)
+          spyOn(location.runtime, 'dispose').mockImplementation(async () => {
+            await dispose()
+            throw new Error('injected disposal failure')
+          })
+          await location.dispose()
+        }
+      },
+      lifetimeControl === 'timeout' ? 25 : undefined,
+    )
+
+    ownedIt(
+      'following fixture keeps its own environment and initialized store',
+      async (scope) => {
+        expect({
+          OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+        }).toEqual(baseline)
+        expect(existsSync(firstRoot ?? failedSetupRoot ?? '')).toBe(false)
+        if (lifetimeControl === 'timeout')
+          expect(events).toEqual(['drained', 'cleanup'])
+        const location = await transportLocation(scope, 'local', {})
+        try {
+          const response = await location.serving.execute(transportJob, {
+            signal: scope.controller().signal,
+            send: async () => terminalResponse(),
+          })
+          expect(await response.text()).toContain('transport reached')
+          expect(networkCalls).toHaveLength(1)
+        } finally {
+          await location.dispose()
+        }
+        process.stdout.write(
+          `GA_LIFETIME_CONTROL ${JSON.stringify({ mode: lifetimeControl, events, restored: true })}\n`,
+        )
+      },
+    )
+  })
+} else {
+  describe('GA test case lifetime', () => {
+    for (const mode of ['timeout', 'setup', 'disposal']) {
+      ownedIt(
+        `contains ${mode} failure before the following fixture starts`,
+        async (scope) => {
+          let child: ReturnType<typeof Bun.spawn> | undefined
+          scope.defer(async () => {
+            if (!child) return
+            if (child.exitCode === null) child.kill()
+            await child.exited
+          })
+          const process = Bun.spawn(
+            [
+              Bun.which('bun') ?? 'bun',
+              'test',
+              '--isolate',
+              import.meta.path,
+              '-t',
+              '^GA case lifetime child',
+            ],
+            {
+              env: {
+                ...globalThis.process.env,
+                ANTIGRAVITY_GA_TEST_LIFETIME: mode,
               },
-            )
-          if (sends.length !== 2) return terminalResponse()
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode('data: {}\n\n'))
-              },
-              cancel() {
-                probeCancelled++
-              },
-            }),
-            { headers: { 'content-type': 'text/event-stream' } },
+              stdout: 'pipe',
+              stderr: 'pipe',
+              signal: scope.controller().signal,
+            },
+          )
+          child = process
+          const [stdout, stderr, code] = await scope.step(() =>
+            Promise.all([
+              new Response(process.stdout).text(),
+              new Response(process.stderr).text(),
+              process.exited,
+            ]),
+          )
+          expect(code).toBe(1)
+          expect(stderr).toContain(
+            '(fail) GA case lifetime child > first case fails without abandoning its admitted work',
+          )
+          expect(stderr).toContain(
+            '(pass) GA case lifetime child > following fixture keeps its own environment and initialized store',
+          )
+          expect(stdout).toContain(`"mode":"${mode}"`)
+          expect(stdout).toContain('"restored":true')
+          expect(stderr).toContain(
+            mode === 'timeout'
+              ? 'timed out after 25ms'
+              : `injected ${mode} failure`,
           )
         },
-        observeRawSenderSignal: () => {
-          observations++
-          return undefined
-        },
-      },
-      2,
-    )
-    try {
-      expect(location.runtime.config.config.cache_warmup_on_switch).toBe(true)
-      const context = {
-        signal: new AbortController().signal,
-        send: async () => terminalResponse(),
-      }
-      expect(
-        await (await location.serving.execute(transportJob, context)).text(),
-      ).toContain('transport reached')
-      expect(sends).toHaveLength(3)
-      const probe = sends[1]
-      const main = sends[2]
-      const prepared = location.prepared.mock.calls[1]?.[0]
-      if (!probe || !main || !prepared)
-        throw new Error('missing switched sends')
-      expectFinalizedSend(probe, prepared)
-      expectFinalizedSend(main, prepared)
-      expect(probe.auth.access).not.toBe(sends[0]?.auth.access)
-      expect(probe.auth.access).toBe(main.auth.access)
-      expect(probe.envelope.project).not.toBe(sends[0]?.envelope.project)
-      expect(probe.envelope.project).toBe(main.envelope.project)
-      expect(probe.signal).toBe(main.signal)
-      expect(probeCancelled).toBe(1)
-      expect(networkCalls).toHaveLength(0)
-      expect(observations).toBe(0)
-    } finally {
-      await location.dispose()
+      )
     }
   })
+}
 
-  it('preserves finalized bytes, signal and idle timeout without an override', async () => {
-    const observed: AbortSignal[] = []
-    const location = await transportLocation('local', {
-      observeRawSenderSignal: (signal) => {
-        expect(networkCalls).toHaveLength(0)
-        observed.push(signal)
-        return undefined
-      },
-    })
-    try {
-      const controller = new AbortController()
-      const response = await location.serving.execute(transportJob, {
-        signal: controller.signal,
-        send: async () => {
-          throw new Error('unused')
-        },
-      })
-      expect(await response.text()).toContain('transport reached')
-      expect(networkCalls).toHaveLength(1)
-      const call = networkCalls[0]
-      const prepared = location.prepared.mock.calls[0]?.[0]
-      if (!call || !prepared) throw new Error('missing physical send')
-      expect(call.url).toBe(prepared.resolvedUrl)
-      expect(call.url).toBe(
-        'https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
-      )
-      expect(call.init?.body).toBe(prepared.body)
-      expect([...new Headers(call.init?.headers)]).toEqual([
-        ...new Headers(prepared.headers),
-      ])
-      expect(new Headers(call.init?.headers).get('authorization')).toBe(
-        'Bearer access-refresh-0',
-      )
-      expect(JSON.parse(String(call.init?.body)).project).toBe('project-0')
-      expect(call.options?.signal).toBe(call.init?.signal)
-      expect(observed).toHaveLength(1)
-      expect(call.options?.signal).toBe(observed[0])
-      expect(call.options?.idleTimeoutMs).toBe(300_000)
-    } finally {
-      await location.dispose()
-    }
-  })
-
-  for (const domain of ['local', 'vault'] as const) {
-    it(`reaches the ${domain} send override with the finalized physical attempt`, async () => {
+describe('GA composed transport', () => {
+  ownedIt(
+    'sends the switched-account warmup probe and main request through the override',
+    async (scope) => {
       const sends: GaSendInput[] = []
-      const observed: AbortSignal[] = []
-      const location = await transportLocation(domain, {
-        send: async (input) => {
-          sends.push(input)
-          return terminalResponse()
-        },
-        observeRawSenderSignal: (signal) => {
-          observed.push(signal)
-          return undefined
-        },
-      })
-      try {
-        const response = await location.serving.execute(transportJob, {
-          signal: new AbortController().signal,
-          send: async () => {
-            throw new Error('unused')
+      let probeCancelled = 0
+      let observations = 0
+      const location = await transportLocation(
+        scope,
+        'local',
+        {
+          send: async (input) => {
+            sends.push(input)
+            if (sends.length === 1)
+              return new Response(
+                '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"rate limit exceeded"}}',
+                {
+                  status: 429,
+                  headers: {
+                    'retry-after': '3600',
+                    'content-type': 'application/json',
+                  },
+                },
+              )
+            if (sends.length !== 2) return terminalResponse()
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode('data: {}\n\n'))
+                },
+                cancel() {
+                  probeCancelled++
+                },
+              }),
+              { headers: { 'content-type': 'text/event-stream' } },
+            )
           },
-        })
-        expect(await response.text()).toContain('transport reached')
-        expect(sends).toHaveLength(1)
-        const sent = sends[0]
-        const prepared = location.prepared.mock.calls[0]?.[0]
-        if (!sent || !prepared) throw new Error('missing override send')
-        expectFinalizedSend(sent, prepared)
-        expect(sent.auth.access).toBe(
-          domain === 'local' ? 'access-refresh-0' : 'vault-access',
-        )
-        expect(sent.envelope.project).toBe(
-          domain === 'local' ? 'project-0' : 'vault-project',
-        )
-        expect(Object.keys(sent.auth)).toEqual(['access'])
-        expect(networkCalls).toHaveLength(0)
-        expect(observed).toHaveLength(0)
-        if (domain === 'vault') {
-          expect(location.admitted).toEqual([
-            { signal: sent.signal, credentialId: 'credential-0' },
-          ])
+          observeRawSenderSignal: () => {
+            observations++
+            return undefined
+          },
+        },
+        2,
+      )
+      try {
+        expect(location.runtime.config.config.cache_warmup_on_switch).toBe(true)
+        const context = {
+          signal: scope.controller().signal,
+          send: async () => terminalResponse(),
         }
+        expect(
+          await (await location.serving.execute(transportJob, context)).text(),
+        ).toContain('transport reached')
+        expect(sends).toHaveLength(3)
+        const probe = sends[1]
+        const main = sends[2]
+        const prepared = location.prepared.mock.calls[1]?.[0]
+        if (!probe || !main || !prepared)
+          throw new Error('missing switched sends')
+        expectFinalizedSend(probe, prepared)
+        expectFinalizedSend(main, prepared)
+        expect(probe.auth.access).not.toBe(sends[0]?.auth.access)
+        expect(probe.auth.access).toBe(main.auth.access)
+        expect(probe.envelope.project).not.toBe(sends[0]?.envelope.project)
+        expect(probe.envelope.project).toBe(main.envelope.project)
+        expect(probe.signal).toBe(main.signal)
+        expect(probeCancelled).toBe(1)
+        expect(networkCalls).toHaveLength(0)
+        expect(observations).toBe(0)
       } finally {
         await location.dispose()
       }
-    })
+    },
+  )
 
-    it(`cancels an in-flight ${domain} override through the real request signal`, async () => {
-      const reached = Promise.withResolvers<AbortSignal>()
+  ownedIt(
+    'preserves finalized bytes, signal and idle timeout without an override',
+    async (scope) => {
       const observed: AbortSignal[] = []
-      const location = await transportLocation(domain, {
-        send: ({ signal }) =>
-          new Promise<Response>((_resolve, reject) => {
-            reached.resolve(signal)
-            signal.addEventListener('abort', () => reject(signal.reason), {
-              once: true,
-            })
-          }),
+      const location = await transportLocation(scope, 'local', {
         observeRawSenderSignal: (signal) => {
+          expect(networkCalls).toHaveLength(0)
           observed.push(signal)
           return undefined
         },
       })
       try {
-        const controller = new AbortController()
-        const pending = location.serving.execute(transportJob, {
+        const controller = scope.controller()
+        const response = await location.serving.execute(transportJob, {
           signal: controller.signal,
           send: async () => {
             throw new Error('unused')
           },
         })
-        const failure = pending.catch((error: unknown) => error)
-        const physical = await reached.promise
-        const reason = new DOMException(
-          'host cancelled transport',
-          'AbortError',
+        expect(await response.text()).toContain('transport reached')
+        expect(networkCalls).toHaveLength(1)
+        const call = networkCalls[0]
+        const prepared = location.prepared.mock.calls[0]?.[0]
+        if (!call || !prepared) throw new Error('missing physical send')
+        expect(call.url).toBe(prepared.resolvedUrl)
+        expect(call.url).toBe(
+          'https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
         )
-        controller.abort(reason)
-        expect(physical.aborted).toBe(true)
-        expect(physical.reason).toBe(reason)
-        expect(await failure).toBe(reason)
-        expect(networkCalls).toHaveLength(0)
-        expect(observed).toHaveLength(0)
+        expect(call.init?.body).toBe(prepared.body)
+        expect([...new Headers(call.init?.headers)]).toEqual([
+          ...new Headers(prepared.headers),
+        ])
+        expect(new Headers(call.init?.headers).get('authorization')).toBe(
+          'Bearer access-refresh-0',
+        )
+        expect(JSON.parse(String(call.init?.body)).project).toBe('project-0')
+        expect(call.options?.signal).toBe(call.init?.signal)
+        expect(observed).toHaveLength(1)
+        expect(call.options?.signal).toBe(observed[0])
+        expect(call.options?.idleTimeoutMs).toBe(300_000)
       } finally {
         await location.dispose()
       }
-    })
+    },
+  )
+
+  for (const domain of ['local', 'vault'] as const) {
+    ownedIt(
+      `reaches the ${domain} send override with the finalized physical attempt`,
+      async (scope) => {
+        const sends: GaSendInput[] = []
+        const observed: AbortSignal[] = []
+        const location = await transportLocation(scope, domain, {
+          send: async (input) => {
+            sends.push(input)
+            return terminalResponse()
+          },
+          observeRawSenderSignal: (signal) => {
+            observed.push(signal)
+            return undefined
+          },
+        })
+        try {
+          const response = await location.serving.execute(transportJob, {
+            signal: scope.controller().signal,
+            send: async () => {
+              throw new Error('unused')
+            },
+          })
+          expect(await response.text()).toContain('transport reached')
+          expect(sends).toHaveLength(1)
+          const sent = sends[0]
+          const prepared = location.prepared.mock.calls[0]?.[0]
+          if (!sent || !prepared) throw new Error('missing override send')
+          expectFinalizedSend(sent, prepared)
+          expect(sent.auth.access).toBe(
+            domain === 'local' ? 'access-refresh-0' : 'vault-access',
+          )
+          expect(sent.envelope.project).toBe(
+            domain === 'local' ? 'project-0' : 'vault-project',
+          )
+          expect(Object.keys(sent.auth)).toEqual(['access'])
+          expect(networkCalls).toHaveLength(0)
+          expect(observed).toHaveLength(0)
+          if (domain === 'vault') {
+            expect(location.admitted).toEqual([
+              { signal: sent.signal, credentialId: 'credential-0' },
+            ])
+          }
+        } finally {
+          await location.dispose()
+        }
+      },
+    )
+
+    ownedIt(
+      `cancels an in-flight ${domain} override through the real request signal`,
+      async (scope) => {
+        const reached = Promise.withResolvers<AbortSignal>()
+        const observed: AbortSignal[] = []
+        const location = await transportLocation(scope, domain, {
+          send: ({ signal }) =>
+            new Promise<Response>((_resolve, reject) => {
+              reached.resolve(signal)
+              signal.addEventListener('abort', () => reject(signal.reason), {
+                once: true,
+              })
+            }),
+          observeRawSenderSignal: (signal) => {
+            observed.push(signal)
+            return undefined
+          },
+        })
+        try {
+          const controller = scope.controller()
+          const pending = location.serving.execute(transportJob, {
+            signal: controller.signal,
+            send: async () => {
+              throw new Error('unused')
+            },
+          })
+          const failure = pending.catch((error: unknown) => error)
+          const physical = await scope.wait(reached.promise)
+          const reason = new DOMException(
+            'host cancelled transport',
+            'AbortError',
+          )
+          controller.abort(reason)
+          expect(physical.aborted).toBe(true)
+          expect(physical.reason).toBe(reason)
+          expect(await failure).toBe(reason)
+          expect(networkCalls).toHaveLength(0)
+          expect(observed).toHaveLength(0)
+        } finally {
+          await location.dispose()
+        }
+      },
+    )
   }
 })
 
