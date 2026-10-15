@@ -69,3 +69,64 @@ it('public ps inspection detects an owned synthetic opencode script process, wit
     await exited
   }
 })
+
+const runtimeHosts = [
+  'node --require /tmp/preload.cjs /tmp/opencode',
+  'node -r /tmp/preload.cjs /tmp/opencode',
+  'node --import /tmp/preload.mjs /tmp/opencode',
+  'node --loader /tmp/loader.mjs /tmp/opencode',
+  'node --experimental-loader /tmp/loader.mjs /tmp/opencode',
+  'node --conditions custom /tmp/opencode',
+  'node -C custom /tmp/opencode',
+  'node --env-file /tmp/env /tmp/opencode',
+  'node --title owned-control /tmp/opencode',
+  'node --require=/tmp/preload.cjs /tmp/opencode',
+  'node --import=/tmp/preload.mjs /tmp/opencode',
+  'node -- /tmp/opencode',
+  'node "/tmp/owned host/opencode"',
+  'bun --preload /tmp/preload.js /tmp/opencode',
+  'bun --cwd /tmp/owned /tmp/opencode',
+  'bun --config /tmp/bunfig.toml /tmp/opencode',
+  'bun -c /tmp/bunfig.toml /tmp/opencode',
+  'bun --tsconfig-override /tmp/tsconfig.json /tmp/opencode',
+  'bun --define KEY:1 /tmp/opencode',
+  'bun -d KEY:1 /tmp/opencode',
+  'bun --main-fields main,module /tmp/opencode',
+  'bun -l .js:js /tmp/opencode',
+  'bun run --preload /tmp/preload.js /tmp/opencode',
+]
+
+it.each(
+  runtimeHosts,
+)('public fence recognizes a host after supported runtime options: %s', async (command) => {
+  const actual = await createProcessFence(
+    {
+      run: async () => ({
+        exitCode: 0,
+        stderr: '',
+        stdout: `PID COMMAND\n500001 ${command}\n`,
+      }),
+    },
+    { platform: 'linux' },
+  ).listRunningHosts()
+  expect(actual).toEqual([{ pid: 500001, command }])
+})
+
+it.each([
+  'node --require /tmp/opencode /tmp/helper.js',
+  'bun --preload /tmp/opencode /tmp/helper.js',
+  'node --eval /tmp/opencode',
+  'bun --eval /tmp/opencode',
+])('public fence ignores a preload or inline-code argument that merely names a host: %s', async (command) => {
+  const actual = await createProcessFence(
+    {
+      run: async () => ({
+        exitCode: 0,
+        stderr: '',
+        stdout: `PID COMMAND\n500001 ${command}\n`,
+      }),
+    },
+    { platform: 'linux' },
+  ).listRunningHosts()
+  expect(actual).toEqual([])
+})

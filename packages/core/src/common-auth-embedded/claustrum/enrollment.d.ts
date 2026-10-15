@@ -103,7 +103,12 @@ export interface EnrollmentAncestorOptions {
  */
 export declare function refuseWritableAncestor(parent: string, options?: EnrollmentAncestorOptions): Promise<void>;
 export declare function readClaustrumEnrollmentStatus(paths: ClaustrumEnrollmentPaths, proposedName: string): Promise<ClaustrumEnrollmentStatus>;
-/** Resolve the host's account mode from its enrollment files without writing. */
+/**
+ * Resolve the host's account mode from its enrollment files. It never changes
+ * their contents or the host's mode. On Windows, reading them may create a
+ * missing private state folder and tighten an enrollment file's permissions to
+ * owner-only, as every private-file read there does.
+ */
 export declare function enrollmentAuthority(paths: ClaustrumEnrollmentPaths, proposedName: string): Promise<'vault' | 'local' | 'unreadable'>;
 /**
  * Read fresh bearer material for one scoped operation; never publish it.

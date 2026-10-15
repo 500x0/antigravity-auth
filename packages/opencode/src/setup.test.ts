@@ -302,7 +302,11 @@ describe('real setup CLI entry', () => {
 })
 
 describe('setup plugin callbacks', () => {
-  const context = { opencodeGeneration: '1', mode: 'local' } as const
+  const context = {
+    hosts: ['opencode', 'pi'],
+    opencodeGeneration: '1',
+    mode: 'local',
+  } as const
   const originalEnv = { ...process.env }
   afterEach(() => {
     for (const key of Object.keys(process.env)) {

@@ -170,6 +170,7 @@ export async function runSetup(plugin, argv = [], io = {}) {
         const context = {
             opencodeGeneration: generation,
             mode,
+            hosts: Object.freeze([...hosts]),
         };
         for (const host of hosts) {
             await stopped();

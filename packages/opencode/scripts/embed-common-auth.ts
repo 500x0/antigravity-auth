@@ -17,8 +17,8 @@ export const producerVersion = '0.17.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: '802ada9d0e56b95fef301dc148c3fe06c12c9b033146e8a6beb9a27ed566f094',
-  sri: 'sha512-4kFE/0imSWzN1LwduFY/fK2i7YBt7srHgiSdR7bbmbkiQLxXyP56EB6Srny7lrnL100yaPPQ5UCmnAbC6NR4Hg==',
+  sha256: 'd635d2136348796a723841c0b91c5a2ba9ad85bdc006b7bfdeb47109d068db90',
+  sri: 'sha512-JBKLYidnoDiteCS8KPAMxpkLf9KWr5potu9nCBExmQJdl8vUWY564Tlz93l0MAOw0ISW2A1Yr1auSKuHc9ymUQ==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -213,13 +213,13 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'claustrum/enrollment.d.ts',
-    7528,
-    '5b2f01bd0a6dd5f92a8450c43619717f08d1ca9aea0ed20f3f7071cc94c1c1bf',
+    7743,
+    '7503e56a09f94e77a94a7ae15fd616f149ec9f675ec7c79bdea4a014ca014143',
   ],
   [
     'claustrum/enrollment.js',
-    33305,
-    'e03e33e3f43daf5563d7e2138450c6a5347017a82627c5b8e1d1998b4ce4c42f',
+    33520,
+    'eeac604495c093503007478ab803c05b6e0bce8bf281f8bf9bbfee44c8ff85f1',
   ],
   [
     'claustrum/errors.d.ts',
@@ -713,8 +713,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/command.js',
-    9583,
-    '700e62a7b12e873d4469b25104a23082cd7c6b333d91eeb057ecff9170208551',
+    9629,
+    'fda4c5dfb50a6b13da2573a45de554b1ac0c4ed248fd6421210b9b032188ca58',
   ],
   [
     'setup/config-write.js',
@@ -758,8 +758,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/process-fence.js',
-    8905,
-    '8b9b3a1dc35749c97047a28a464535e42429cc5344bb741bf0996c509135e0e2',
+    10250,
+    'e18657c6b4a060560d57813104a1b4cb6e5e3f7cdf3e6652bbf40e644f90e853',
   ],
   [
     'setup/prompts.js',
@@ -778,8 +778,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/types.d.ts',
-    3807,
-    '08a793acee9c49b6bd8fc1e15f734dd28534fbeef5670231089de901caa81271',
+    4066,
+    'b48e1d90241e1a1e66adb49ff9f77eb99d783cc01d9180855c0bca0db853cf3c',
   ],
   [
     'store/attribution.d.ts',

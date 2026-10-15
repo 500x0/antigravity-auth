@@ -161,7 +161,7 @@ test('embed.inventory', async () => {
     expect(hash(data)).toBe(String(digest))
     total += data.length
   }
-  expect(total).toBe(930180)
+  expect(total).toBe(932260)
   for (const [property, value, message] of [
     ['name', 'wrong', 'identity'],
     ['version', '0.9.4', 'version'],
@@ -243,7 +243,7 @@ test('embed.attribution', async () => {
   expect(manifest.sri).toBe(publication.sri)
   expect(manifest.publicRoots).toEqual(publication.publicRoots)
   expect(manifest.canonicalFiles).toBe(176)
-  expect(manifest.canonicalBytes).toBe(930180)
+  expect(manifest.canonicalBytes).toBe(932260)
   expect(manifest.generator.version).toBe(3)
   expect(manifest.files).toEqual(
     publication.files.map(([path, bytes, digest]) => ({

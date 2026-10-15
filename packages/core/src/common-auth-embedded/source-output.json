@@ -38,14 +38,14 @@
     }
   },
   "input": "tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz",
-  "tarballSha256": "802ada9d0e56b95fef301dc148c3fe06c12c9b033146e8a6beb9a27ed566f094",
-  "sri": "sha512-4kFE/0imSWzN1LwduFY/fK2i7YBt7srHgiSdR7bbmbkiQLxXyP56EB6Srny7lrnL100yaPPQ5UCmnAbC6NR4Hg==",
+  "tarballSha256": "d635d2136348796a723841c0b91c5a2ba9ad85bdc006b7bfdeb47109d068db90",
+  "sri": "sha512-JBKLYidnoDiteCS8KPAMxpkLf9KWr5potu9nCBExmQJdl8vUWY564Tlz93l0MAOw0ISW2A1Yr1auSKuHc9ymUQ==",
   "canonicalFiles": 133,
-  "canonicalBytes": 751105,
+  "canonicalBytes": 751535,
   "generator": {
     "path": "packages/opencode/scripts/embed-common-auth.ts",
     "version": 3,
-    "sha256": "991caf903ea3e0ef2b357d387ec2dbf20cd4dada7eb8e32fab5dd1396150cbd4"
+    "sha256": "c5eda1ad9f06c4d5803e8c829d2f7ad3a640ccc68903236145673534ac2a7d57"
   },
   "files": [
     {
@@ -243,17 +243,17 @@
     {
       "source": "package/dist/claustrum/enrollment.d.ts",
       "output": "claustrum/enrollment.d.ts",
-      "bytes": 7528,
-      "sourceSha256": "5b2f01bd0a6dd5f92a8450c43619717f08d1ca9aea0ed20f3f7071cc94c1c1bf",
-      "outputSha256": "5b2f01bd0a6dd5f92a8450c43619717f08d1ca9aea0ed20f3f7071cc94c1c1bf",
+      "bytes": 7743,
+      "sourceSha256": "7503e56a09f94e77a94a7ae15fd616f149ec9f675ec7c79bdea4a014ca014143",
+      "outputSha256": "7503e56a09f94e77a94a7ae15fd616f149ec9f675ec7c79bdea4a014ca014143",
       "transform": "verbatim"
     },
     {
       "source": "package/dist/claustrum/enrollment.js",
       "output": "claustrum/enrollment.js",
-      "bytes": 33305,
-      "sourceSha256": "e03e33e3f43daf5563d7e2138450c6a5347017a82627c5b8e1d1998b4ce4c42f",
-      "outputSha256": "e03e33e3f43daf5563d7e2138450c6a5347017a82627c5b8e1d1998b4ce4c42f",
+      "bytes": 33520,
+      "sourceSha256": "eeac604495c093503007478ab803c05b6e0bce8bf281f8bf9bbfee44c8ff85f1",
+      "outputSha256": "eeac604495c093503007478ab803c05b6e0bce8bf281f8bf9bbfee44c8ff85f1",
       "transform": "verbatim"
     },
     {

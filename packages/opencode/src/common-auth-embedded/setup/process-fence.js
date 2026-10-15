@@ -15,13 +15,59 @@ function executableName(argument) {
         .toLowerCase()
         .replace(/\.(?:exe|cmd|bat|m?js)$/, '');
 }
+// Node and Bun options whose value is the next argument, so that value is not
+// mistaken for the script (`node --require ./preload.cjs …/opencode`).
+const VALUE_OPTIONS = new Set([
+    '-r',
+    '--require',
+    '--import',
+    '--loader',
+    '--experimental-loader',
+    '-C',
+    '--conditions',
+    '--env-file',
+    '--title',
+    '--input-type',
+    '--preload',
+    '--cwd',
+    '-c',
+    '--config',
+    '--tsconfig-override',
+    '-d',
+    '--define',
+    '-l',
+    '--main-fields',
+]);
+// Options that run inline code instead of a script file.
+const INLINE_OPTIONS = new Set(['-e', '--eval', '-p', '--print']);
+/** The script a Node or Bun runtime was started with, if any. */
+function runtimeScript(runtime, args) {
+    for (let index = 0; index < args.length; index++) {
+        const argument = args[index] ?? '';
+        if (argument === '--')
+            return args[index + 1];
+        if (INLINE_OPTIONS.has(argument))
+            return undefined;
+        if (argument.startsWith('-')) {
+            if (!argument.includes('=') && VALUE_OPTIONS.has(argument))
+                index++;
+            continue;
+        }
+        // `bun run <script>` names the script after the subcommand.
+        if (runtime === 'bun' && argument === 'run')
+            continue;
+        return argument;
+    }
+    return undefined;
+}
 /**
  * Names the host a process runs, judged by what it executes: the program
  * itself, or the script a Node or Bun runtime was started with. Any other
  * argument is ignored, so a shell whose command line merely mentions an
  * `opencode` folder (`bash -c "cd …/opencode && …"`) is not a running host.
- * `ps` prints arguments unquoted, so a program path containing spaces is not
- * recognized on macOS or Linux; installed OpenCode and Pi paths contain none.
+ * `ps` prints arguments unquoted, so on macOS and Linux a program or script
+ * path containing spaces is not recognized; npm and Bun install OpenCode and Pi
+ * under paths without spaces.
  */
 function hostName(command) {
     const [program, ...rest] = commandArguments(command);
@@ -32,7 +78,7 @@ function hostName(command) {
         return name;
     if (!RUNTIMES.has(name))
         return null;
-    const script = rest.find((argument) => !argument.startsWith('-'));
+    const script = runtimeScript(name, rest);
     if (script === undefined)
         return null;
     const scriptName = executableName(script);
