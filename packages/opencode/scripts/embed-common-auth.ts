@@ -17,8 +17,8 @@ export const producerVersion = '0.17.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: 'd635d2136348796a723841c0b91c5a2ba9ad85bdc006b7bfdeb47109d068db90',
-  sri: 'sha512-JBKLYidnoDiteCS8KPAMxpkLf9KWr5potu9nCBExmQJdl8vUWY564Tlz93l0MAOw0ISW2A1Yr1auSKuHc9ymUQ==',
+  sha256: '989d981064154136463a1f270063676b748f2f46daa5974a9f621e620e56c0af',
+  sri: 'sha512-B4GdG7RhBYHWHTrlgGv1QBQqmyWOM8yCzp31GmFw6iWQ6zzAnRdC/J4v+I349NbsyhEEXT6hcka8Jv6bAhBkJw==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -558,8 +558,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'quota/map.js',
-    5430,
-    '3f63b7b004d21de4c9f904a064ddc2bb7633826f6065d32e418407226d97087d',
+    5669,
+    '95339af4c80684b4e462f5ba32affeaa5f8b5885db599dc5e8ac1ffd1890d729',
   ],
   [
     'quota/merge.d.ts',
@@ -713,8 +713,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/command.js',
-    9629,
-    'fda4c5dfb50a6b13da2573a45de554b1ac0c4ed248fd6421210b9b032188ca58',
+    9677,
+    'cd58ba140c5ebe85be0916a6ad9d1ca602e1d931afce0b0e411f06cfbb4b15f1',
   ],
   [
     'setup/config-write.js',
@@ -778,8 +778,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/types.d.ts',
-    4066,
-    'b48e1d90241e1a1e66adb49ff9f77eb99d783cc01d9180855c0bca0db853cf3c',
+    4344,
+    '2934541048381fc8595de7db4a9a6c20e1153605afbf20dab8bf6ff2ac81b857',
   ],
   [
     'store/attribution.d.ts',

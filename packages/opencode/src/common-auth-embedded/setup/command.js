@@ -171,6 +171,7 @@ export async function runSetup(plugin, argv = [], io = {}) {
             opencodeGeneration: generation,
             mode,
             hosts: Object.freeze([...hosts]),
+            piAgentDir: detection.pi.directory,
         };
         for (const host of hosts) {
             await stopped();

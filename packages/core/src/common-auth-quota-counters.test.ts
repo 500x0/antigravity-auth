@@ -149,6 +149,21 @@ async function poolWith(rawQuota: unknown) {
 }
 
 describe('genuine public quota counters', () => {
+  it('keeps valid quota-map reference identity with or without counters', () => {
+    for (const map of [
+      { limits, budget, ...antigravityQuota },
+      {
+        limits,
+        budget,
+        ...antigravityQuota,
+        counters: { requests: { value: 2, checkedAt: 100 } },
+      },
+    ]) {
+      expect(quota.isQuotaMap(map)).toBe(true)
+      expect(quota.decodeQuotaMap(map)).toBe(map)
+    }
+  })
+
   it('decodes counters independently and merges by each counter timestamp, not by sum or observation time', () => {
     expect(
       quota.decodeQuotaMap({

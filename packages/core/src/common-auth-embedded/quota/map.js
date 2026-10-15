@@ -104,6 +104,11 @@ export function readQuotaCounters(value) {
 }
 /** Decode persisted quota, dropping malformed counters but not limit evidence. */
 export function decodeQuotaMap(value) {
+    // A valid map is returned as the same object, so stored quota keeps the
+    // identity it had before counters existed; only a map with a malformed
+    // counter is copied without it.
+    if (isQuotaMap(value))
+        return value;
     if (!isRecord(value))
         return undefined;
     const { counters: rawCounters, ...rest } = value;
