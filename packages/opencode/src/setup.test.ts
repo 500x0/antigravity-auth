@@ -13,7 +13,16 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+  win32,
+} from 'node:path'
 import {
   loadCommonAuthClaustrum,
   loadCommonAuthPiSlot,
@@ -21,8 +30,10 @@ import {
 
 import { createDefaultCliDependencies, runCli } from './cli.ts'
 import {
+  createProcessFence,
   runSetup,
   type SetupCallbackContext,
+  type SetupIO,
 } from './common-auth-embedded/setup/index.js'
 import { createSetupPlugin, persistPiSetupLogin } from './setup.ts'
 
@@ -101,6 +112,168 @@ function fakeHostCommands(p: ReturnType<typeof profile>) {
     )
   }
   p.env.PATH = `${bin}${delimiter}${process.platform === 'win32' ? process.env.PATH : '/usr/bin:/bin'}`
+}
+
+function windowsInspectionFixture() {
+  const p = profile()
+  Object.assign(process.env, p.env)
+  const authPath = join(p.env.XDG_DATA_HOME, 'opencode', 'auth.json')
+  mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 })
+  writeFileSync(authPath, '{invalid native auth', { mode: 0o600 })
+  const startupPath = join(
+    p.root,
+    'powershell-startup',
+    'StartupProfileData-NonInteractive',
+  )
+  const calls: string[] = []
+  const firstPid = process.pid + 10_000
+  const env = {
+    ...p.env,
+    USERPROFILE: p.home,
+    LOCALAPPDATA: join(p.root, 'localappdata'),
+    APPDATA: join(p.root, 'appdata'),
+    TEMP: join(p.root, 'temp'),
+    TMP: join(p.root, 'temp'),
+    PATH: join(p.root, 'absent-bin'),
+  }
+  // Translate Windows-style file queries into this test's temporary directory.
+  // Simulated command results check which inspection the CLI chooses, not real
+  // Windows process discovery or access permissions.
+  const local = (path: string) => {
+    const resolved = resolve(
+      p.root,
+      process.platform === 'win32' ? path : path.replaceAll('\\', '/'),
+    )
+    const inside = relative(p.root, resolved)
+    return inside === '' ||
+      (inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside))
+      ? resolved
+      : undefined
+  }
+  const metadata = (path: string) => {
+    const resolved = local(path)
+    return resolved && existsSync(resolved) ? statSync(resolved) : undefined
+  }
+  let output = ''
+  let errors = ''
+  const deps = createDefaultCliDependencies()
+  deps.stdout = {
+    write: (value) => {
+      output += value
+    },
+  }
+  deps.stderr = {
+    write: (value) => {
+      errors += value
+    },
+  }
+  deps.performLogin = mock(async () => {
+    throw new Error('Preview must not start OAuth')
+  })
+  deps.accountStore.migrate = mock(async () => {
+    throw new Error('Preview must not migrate accounts')
+  })
+  const io: SetupIO = {
+    platform: 'win32',
+    home: p.home,
+    cwd: p.root,
+    env,
+    terminal: {
+      input: {
+        isTTY: false,
+        setRawMode() {},
+        resume() {},
+        pause() {},
+        on() {},
+        removeListener() {},
+      },
+      output: {
+        write: (value) => {
+          output += value
+        },
+      },
+    },
+    fs: {
+      exists: (path) => Boolean(metadata(path)),
+      isDirectory: (path) => metadata(path)?.isDirectory() ?? false,
+      isFile: (path) => metadata(path)?.isFile() ?? false,
+      isExecutable: (path) =>
+        Boolean(metadata(path)?.isFile() && metadata(path)!.mode & 0o111),
+      readText: (path) => {
+        const resolved = local(path)
+        if (!resolved) throw new Error('Setup read outside its owned fixture')
+        return readFileSync(resolved, 'utf8')
+      },
+      realpath: (path) => {
+        const resolved = local(path)
+        if (!resolved)
+          throw new Error('Setup resolved outside its owned fixture')
+        return win32.normalize(realpathSync(resolved))
+      },
+    },
+    runner: {
+      run: async (file) => {
+        calls.push(file)
+        if (file === 'tasklist.exe')
+          return {
+            exitCode: 0,
+            stdout: `"node.exe","${firstPid}","Console"\r\n"bun.exe","${firstPid + 1}","Console"\r\n`,
+            stderr: '',
+          }
+        if (file === 'powershell.exe') {
+          // Simulate PowerShell creating a 64-byte startup file. The dry-run test
+          // compares every file below the temporary root, so this write must fail it.
+          mkdirSync(dirname(startupPath), { recursive: true, mode: 0o700 })
+          writeFileSync(startupPath, Buffer.alloc(64, 0x53), { mode: 0o600 })
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              {
+                ProcessId: firstPid,
+                CommandLine: 'node "C:\\owned-preview\\opencode"',
+              },
+              {
+                ProcessId: firstPid + 1,
+                CommandLine: 'bun "C:\\owned-preview\\unrelated.js"',
+              },
+            ]),
+            stderr: '',
+          }
+        }
+        throw new Error(`Unexpected synthetic command: ${file}`)
+      },
+    },
+  }
+  deps.setupIO = io
+  const execute = async (dryRun: boolean) => {
+    const cwd = process.cwd()
+    try {
+      process.chdir(p.root)
+      return await runCli(
+        [
+          'setup',
+          '--yes',
+          '--opencode=1',
+          '--no-claustrum',
+          ...(dryRun ? ['--dry-run'] : []),
+        ],
+        deps,
+      )
+    } finally {
+      process.chdir(cwd)
+    }
+  }
+  return {
+    p,
+    env,
+    io,
+    deps,
+    calls,
+    startupPath,
+    execute,
+    output: () => output,
+    errors: () => errors,
+  }
 }
 
 function cli(p: ReturnType<typeof profile>, ...argv: string[]) {
@@ -373,6 +546,41 @@ describe('setup plugin callbacks', () => {
       if (!(key in originalEnv)) delete process.env[key]
     }
     Object.assign(process.env, originalEnv)
+  })
+
+  it('default Windows dry-run previews runtimes without PowerShell startup writes (synthetic runner)', async () => {
+    const f = windowsInspectionFixture()
+    const before = snapshot(f.p.root)
+    expect(await f.execute(true)).toBe(0)
+    expect(snapshot(f.p.root)).toEqual(before)
+    expect(f.calls).toEqual(['tasklist.exe'])
+    expect(f.output()).toContain('Planned Antigravity for opencode (local)')
+    expect(f.output()).toContain(
+      'Node or Bun programs are running; a real run checks whether any of them is OpenCode or Pi.',
+    )
+    expect(f.deps.performLogin).not.toHaveBeenCalled()
+    expect(f.deps.accountStore.migrate).not.toHaveBeenCalled()
+    const fence = createProcessFence(f.io.runner, { platform: 'win32' })
+    expect(await fence.previewRunningHosts?.(f.env)).toEqual({
+      hosts: [],
+      uncheckedRuntimes: 2,
+    })
+    expect(f.calls).toEqual(['tasklist.exe', 'tasklist.exe'])
+    expect(snapshot(f.p.root)).toEqual(before)
+  })
+
+  it('real Windows setup still inspects runtime command lines and refuses a running host before callbacks (synthetic runner)', async () => {
+    const f = windowsInspectionFixture()
+    expect(await f.execute(false)).toBe(1)
+    expect(f.calls).toEqual(['tasklist.exe', 'powershell.exe'])
+    expect(f.errors()).toContain(
+      'Please quit all OpenCode, LiteCode, and Pi processes before running setup.',
+    )
+    expect(f.deps.performLogin).not.toHaveBeenCalled()
+    expect(f.deps.accountStore.migrate).not.toHaveBeenCalled()
+    expect(readFileSync(f.startupPath)).toEqual(Buffer.alloc(64, 0x53))
+    expect(existsSync(join(f.p.config, 'opencode.json'))).toBe(false)
+    expect(existsSync(join(f.p.config, 'opencode.jsonc'))).toBe(false)
   })
 
   it.each([
