@@ -49,6 +49,8 @@ export type StoredCredential = (OAuthCredential & {
 /** Quota codec supplied by `/quota`: the store never interprets the map itself. */
 export interface QuotaCodec {
     validate(value: unknown): boolean;
+    /** Normalize persisted quota before validation, when the codec supports it. */
+    decode?(value: unknown): unknown;
     merge(stored: unknown | undefined, observation: unknown): unknown;
 }
 /**

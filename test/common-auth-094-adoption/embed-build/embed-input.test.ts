@@ -23,7 +23,7 @@ import {
   readVerifiedArchive,
   validatePublication,
 } from '../../../packages/opencode/scripts/embed-common-auth.ts'
-import publication from '../../common-auth-0113-producer/publication.json'
+import publication from '../../common-auth-0170-producer/candidate.json'
 import fixtures from './archive-fixtures.json'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -161,7 +161,7 @@ test('embed.inventory', async () => {
     expect(hash(data)).toBe(String(digest))
     total += data.length
   }
-  expect(total).toBe(924027)
+  expect(total).toBe(930180)
   for (const [property, value, message] of [
     ['name', 'wrong', 'identity'],
     ['version', '0.9.4', 'version'],
@@ -237,13 +237,13 @@ test('embed.attribution', async () => {
     await readFile(join(root, outputPath, 'source-output.json'), 'utf8'),
   )
   expect(manifest.package).toBe('@cortexkit/common-auth')
-  expect(manifest.version).toBe('0.16.0')
-  expect(manifest.artifactStatus).toBe('released')
+  expect(manifest.version).toBe('0.17.0')
+  expect(manifest.artifactStatus).toBe('candidate')
   expect(manifest.tarballSha256).toBe(publication.sha256)
   expect(manifest.sri).toBe(publication.sri)
   expect(manifest.publicRoots).toEqual(publication.publicRoots)
   expect(manifest.canonicalFiles).toBe(176)
-  expect(manifest.canonicalBytes).toBe(924027)
+  expect(manifest.canonicalBytes).toBe(930180)
   expect(manifest.generator.version).toBe(3)
   expect(manifest.files).toEqual(
     publication.files.map(([path, bytes, digest]) => ({
@@ -302,7 +302,7 @@ test('embed.clean_input', async () => {
   expect(attr.length).toBe(protectedPaths.length * 4)
   for (const line of attr) expect(line.endsWith(': unset')).toBe(true)
   expect(git(target, 'check-ignore', '-v', '--', inputPath)).toContain(
-    `!/tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`,
+    `!/tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`,
   )
   await put(
     target,
@@ -344,7 +344,7 @@ test('embed.clean_input', async () => {
   const dockerignore = await readFile(join(target, '.dockerignore'), 'utf8')
   expect(
     dockerignore.indexOf(
-      '!tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz',
+      '!tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz',
     ),
   ).toBeGreaterThan(dockerignore.indexOf('**/*.tgz'))
   expect(dockerignore).not.toMatch(/^!.*\*.*tgz/m)
@@ -378,9 +378,9 @@ test('embed.clean_input', async () => {
     if (container) command(target, 'docker', ['rm', container])
     if (built) command(target, 'docker', ['image', 'rm', tag])
   }
-  expect(await names(exported)).toEqual(['cortexkit-common-auth-0.16.0.tgz'])
+  expect(await names(exported)).toEqual(['cortexkit-common-auth-0.17.0.tgz'])
   expect(
-    hash(await readFile(join(exported, 'cortexkit-common-auth-0.16.0.tgz'))),
+    hash(await readFile(join(exported, 'cortexkit-common-auth-0.17.0.tgz'))),
   ).toBe(publication.sha256)
 }, 120000)
 

@@ -2919,14 +2919,14 @@ describe('loadAccountManagerFromRepository', () => {
 // in the core package, loaded with `loadCommonAuthStoreModules`, in a private
 // config directory. Before loading them, the tests compare each module file's
 // size and SHA-256 with the provenance record in `source-output.json` for the
-// published archive at `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`.
+// pinned candidate archive at `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`.
 // A mismatch fails the tests.
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.16.0',
+  version: '0.17.0',
   tarballSha256:
-    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
+    '802ada9d0e56b95fef301dc148c3fe06c12c9b033146e8a6beb9a27ed566f094',
 } as const
 
 async function embeddedFilesBelow(
@@ -2946,8 +2946,8 @@ let genuine: Promise<CommonAuthStoreModules> | undefined
 
 /**
  * Loads the embedded store and fs modules only after each file's size and
- * SHA-256 match the expected values in `source-output.json`, the release
- * record for `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`.
+ * SHA-256 match the per-file archive inventory in `source-output.json`
+ * for `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -2971,7 +2971,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {

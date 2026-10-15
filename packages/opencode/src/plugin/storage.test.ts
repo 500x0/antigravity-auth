@@ -813,25 +813,25 @@ describe('openAccountStore', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Genuine released store
+// Genuine public store
 //
 // These run the adapters against common-auth's genuine public `./store` and
 // `./fs` entries in disposable directories. They migrate real account files,
 // check that the completed migration owns those paths, and retire that
-// migration during rollback. The entries are the released
+// migration during rollback. The entries are the pinned candidate's
 // common-auth copy embedded in the core package, loaded through its typed
 // `loadCommonAuthStoreModules`. Before loading, the embedding receipt
-// (`source-output.json`) must name the published archive at
-// `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`, and every
+// (`source-output.json`) must name the pinned candidate archive at
+// `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`, and every
 // store and fs file must match the size and SHA-256 it records, with no
 // unrecorded file; anything else fails these tests instead of skipping them.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.16.0',
+  version: '0.17.0',
   tarballSha256:
-    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
+    '802ada9d0e56b95fef301dc148c3fe06c12c9b033146e8a6beb9a27ed566f094',
 } as const
 
 async function embeddedFilesBelow(
@@ -849,7 +849,7 @@ async function embeddedFilesBelow(
 
 let genuine: Promise<CommonAuthStoreModules> | undefined
 
-/** The released store and fs entries, after their embedding receipt checks out. */
+/** Load the public store/fs files only after their recorded sizes and SHA-256 hashes match. */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
     const root = dirname(
@@ -872,12 +872,12 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
       throw new Error(
-        `the embedded common-auth receipt is not the released ${RELEASED_COMMON_AUTH.version}`,
+        `the embedded common-auth receipt is not the pinned candidate ${RELEASED_COMMON_AUTH.version}`,
       )
     }
     const recorded = receipt.files.filter((file) =>
@@ -908,7 +908,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     .then((modules) => managedStoreModules(owner, modules))
 }
 
-describe('account store over the genuine released store', () => {
+describe('account store over the genuine public store', () => {
   let configDir = ''
   let previousConfigDir: string | undefined
   const opened: AccountRepository[] = []

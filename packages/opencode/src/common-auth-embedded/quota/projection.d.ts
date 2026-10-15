@@ -1,4 +1,4 @@
-import { type QuotaMap } from './map.js';
+import { type QuotaCounter, type QuotaMap } from './map.js';
 export interface ProjectedLimit {
     scope: string;
     label: string;
@@ -30,6 +30,7 @@ export interface ProjectedQuota {
     checkedAt?: number;
     /** Present only when the stored budget is a reading, not cleared. */
     budget?: ProjectedBudget;
+    counters?: Record<string, QuotaCounter>;
 }
 /**
  * Resolves `map` for a request in `scope` (`all` or a model family). A family

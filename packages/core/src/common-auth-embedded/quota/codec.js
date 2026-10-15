@@ -1,4 +1,4 @@
-import { isQuotaMap } from './map.js';
+import { decodeQuotaMap, isQuotaMap } from './map.js';
 import { mergeQuotaObservation } from './merge.js';
 /**
  * The quota codec the account-pool store (the `/store` subpath) takes when it
@@ -8,5 +8,6 @@ import { mergeQuotaObservation } from './merge.js';
  */
 export const quotaCodec = Object.freeze({
     validate: isQuotaMap,
+    decode: decodeQuotaMap,
     merge: mergeQuotaObservation,
 });

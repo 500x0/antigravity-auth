@@ -11,7 +11,7 @@
 // no entry gets an absence record. A pair outside the coverage is never
 // touched, so a header-shaped partial observation (which covers only what it
 // carries) cannot erase a family limit or the budget.
-import { ALL_SCOPE, entryTime, isQuotaMap, limitKey, } from './map.js';
+import { ALL_SCOPE, decodeQuotaMap, entryTime, isQuotaCounters, limitKey, } from './map.js';
 /** Thrown by `mergeQuotaObservation` when either argument is malformed. */
 export class QuotaCodecError extends TypeError {
     constructor(message) {
@@ -83,7 +83,8 @@ export function isQuotaObservation(value) {
     }
     if (!coverage.every(isObservedPair))
         return false;
-    return value.budget === undefined || isObservedBudget(value.budget);
+    return ((value.budget === undefined || isObservedBudget(value.budget)) &&
+        (value.counters === undefined || isQuotaCounters(value.counters)));
 }
 function compareEntries(left, right) {
     if (left.scope !== right.scope)
@@ -99,6 +100,16 @@ function mergeBudget(stored, observed, checkedAt) {
         return stored;
     return { ...observed, checkedAt };
 }
+function mergeCounters(stored, observed) {
+    const counters = new Map(Object.entries(stored ?? {}));
+    for (const [name, counter] of Object.entries(observed ?? {})) {
+        const existing = counters.get(name);
+        if (existing === undefined || counter.checkedAt >= existing.checkedAt) {
+            counters.set(name, counter);
+        }
+    }
+    return counters.size === 0 ? undefined : Object.fromEntries(counters);
+}
 /**
  * Applies `observation` to `stored` (undefined for a row with no map yet) and
  * returns the new map. Pure: neither argument is modified. Throws
@@ -106,13 +117,16 @@ function mergeBudget(stored, observed, checkedAt) {
  * write rather than persisting a map it could not read back.
  */
 export function mergeQuotaObservation(stored, observation) {
-    if (stored !== undefined && !isQuotaMap(stored)) {
+    // Decode the stored map the way reads do, so a malformed counter that reads
+    // already hide is dropped here too instead of refusing every later write.
+    const decoded = stored === undefined ? undefined : decodeQuotaMap(stored);
+    if (stored !== undefined && decoded === undefined) {
         throw new QuotaCodecError('stored quota map is malformed');
     }
     if (!isQuotaObservation(observation)) {
         throw new QuotaCodecError('quota observation is malformed');
     }
-    const base = stored ?? { limits: [] };
+    const base = decoded ?? { limits: [] };
     const at = observation.checkedAt;
     const entries = new Map();
     for (const entry of base.limits) {
@@ -152,11 +166,13 @@ export function mergeQuotaObservation(stored, observation) {
             : { scope, label: pair.label, kind: 'retired', retiredAt: at });
     }
     // Keys this module does not recognise are carried over untouched.
-    const { limits: _limits, budget: _budget, ...unknownKeys } = base;
+    const { limits: _limits, budget: _budget, counters: _counters, ...unknownKeys } = base;
     const budget = mergeBudget(base.budget, observation.budget, at);
+    const counters = mergeCounters(base.counters, observation.counters);
     return {
         ...unknownKeys,
         limits: [...entries.values()].sort(compareEntries),
         ...(budget === undefined ? {} : { budget }),
+        ...(counters === undefined ? {} : { counters }),
     };
 }

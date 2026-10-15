@@ -23,8 +23,8 @@ import {
   validatePublication,
 } from '../../packages/opencode/scripts/embed-common-auth.ts'
 import legacy from '../common-auth-094-adoption/embed-build/publication.json'
+import publication from '../common-auth-0170-producer/candidate.json'
 import closure from './closure.json'
-import publication from './publication.json'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
@@ -35,7 +35,7 @@ const sorted = (values: Iterable<string>) => [...new Set(values)].sort()
 
 async function archive() {
   const bytes = await readFile(join(root, inputPath))
-  expect(bytes.length).toBe(279828)
+  expect(bytes.length).toBe(281581)
   expect(digest(bytes)).toBe(publication.sha256)
   const entries = readVerifiedArchive(bytes, publication)
   validatePublication(entries)
@@ -142,7 +142,7 @@ test('producer.public_roots_and_exact_closure', async () => {
       (sum, file) => sum + entries.get(`package/dist/${file}`)!.length,
       0,
     ),
-  ).toBe(924027)
+  ).toBe(930180)
   expect(graph.files.filter((file) => file.startsWith('routing/'))).toEqual(
     closure.routingFiles,
   )
@@ -218,11 +218,11 @@ test('producer.verbatim_map', async () => {
   const map = JSON.parse(
     await readFile(join(target, outputPath, 'source-output.json'), 'utf8'),
   )
-  expect(map.version).toBe('0.16.0')
-  expect(map.artifactStatus).toBe('released')
+  expect(map.version).toBe('0.17.0')
+  expect(map.artifactStatus).toBe('candidate')
   expect(map.publicRoots).toEqual(publication.publicRoots)
   expect(map.canonicalFiles).toBe(176)
-  expect(map.canonicalBytes).toBe(924027)
+  expect(map.canonicalBytes).toBe(930180)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.sri).toBe(publication.sri)
   expect(map.transforms).toEqual([])
@@ -296,7 +296,7 @@ test('producer.shared_core_profile_exact_closure', async () => {
   )
   expect(required.length).toBe(133)
   expect(map.canonicalFiles).toBe(133)
-  expect(map.canonicalBytes).toBe(747481)
+  expect(map.canonicalBytes).toBe(751105)
   expect(map.publicRoots).toEqual(profile.publicRoots)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.files.map((file: { output: string }) => file.output)).toEqual(

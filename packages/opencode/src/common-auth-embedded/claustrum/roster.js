@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { acquireRefreshFileLock, withLock, writeJsonAtomic, } from '../fs/index.js';
 import { readPrivateText, windowsPrivateFiles } from '../fs/private-files.js';
-import { isQuotaMap, mergeQuotaObservation, } from '../quota/index.js';
+import { decodeQuotaMap, mergeQuotaObservation, } from '../quota/index.js';
 import { ClaustrumConsumerError } from './errors.js';
 import { acceptAccount, declineAccount, isDeclined, } from './interlock.js';
 export const DEFAULT_ROUTE_PREFIX = 'vault:';
@@ -210,6 +210,7 @@ function optionalString(value) {
     return value === undefined || typeof value === 'string';
 }
 function decodeRow(value) {
+    const quota = isRecord(value) ? decodeQuotaMap(value.quota) : undefined;
     if (!isRecord(value) ||
         typeof value.routeId !== 'string' ||
         typeof value.credentialId !== 'string' ||
@@ -224,11 +225,14 @@ function decodeRow(value) {
         (value.aliases !== undefined &&
             (!Array.isArray(value.aliases) ||
                 !value.aliases.every((alias) => typeof alias === 'string'))) ||
-        (value.quota !== undefined && !isQuotaMap(value.quota)) ||
+        (value.quota !== undefined && quota === undefined) ||
         (value.stale !== undefined && value.stale !== true) ||
         (value.unclaimed !== undefined && value.unclaimed !== true))
         return undefined;
-    return value;
+    return {
+        ...value,
+        ...(quota === undefined ? {} : { quota }),
+    };
 }
 const SKIPPED_REASONS = new Set([
     'empty credential id',

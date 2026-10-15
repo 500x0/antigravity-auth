@@ -1,5 +1,7 @@
 export interface QuotaCodec {
     readonly validate: (value: unknown) => boolean;
+    /** Normalize persisted data before validation; older codecs may omit this. */
+    readonly decode?: (value: unknown) => unknown;
     readonly merge: (stored: unknown, observation: unknown) => unknown;
 }
 /**

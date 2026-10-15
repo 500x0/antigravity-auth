@@ -302,6 +302,7 @@ describe('real setup CLI entry', () => {
 })
 
 describe('setup plugin callbacks', () => {
+  const context = { opencodeGeneration: '1', mode: 'local' } as const
   const originalEnv = { ...process.env }
   afterEach(() => {
     for (const key of Object.keys(process.env)) {
@@ -333,14 +334,14 @@ describe('setup plugin callbacks', () => {
       runCli(['migrate', '--offline', '--yes'], deps),
     )
     if (kind === 'legacy') {
-      await expect(plugin.migrate('opencode')).rejects.toThrow(
+      await expect(plugin.migrate('opencode', context)).rejects.toThrow(
         'Offline Antigravity account migration failed',
       )
       expect(deps.accountStore.migrate).toHaveBeenCalledWith(
         join(p.config, 'antigravity-accounts.json'),
       )
     } else {
-      await plugin.migrate('opencode')
+      await plugin.migrate('opencode', context)
       expect(deps.accountStore.migrate).not.toHaveBeenCalled()
       expect(output).toContain(
         kind === 'store'
@@ -348,7 +349,7 @@ describe('setup plugin callbacks', () => {
           : 'No accounts to migrate',
       )
     }
-    await plugin.migrate('pi')
+    await plugin.migrate('pi', context)
     expect(output).toContain('Pi uses its native auth.json')
   })
 
@@ -380,24 +381,24 @@ describe('setup plugin callbacks', () => {
     expect(plugin.vault.hosts.pi.paths.stateDir).toBe(
       join(p.env.PI_AGENT_DIR, 'antigravity-auth-vault'),
     )
-    await plugin.signInLocal('opencode')
+    await plugin.signInLocal('opencode', context)
     expect(deps.performLogin).toHaveBeenLastCalledWith(
       expect.objectContaining({ startFresh: false, accounts: [] }),
       deps.openBrowser,
       'opencode',
     )
-    await plugin.beforeRegister?.('opencode', 'local')
+    await plugin.beforeRegister?.('opencode', 'local', context)
     const opencodeAuth = JSON.parse(
       readFileSync(join(p.env.XDG_DATA_HOME, 'opencode', 'auth.json'), 'utf8'),
     )
     expect(opencodeAuth.google.refresh).toBe(login.refresh)
-    await plugin.signInLocal('pi')
+    await plugin.signInLocal('pi', context)
     expect(deps.performLogin).toHaveBeenLastCalledWith(
       expect.objectContaining({ startFresh: false, accounts: [] }),
       deps.openBrowser,
       'pi',
     )
-    await plugin.beforeRegister?.('pi', 'local')
+    await plugin.beforeRegister?.('pi', 'local', context)
     const piAuth = JSON.parse(
       readFileSync(join(p.env.PI_AGENT_DIR, 'auth.json'), 'utf8'),
     )
@@ -429,7 +430,7 @@ describe('setup plugin callbacks', () => {
       throw new Error('must not sign in')
     })
     const plugin = await createSetupPlugin(deps, async () => 0)
-    await expect(plugin.signInLocal('opencode')).rejects.toThrow()
+    await expect(plugin.signInLocal('opencode', context)).rejects.toThrow()
     expect(deps.performLogin).not.toHaveBeenCalled()
     expect(snapshot(p.root)).toEqual(before)
   })

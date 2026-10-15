@@ -148,6 +148,8 @@ export async function runSetup(plugin, argv = [], io = {}) {
     if (options.dryRun) {
         printLine(terminal, 'Dry run: no registrations, enrollment, sign-in or migration will be performed.');
         for (const host of hosts) {
+            if (plugin.beforeSignIn)
+                printLine(terminal, `Would run beforeSignIn(${host}, ${mode}).`);
             if (useVault) {
                 const paths = hostEnrollmentPaths(plugin.vault.hosts[host].paths);
                 printLine(terminal, `Would Connect ${host}: write ${paths.statePath} and ${paths.tokenPath}; wait for ck auth enroll approve.`);
@@ -165,21 +167,27 @@ export async function runSetup(plugin, argv = [], io = {}) {
             printLine(terminal, `Would migrate ${host} using the plugin callback (provider-specific writes).`);
     }
     else {
+        const context = {
+            opencodeGeneration: generation,
+            mode,
+        };
         for (const host of hosts) {
+            await stopped();
+            await plugin.beforeSignIn?.(host, context);
             await stopped();
             if (useVault)
                 await connectSetupHost(plugin, host, io, terminal, stopped);
             else
-                await plugin.signInLocal(host);
+                await plugin.signInLocal(host, context);
             await stopped();
-            await plugin.beforeRegister?.(host, mode);
+            await plugin.beforeRegister?.(host, mode, context);
             await stopped();
             if (host === 'opencode')
                 await registerOpenCode(writes, stopped);
             else
                 await registerPi(plugin, detection.pi.executable, io);
             await stopped();
-            await plugin.migrate(host);
+            await plugin.migrate(host, context);
         }
     }
     printLine(terminal, `${options.dryRun ? 'Planned' : 'Configured'} ${plugin.displayName} for ${hosts.join(', ')} (${mode}).`);
