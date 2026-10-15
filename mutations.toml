@@ -626,3 +626,35 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^GA\scomposed\srequest\scontext\sapplies\sthe\sselected\sregistered\svariant\sto\sthe\swire\smodel\sand\sthinking$']
+
+[[control]]
+id = "oauth-listener-startup-failure-timer-cleanup"
+guards = "A failed OAuth listener startup clears its callback timeout before returning the original bind error."
+file = "packages/opencode/src/plugin/server.ts"
+old = '''  } catch (error) {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    throw error
+  }'''
+new = '''  } catch (error) {
+    // NON-VACUITY BREAK: leave the callback timer active after startup fails.
+    throw error
+  }'''
+test_file = "packages/opencode/src/plugin/server.test.ts"
+runner = "command"
+list_command = ["bun", "-e", "const build = Bun.spawnSync([process.execPath, 'run', '--cwd', 'packages/core', 'build'], { stdout: 'pipe', stderr: 'pipe' }); if (build.exitCode !== 0) { process.stderr.write(new TextDecoder().decode(build.stderr)); process.exitCode = build.exitCode ?? 1 } else { const selector = process.argv[1].split(String.fromCharCode(92) + 's').join(' '); const result = Bun.spawnSync([process.execPath, 'test', '--isolate', 'packages/opencode/src/plugin/server.test.ts', '-t', selector], { stdout: 'pipe', stderr: 'pipe' }); const output = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr); const names = [...output.matchAll(/^\\((?:pass|fail)\\) (.+) \\[\\d+(?:\\.\\d+)?ms\\]$/gm)].map((match) => match[1]); process.stdout.write(JSON.stringify(names)); if (result.exitCode !== 0) { process.stderr.write(new TextDecoder().decode(result.stderr)); process.exitCode = result.exitCode ?? 1 } }", "{test}"]
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/server.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^startOAuthListener\sclears\sits\scallback\stimer\swhen\sstartup\sfails$']
+
+[[control]]
+id = "oauth-exchange-project-discovery-admission-guard"
+guards = "OAuth project discovery propagates admission refusal instead of suppressing it as an empty project."
+file = "packages/core/src/antigravity/oauth.ts"
+old = "if (e instanceof ExchangeAdmissionError) throw e"
+new = "// NON-VACUITY BREAK: allow project discovery to suppress admission refusal."
+test_file = "packages/core/src/antigravity/oauth.test.ts"
+runner = "command"
+list_command = ["bun", "-e", "const build = Bun.spawnSync([process.execPath, 'run', '--cwd', 'packages/core', 'build'], { stdout: 'pipe', stderr: 'pipe' }); if (build.exitCode !== 0) { process.stderr.write(new TextDecoder().decode(build.stderr)); process.exitCode = build.exitCode ?? 1 } else { const selector = process.argv[1].split(String.fromCharCode(92) + 's').join(' ').split(' > ').at(-1); const result = Bun.spawnSync([process.execPath, 'test', '--isolate', 'packages/core/src/antigravity/oauth.test.ts', '-t', selector], { stdout: 'pipe', stderr: 'pipe' }); const output = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr); const names = [...output.matchAll(/^\\((?:pass|fail)\\) (.+) \\[\\d+(?:\\.\\d+)?ms\\]$/gm)].map((match) => match[1]); process.stdout.write(JSON.stringify(names)); if (result.exitCode !== 0) { process.stderr.write(new TextDecoder().decode(result.stderr)); process.exitCode = result.exitCode ?? 1 } }", "{test}"]
+command = ["bash", "-c", "selector=\"${1//\\\\s/ }\"; selector=\"${selector##* > }\"; selector=\"${selector#^}\"; selector=\"${selector%$}\"; bun run --cwd packages/core build && bun test --isolate packages/core/src/antigravity/oauth.test.ts -t \"$selector\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^Antigravity\sOAuth\s>\sexchangeAntigravity\s>\spropagates\sadmit\sfrom\sproject\sdiscovery\sinstead\sof\ssucceeding\swith\san\sempty\sproject$']

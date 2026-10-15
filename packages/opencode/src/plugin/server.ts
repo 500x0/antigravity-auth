@@ -158,7 +158,7 @@ export async function startOAuthListener({
   let settled = false
   let resolveCallback: (url: URL) => void
   let rejectCallback: (error: Error) => void
-  let timeoutHandle: NodeJS.Timeout
+  let timeoutHandle: NodeJS.Timeout | undefined
   const callbackPromise = new Promise<URL>((resolve, reject) => {
     resolveCallback = (url: URL) => {
       if (settled) return
@@ -300,80 +300,85 @@ export async function startOAuthListener({
   </body>
 </html>`
 
-  timeoutHandle = setTimeout(() => {
-    rejectCallback(new Error('Timed out waiting for OAuth callback'))
-  }, timeoutMs)
-  timeoutHandle.unref?.()
+  try {
+    timeoutHandle = setTimeout(() => {
+      rejectCallback(new Error('Timed out waiting for OAuth callback'))
+    }, timeoutMs)
+    timeoutHandle.unref?.()
 
-  const server = createServer((request, response) => {
-    if (!request.url) {
-      response.writeHead(400, { 'Content-Type': 'text/plain' })
-      response.end('Invalid request')
-      return
-    }
-
-    const url = new URL(request.url, origin)
-    if (url.pathname !== callbackPath) {
-      response.writeHead(404, { 'Content-Type': 'text/plain' })
-      response.end('Not found')
-      return
-    }
-
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(successResponse)
-
-    resolveCallback(url)
-
-    setImmediate(() => {
-      server.close()
-    })
-  })
-
-  const bindAddress = getBindAddress()
-
-  await new Promise<void>((resolve, reject) => {
-    const handleError = (error: NodeJS.ErrnoException) => {
-      server.off('error', handleError)
-      if (error.code === 'EADDRINUSE') {
-        reject(
-          new Error(
-            `Port ${port} is already in use. ` +
-              `Another process is occupying this port. ` +
-              `Please terminate the process or try again later.`,
-          ),
-        )
+    const server = createServer((request, response) => {
+      if (!request.url) {
+        response.writeHead(400, { 'Content-Type': 'text/plain' })
+        response.end('Invalid request')
         return
       }
-      reject(error)
-    }
-    server.once('error', handleError)
-    server.listen(port, bindAddress, () => {
-      server.off('error', handleError)
-      resolve()
+
+      const url = new URL(request.url, origin)
+      if (url.pathname !== callbackPath) {
+        response.writeHead(404, { 'Content-Type': 'text/plain' })
+        response.end('Not found')
+        return
+      }
+
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      response.end(successResponse)
+
+      resolveCallback(url)
+
+      setImmediate(() => {
+        server.close()
+      })
     })
-  })
 
-  server.on('error', (error) => {
-    rejectCallback(error instanceof Error ? error : new Error(String(error)))
-  })
+    const bindAddress = getBindAddress()
 
-  return {
-    waitForCallback: () => callbackPromise,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (
-            error &&
-            (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING'
-          ) {
-            reject(error)
-            return
-          }
-          if (!settled) {
-            rejectCallback(new Error('OAuth listener closed before callback'))
-          }
-          resolve()
-        })
-      }),
+    await new Promise<void>((resolve, reject) => {
+      const handleError = (error: NodeJS.ErrnoException) => {
+        server.off('error', handleError)
+        if (error.code === 'EADDRINUSE') {
+          reject(
+            new Error(
+              `Port ${port} is already in use. ` +
+                `Another process is occupying this port. ` +
+                `Please terminate the process or try again later.`,
+            ),
+          )
+          return
+        }
+        reject(error)
+      }
+      server.once('error', handleError)
+      server.listen(port, bindAddress, () => {
+        server.off('error', handleError)
+        resolve()
+      })
+    })
+
+    server.on('error', (error) => {
+      rejectCallback(error instanceof Error ? error : new Error(String(error)))
+    })
+
+    return {
+      waitForCallback: () => callbackPromise,
+      close: () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (
+              error &&
+              (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING'
+            ) {
+              reject(error)
+              return
+            }
+            if (!settled) {
+              rejectCallback(new Error('OAuth listener closed before callback'))
+            }
+            resolve()
+          })
+        }),
+    }
+  } catch (error) {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    throw error
   }
 }
