@@ -19,6 +19,7 @@ import {
   readTokenDacl,
   redactDacl,
 } from '../windows-vault/dacl.mjs'
+import { cliEnvironment, verifyWithReceipt } from './harness.mjs'
 
 if (process.platform !== 'win32') {
   console.error(
@@ -26,23 +27,8 @@ if (process.platform !== 'win32') {
   )
   process.exit(77)
 }
-assert.notEqual(
-  process.env.NODE_NO_WARNINGS,
-  '1',
-  'Migration warnings must remain visible',
-)
-assert.ok(
-  !process.execArgv.includes('--no-warnings'),
-  'Migration warnings must remain visible',
-)
-assert.ok(
-  !/--(?:no-warnings|disable-warning)/.test(process.env.NODE_OPTIONS ?? ''),
-  'Migration warnings must remain visible',
-)
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const root = await mkdtemp(
-  join(await realpath(homedir()), '.agy-pi-preflight-'),
-)
+let root
 const evidence = resolve(
   process.argv[2] ??
     join(
@@ -58,68 +44,87 @@ const onWarning = (warning) => {
     console.error(warning.stack ?? `${warning.name}: ${warning.message}`)
   }
 }
-const nativeDir = join(root, 'pi-native')
-const extensionDir = join(root, 'pi-extension')
-const authPath = join(nativeDir, 'auth.json')
-const decoyAuthPath = join(extensionDir, 'auth.json')
-const stashPath = join(
-  root,
-  'pi-extension',
-  'antigravity-auth-vault',
-  'google-login-stash.json',
-)
-const env = {
-  ...process.env,
-  HOME: root,
-  USERPROFILE: root,
-  APPDATA: join(root, 'appdata'),
-  LOCALAPPDATA: join(root, 'localappdata'),
-  TEMP: join(root, 'temp'),
-  TMP: join(root, 'temp'),
-  XDG_CONFIG_HOME: join(root, 'config'),
-  XDG_DATA_HOME: join(root, 'data'),
-  XDG_STATE_HOME: join(root, 'state'),
-  XDG_CACHE_HOME: join(root, 'cache'),
-  OPENCODE_CONFIG_DIR: join(root, 'config', 'opencode'),
-  OPENCODE_DB: join(root, 'isolated.db'),
-  PI_AGENT_DIR: extensionDir,
-  PI_CODING_AGENT_DIR: nativeDir,
-  PI_ANTIGRAVITY_AUTH_FILE: join(extensionDir, 'antigravity-accounts.json'),
-  SUBC_CONNECTION_FILE: join(root, 'absent-connection.json'),
-  CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-connection.json'),
-}
-const inheritedHostConfig = [
-  'OPENCODE_CONFIG',
-  'OPENCODE_CONFIG_CONTENT',
-  'OPENCODE_AUTH_CONTENT',
-]
-for (const key of inheritedHostConfig) delete env[key]
 const result = {
   platform: process.platform,
   runtime: process.version,
   checks: [],
   source: {},
 }
-async function snapshotFiles(path = root, prefix = '') {
-  const files = {}
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    const name = prefix ? `${prefix}/${entry.name}` : entry.name
-    if (entry.isDirectory())
-      Object.assign(files, await snapshotFiles(join(path, entry.name), name))
-    else
-      files[name] = (await readFile(join(path, entry.name))).toString('base64')
+async function verify(stage) {
+  stage('warning-policy')
+  assert.notEqual(
+    process.env.NODE_NO_WARNINGS,
+    '1',
+    'Migration warnings must remain visible',
+  )
+  assert.ok(
+    !process.execArgv.includes('--no-warnings'),
+    'Migration warnings must remain visible',
+  )
+  assert.ok(
+    !/--(?:no-warnings|disable-warning)/.test(process.env.NODE_OPTIONS ?? ''),
+    'Migration warnings must remain visible',
+  )
+  stage('isolated-profile')
+  root = await mkdtemp(join(await realpath(homedir()), '.agy-pi-preflight-'))
+  const nativeDir = join(root, 'pi-native')
+  const extensionDir = join(root, 'pi-extension')
+  const authPath = join(nativeDir, 'auth.json')
+  const decoyAuthPath = join(extensionDir, 'auth.json')
+  const stashPath = join(
+    root,
+    'pi-extension',
+    'antigravity-auth-vault',
+    'google-login-stash.json',
+  )
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    APPDATA: join(root, 'appdata'),
+    LOCALAPPDATA: join(root, 'localappdata'),
+    TEMP: join(root, 'temp'),
+    TMP: join(root, 'temp'),
+    XDG_CONFIG_HOME: join(root, 'config'),
+    XDG_DATA_HOME: join(root, 'data'),
+    XDG_STATE_HOME: join(root, 'state'),
+    XDG_CACHE_HOME: join(root, 'cache'),
+    OPENCODE_CONFIG_DIR: join(root, 'config', 'opencode'),
+    OPENCODE_DB: join(root, 'isolated.db'),
+    PI_AGENT_DIR: extensionDir,
+    PI_CODING_AGENT_DIR: nativeDir,
+    PI_ANTIGRAVITY_AUTH_FILE: join(extensionDir, 'antigravity-accounts.json'),
+    SUBC_CONNECTION_FILE: join(root, 'absent-connection.json'),
+    CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-connection.json'),
   }
-  return files
-}
-function weakenFile(path) {
-  const child = spawnSync(
-    'pwsh',
-    [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `
+  const inheritedHostConfig = [
+    'OPENCODE_CONFIG',
+    'OPENCODE_CONFIG_CONTENT',
+    'OPENCODE_AUTH_CONTENT',
+  ]
+  for (const key of inheritedHostConfig) delete env[key]
+  async function snapshotFiles(path = root, prefix = '') {
+    const files = {}
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory())
+        Object.assign(files, await snapshotFiles(join(path, entry.name), name))
+      else
+        files[name] = (await readFile(join(path, entry.name))).toString(
+          'base64',
+        )
+    }
+    return files
+  }
+  function weakenFile(path) {
+    const child = spawnSync(
+      'pwsh',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `
     $ErrorActionPreference = 'Stop'
     $acl = Get-Acl -LiteralPath $env:AGY_PI_ACL_FILE
     $sid = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
@@ -127,20 +132,20 @@ function weakenFile(path) {
     $acl.AddAccessRule($rule)
     Set-Acl -LiteralPath $env:AGY_PI_ACL_FILE -AclObject $acl
   `,
-    ],
-    {
-      env: { ...env, AGY_PI_ACL_FILE: path },
-      encoding: 'utf8',
-      timeout: 30000,
-    },
-  )
-  assert.equal(child.error, undefined)
-  assert.equal(child.status, 0, child.stderr)
-}
-try {
+      ],
+      {
+        env: { ...env, AGY_PI_ACL_FILE: path },
+        encoding: 'utf8',
+        timeout: 30000,
+      },
+    )
+    assert.equal(child.error, undefined)
+    assert.equal(child.status, 0, child.stderr)
+  }
   await mkdir(env.TEMP, { recursive: true })
   for (const key of inheritedHostConfig) delete process.env[key]
   Object.assign(process.env, env)
+  stage('source-and-archive-hashes')
   for (const path of [
     'packages/opencode/src/setup.ts',
     'packages/opencode/src/cli.ts',
@@ -219,6 +224,7 @@ try {
     assert.equal(bytes.length, expected[1], `Wrong built payload size: ${path}`)
     assert.equal(hash, expected[2], `Wrong built payload bytes: ${path}`)
   }
+  stage('product-runtime')
   const { loadCommonAuthFs, loadCommonAuthPiSlot, loadCommonAuthClaustrum } =
     await import('../../packages/core/dist/index.js')
   const {
@@ -230,6 +236,7 @@ try {
   )
   const fs = await loadCommonAuthFs()
   const { openPiSlot } = await loadCommonAuthPiSlot()
+  stage('pi-fixtures')
   await assertSetupHostsStopped()
   await fs.writeJsonAtomic(authPath, {
     google: {
@@ -269,6 +276,7 @@ try {
   const original = paths.map(readTokenDacl)
   for (const descriptor of original) assertPrivateTokenDacl(descriptor)
   const parent = readTokenDacl(dirname(authPath))
+  stage('weak-dacl-controls')
   paths.forEach(weakenFile)
   const weak = paths.map(readTokenDacl)
   for (const descriptor of weak) {
@@ -283,14 +291,33 @@ try {
     )
     assert.throws(() => assertPrivateTokenDacl(descriptor))
   }
+  stage('cli-dry-run')
   const bin = join(root, 'bin')
   await mkdir(bin)
   await mkdir(env.OPENCODE_CONFIG_DIR, { recursive: true })
   await writeFile(join(bin, 'opencode.cmd'), '@echo off\r\necho 1.0.0\r\n')
   await writeFile(join(bin, 'pi.cmd'), '@echo off\r\necho 1.0.0\r\n')
   await writeFile(join(bin, 'ck.cmd'), '@echo off\r\necho 1.0.0\r\n')
-  env.PATH = `${bin};${previous.PATH ?? ''}`
-  process.env.PATH = env.PATH
+  const pathEntries = (environment) =>
+    Object.entries(environment)
+      .filter(([key]) => key.toLowerCase() === 'path')
+      .sort(([left], [right]) => left.localeCompare(right))
+  const inheritedPathKeys = Object.keys(env)
+    .filter((key) => key.toLowerCase() === 'path')
+    .sort()
+  result.executableSearchPath = { inheritedKeySpellings: inheritedPathKeys }
+  const cliEnv = cliEnvironment(env, bin)
+  const childPathKeys = Object.keys(cliEnv).filter(
+    (key) => key.toLowerCase() === 'path',
+  )
+  assert.equal(childPathKeys.length, 1, 'CLI must have one effective PATH key')
+  assert.equal(
+    cliEnv[childPathKeys[0]],
+    `${bin};${env[inheritedPathKeys[0]] ?? ''}`,
+    'CLI must retain its inherited executable search path',
+  )
+  result.executableSearchPath.childRetainedInheritedPath = true
+  assert.deepEqual(pathEntries(process.env), pathEntries(previous))
   const beforePreview = await snapshotFiles()
   const preview = spawnSync(
     process.execPath,
@@ -302,13 +329,16 @@ try {
       '--opencode=2',
       '--no-claustrum',
     ],
-    { cwd: root, env, encoding: 'utf8', timeout: 60000 },
+    { cwd: root, env: cliEnv, encoding: 'utf8', timeout: 60000 },
   )
   assert.equal(preview.error, undefined)
   assert.equal(preview.status, 0, preview.stderr)
   assert.match(preview.stdout, /Pi: found/)
   assert.ok(preview.stdout.includes(nativeDir))
   assert.deepEqual(await snapshotFiles(), beforePreview)
+  assert.deepEqual(pathEntries(process.env), pathEntries(previous))
+  result.executableSearchPath.parentUnchanged = true
+  stage('dry-run-permission-oracle')
   assert.deepEqual(readTokenDacl(decoyAuthPath), decoyDacl)
   assert.equal(existsSync(`${decoyAuthPath}.lock`), false)
   assert.match(preview.stdout, /Would run .*pi\.cmd install/)
@@ -327,6 +357,7 @@ try {
 
   // Observe PrivateFileMigration warnings from repairing the fixture DACLs
   // without replacing emitWarning.
+  stage('pi-permission-migration')
   process.on('warning', onWarning)
   await assertSetupHostsStopped()
   await assert.rejects(
@@ -382,6 +413,7 @@ try {
     'both ordinary PrivateFileMigration warnings remained surfaced',
   )
 
+  stage('foreign-login-refusal')
   const { runSetup } = await import(
     '../../packages/opencode/dist/src/common-auth-embedded/setup/index.js'
   )
@@ -427,6 +459,7 @@ try {
   result.checks.push(
     'foreign Pi login refused before any selected host enrollment ceremony; auth/stash bytes unchanged',
   )
+  stage('missing-authority-parent')
   const claustrum = await loadCommonAuthClaustrum()
   const host = plugin.vault.hosts.opencode
   const authorityPaths = claustrum.hostEnrollmentPaths(host.paths)
@@ -454,6 +487,7 @@ try {
   result.checks.push(
     'Windows local authority preflight created only a missing owned state parent, not files or existing ancestor permission changes',
   )
+  stage('authority-permission-migration')
   const manager = new claustrum.ClaustrumEnrollmentManager({
     paths: authorityPaths,
     proposedName: host.name,
@@ -523,6 +557,8 @@ try {
     weak: weak.map(redactDacl),
     repaired: repairedDescriptors.map(redactDacl),
   }
+  stage('decoy-preservation')
+  assert.deepEqual(pathEntries(process.env), pathEntries(previous))
   assert.deepEqual(await readFile(decoyAuthPath), decoyBytes)
   assert.deepEqual(readTokenDacl(decoyAuthPath), decoyDacl)
   assert.deepEqual(readTokenDacl(extensionDir), decoyParentDacl)
@@ -530,25 +566,54 @@ try {
   result.checks.push(
     'distinct extension auth decoy bytes, DACL and parent DACL remained unchanged while native auth controls executed',
   )
-  result.nativeWindowsQualified = true
   result.warnings = warnings.map((warning) => ({
     name: warning.name,
     auth: warning.message.includes('auth.json'),
     stash: warning.message.includes('google-login-stash.json'),
   }))
-  await mkdir(dirname(evidence), { recursive: true })
-  await writeFile(evidence, `${JSON.stringify(result, null, 2)}\n`)
-  console.log(
-    JSON.stringify({
-      nativeWindowsQualified: true,
-      checks: result.checks.length,
-      evidence,
-    }),
-  )
-} finally {
-  process.off('warning', onWarning)
-  for (const key of Object.keys(process.env))
-    if (!(key in previous)) delete process.env[key]
-  Object.assign(process.env, previous)
-  await rm(root, { recursive: true, force: true })
 }
+
+await verifyWithReceipt({
+  evidence,
+  result,
+  run: verify,
+  nativeWindows: true,
+  bundleUrl: new URL(
+    '../../packages/opencode/dist/windows-pi-preflight-product.mjs',
+    import.meta.url,
+  ),
+  secrets: [
+    'synthetic-native-proof-refresh',
+    'synthetic-native-proof-access',
+    'synthetic-extension-decoy',
+    'synthetic-foreign-login',
+    'synthetic-foreign-access',
+    'ab'.repeat(32),
+  ],
+  cleanup: [
+    ['warning-listener', () => process.off('warning', onWarning)],
+    [
+      'restore-environment',
+      () => {
+        for (const key of Object.keys(process.env))
+          if (!(key in previous)) delete process.env[key]
+        Object.assign(process.env, previous)
+      },
+    ],
+    [
+      'remove-isolated-profile',
+      async () => {
+        if (root) await rm(root, { recursive: true, force: true })
+      },
+    ],
+  ],
+})
+console.log(
+  JSON.stringify({
+    status: result.status,
+    nativeWindowsQualified: result.nativeWindowsQualified,
+    checks: result.checks.length,
+    failedStage: result.failedStage,
+    evidence,
+  }),
+)

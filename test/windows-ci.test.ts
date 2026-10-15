@@ -347,3 +347,99 @@ test('Windows Pi preflight builds verify embeddings before installing compiler d
   expect(check).toBeGreaterThanOrEqual(0)
   expect(install).toBeGreaterThan(check)
 })
+
+test('Pi native verifier uses the tested child environment and receipt boundary', async () => {
+  const source = await readFile(
+    join(root, 'test/windows-pi-preflight/verify.mjs'),
+    'utf8',
+  )
+  expect(source).toContain('const cliEnv = cliEnvironment(env, bin)')
+  expect(source).toContain("{ cwd: root, env: cliEnv, encoding: 'utf8'")
+  expect(source).toContain('await verifyWithReceipt({')
+  expect(source).toContain('run: verify,')
+  expect(source).toContain('nativeWindows: true,')
+})
+
+for (const key of ['Path', 'PATH']) {
+  test(`Windows Pi CLI child preserves copied ${key} without changing its parent`, async () => {
+    const output = await command(root, 'node', [
+      '--input-type=module',
+      '-e',
+      String.raw`import assert from 'node:assert/strict'
+       import { isDeepStrictEqual } from 'node:util'
+       import { cliEnvironment } from './test/windows-pi-preflight/harness.mjs'
+       const parent = { ...process.env }
+       const key = ${JSON.stringify(key)}
+       const original = 'C:\\Windows\\System32;C:\\Program Files\\PowerShell\\7'
+       const inherited = { [key]: original, SystemRoot: 'C:\\Windows', UNRELATED: 'unchanged' }
+       const input = { ...inherited, HOME: 'owned-home', PI_CODING_AGENT_DIR: 'owned-native' }
+       const before = { ...input }
+       const child = cliEnvironment(input, 'C:\\fixture-bin')
+       const keys = Object.keys(child).filter(key => key.toLowerCase() === 'path')
+       assert.deepEqual(keys, [key])
+       assert.equal(child[key], 'C:\\fixture-bin;' + original)
+       assert.deepEqual(Object.fromEntries(Object.entries(child).filter(([name]) => name !== key)), Object.fromEntries(Object.entries(before).filter(([name]) => name !== key)))
+       assert.deepEqual(input, before)
+       assert.ok(isDeepStrictEqual({ ...process.env }, parent), 'parent environment changed')
+       const aliases = { Path: 'ignored-other-alias', PATH: original, pAtH: 'ignored-mixed-alias', UNRELATED: 'unchanged' }
+       const aliasesBefore = { ...aliases }
+       const normalized = cliEnvironment(aliases, 'C:\\fixture-bin')
+       assert.deepEqual(Object.keys(normalized).filter(key => key.toLowerCase() === 'path'), ['PATH'])
+       assert.equal(normalized.PATH, 'C:\\fixture-bin;' + original)
+       assert.equal(normalized.UNRELATED, 'unchanged')
+       assert.deepEqual(aliases, aliasesBefore)
+       assert.ok(isDeepStrictEqual({ ...process.env }, parent), 'parent environment changed')
+       console.log('child path and environment assertions passed')`,
+    ])
+    expect(output).toContain('child path and environment assertions passed')
+  })
+}
+
+test('Pi failure receipt is stage-labelled, redacted and nonzero without native qualification', async () => {
+  const evidence = join(await owned(), 'failure', 'result.json')
+  const secret = 'receipt-fixture-private-value'
+  let exitCode: unknown
+  let stdout = ''
+  let stderr = ''
+  try {
+    await command(root, 'node', [
+      '--input-type=module',
+      '-e',
+      `import { verifyWithReceipt } from './test/windows-pi-preflight/harness.mjs'
+       await verifyWithReceipt({
+         evidence: ${JSON.stringify(evidence)},
+         result: { checks: [], nativeWindowsQualified: true },
+         secrets: [${JSON.stringify(secret)}],
+         bundleUrl: new URL('./packages/opencode/dist/windows-pi-preflight-product.mjs', import.meta.url),
+         run: async stage => {
+           stage('intentional-primary')
+           throw new Error('primary ${secret} Bearer fixture-bearer-value C:\\\\private-profile\\\\auth.json')
+         },
+         cleanup: [
+           ['intentional-cleanup', async () => { throw new Error('cleanup ${secret}') }],
+           ['remaining-cleanup', async () => { console.log('remaining cleanup executed') }],
+         ],
+       })`,
+    ])
+  } catch (error) {
+    exitCode = (error as NodeJS.ErrnoException).code
+    stdout = (error as { stdout: string }).stdout
+    stderr = (error as { stderr: string }).stderr
+  }
+  expect(exitCode).toBe(1)
+  const text = await readFile(evidence, 'utf8')
+  const receipt = JSON.parse(text)
+  expect(stdout).toContain('remaining cleanup executed')
+  expect(receipt.status).toBe('failed')
+  expect(receipt.nativeWindowsQualified).toBe(false)
+  expect(receipt.failedStage).toBe('intentional-primary')
+  expect(receipt.failureError.name).toBe('Error')
+  expect(receipt.failureError.message).toContain('primary')
+  expect(receipt.cleanupFailures).toHaveLength(1)
+  expect(receipt.cleanupFailures[0].stage).toBe('intentional-cleanup')
+  expect(receipt.cleanupFailures[0].failureError.message).toContain('cleanup')
+  expect(text).toContain('<redacted>')
+  expect(stderr).toContain('<redacted>')
+  for (const sensitive of [secret, 'fixture-bearer-value', 'private-profile'])
+    expect(text + stderr).not.toContain(sensitive)
+})
