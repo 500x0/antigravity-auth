@@ -1,6 +1,6 @@
 # Architecture
 
-The fetch-interceptor details below describe OpenCode 1. The unified package also supplies an OpenCode 2 server and terminal UI: see the [current root architecture](../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services) and [OpenCode 2 guide](docs/OPENCODE-2.md). OpenCode 2 registers pool-browser and approved-vault login methods under a saved `Antigravity` connection. The adapter handles requests carrying the host-prepared common-auth Google placeholder, not requests selected by active connection metadata. Real Google keys/native credentials pass through unchanged. OpenCode 1 instead leaves the saved Google login unused while approved vault credentials serve.
+The fetch-interceptor details below describe OpenCode 1. The unified package also supplies an OpenCode 2 server and terminal UI: see the [current root architecture](../../ARCHITECTURE.md#opencode-2-ga-server-and-location-services) and [OpenCode 2 guide](docs/OPENCODE-2.md). OpenCode 2 registers pool-browser and approved-vault login methods under a saved `Antigravity` connection. The adapter handles requests carrying the host-prepared common-auth Google placeholder, not requests selected by active connection metadata. Real Google keys/native credentials pass through unchanged. OpenCode 1 instead leaves the saved Google login unused while it uses vault credentials authorized by the Claustrum vault operator's approval of [host enrollment](docs/VAULT.md#enroll-and-activate).
 
 ## Pattern Overview
 
@@ -60,7 +60,7 @@ The fetch-interceptor details below describe OpenCode 1. The unified package als
 - Used by: `src/plugin/auth-loader.ts`, `src/plugin/lifecycle.ts`
 
 **Quota:**
-- Purpose: Query Antigravity for per-account quota readings, populate quota caches for soft-quota gating, aggregate group/window and per-model data, and handle endpoint fallback and stale-cache fail-open behavior
+- Purpose: Query Antigravity for per-account quota readings, populate quota caches for [soft-quota filtering](docs/MULTI-ACCOUNT.md#quota-refresh-and-soft-thresholds), aggregate group/window and per-model data, and handle endpoint fallback and stale-cache fail-open behavior
 - Location: `src/plugin/quota.ts`, backed by `packages/core/src/quota-manager.ts` in the repository
 - Contains: `checkAccountsQuota` and account quota projections. Core's `fetchQuotaSummary` calls `retrieveUserQuotaSummary`; `aggregateQuotaSummary` builds group/window readings. If summary fetching fails, `fetchAvailableModels` and `aggregateQuota` provide fallback readings. Both sources use Antigravity endpoints, not a parallel Gemini CLI quota source.
 - Depends on: OAuth token utilities, `src/plugin/model-registry.ts`

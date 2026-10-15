@@ -16,7 +16,7 @@ The canonical [model registry](../../core/src/model-registry.ts) is re-exported 
 | `antigravity-claude-opus-5-5` | `low`, `medium`, `high` | `claude` |
 | `antigravity-gpt-oss-120b-medium` | — | `gpt-oss` |
 
-Gemini 3.8 Flash Cyber is absent from the captured Antigravity 1.3.5 server catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
+The catalog uses a [model-list projection](../../../test-fixtures/agy-cli-1.3.5/server-model-catalog.json) of the official Antigravity CLI 1.3.5 `fetchAvailableModels` server response; see the [redacted capture's provenance](../../../test-fixtures/agy-cli-1.3.5/README.md). Gemini 3.8 Flash Cyber is absent from that catalog and is not exposed. Gemini 3.5 Flash Lite is a helper route, not a public picker entry; Gemini 3.5 Flash Cyber remains restricted to the limited-access CodeMender pilot. Catalog presence does not prove live entitlement.
 
 ## Claude 5.5
 
@@ -82,7 +82,7 @@ The resolver also accepts native tier-suffixed names, including
 `antigravity-gemini-3.8-flash-medium`. The grouped catalog entries with variants
 are the normal picker interface.
 
-The current catalog comes from the captured Antigravity server map. An ID omitted
+The current catalog comes from the official CLI server model-list evidence linked above. An ID omitted
 from the CLI picker is not necessarily retired: Gemini 3.5 Flash and Gemini 3.1
 Flash Image remain offered by the server. Captured catalog data and low-effort
 Claude probes do not establish complete wire parity for every model and effort.

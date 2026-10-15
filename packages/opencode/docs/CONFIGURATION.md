@@ -13,7 +13,7 @@ npx @cortexkit/opencode-antigravity-auth setup
 Setup detects installed hosts, uses local Google sign-in or optional approved Claustrum vault enrollment, writes versioned OpenCode registrations without replacing unrelated settings, or runs Pi's package installer. An existing legacy JSON account pool needs [offline migration](MIGRATION.md) into the shared store before use; Pi's native `auth.json` is not an OpenCode pool.
 
 ```bash
-npx @cortexkit/opencode-antigravity-auth setup --yes --dry-run --opencode=1 --no-claustrum
+npx @cortexkit/opencode-antigravity-auth setup --dry-run --opencode=1 --no-claustrum
 npx @cortexkit/opencode-antigravity-auth setup --yes --opencode=2 --no-claustrum
 ```
 

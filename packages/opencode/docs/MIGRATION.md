@@ -24,9 +24,9 @@ The local OpenCode pool uses a shared account store. `antigravity-accounts.json.
 
 ## Rollback exports current credentials
 
-Offline rollback exports **current credentials and metadata** from the active generation into legacy V4 JSON. It does not restore tokens from the original backup. It refuses an existing/recreated legacy file, a changed rollback snapshot, or credentials/metadata changed during rollback. Do not copy an old snapshot back or recreate the legacy pool. On a refusal, leave hosts stopped and resolve the reported conflict.
+Offline rollback exports **current credentials and metadata** from the active generation into legacy V4 JSON. It does not restore tokens from the original backup. Rollback captures account row IDs and exported data—refresh credentials, metadata, and any exported quota/routing state—as private transaction data, then rechecks the row IDs and exported data during verification and before restoration. This is implementation-generated data, not a user-editable snapshot input. Rollback refuses an existing/recreated legacy file, changes to the captured row IDs/exported data, or invalid transaction data. Do not manually restore an old account-file backup or recreate the legacy pool. On a refusal, leave hosts stopped and resolve the reported conflict.
 
-Keep the pointer, generations, migration journal, protected backups, and transfer files private. Do not delete them as a generic reset or manually splice generations into another profile. A general cross-machine store transfer procedure is not established here; prefer explicit fresh initialization and re-login on the destination, or approved vault enrollment.
+Keep the pointer, generations, migration journal, protected backups, and transfer files private: store and migration data can contain account credentials and metadata. Do not delete them as a generic reset or manually splice generations into another profile. A general cross-machine store transfer procedure is not established here; prefer explicit fresh initialization and re-login on the destination, or [enrollment approved by the Claustrum vault operator](VAULT.md#enroll-and-activate).
 
 ## Host activation and vault custody are separate
 

@@ -9,7 +9,7 @@ The host packages are [`@cortexkit/opencode-antigravity-auth`](packages/opencode
 - An Antigravity model catalog with supported thinking variants.
 - A shared OpenCode account pool—Google accounts added to the plugin—with rotation, quota, cooldowns, and limits.
 - An `/antigravity` menu and OpenCode sidebar for account and quota management.
-- Optional approved Claustrum vault custody instead of local credentials.
+- An approved Claustrum vault can supply credentials instead of local logins.
 - A bundled `antigravity-auth` command-line interface for login, account listing, and quota checks.
 
 Pi local mode uses Pi's native Google login, not the OpenCode account pool.
@@ -32,11 +32,11 @@ Setup detects installed hosts and configures the plugin for local Google sign-in
 
 <a id="major-upgrades-migration-and-rollback"></a>
 
-Existing OpenCode pools require the [offline migration and rollback procedure](packages/opencode/docs/MIGRATION.md); disable automatic updates before a major upgrade.
+Before any major plugin upgrade, disable automatic updates. Unmigrated OpenCode account files from the plugin's 2.x releases require the [offline migration and rollback procedure](packages/opencode/docs/MIGRATION.md).
 
 OpenCode 2: sign in with Google (antigravity-auth pool, browser), then select the saved Antigravity connection to use the plugin's accounts; requests carrying a real Google key or native login credential pass through unchanged.
 
-The browser choice is a login method; **Antigravity** is the saved connection. Setup does not complete that OpenCode 2 connection. For approved vault mode, choose **Use approved Antigravity vault** instead. After starting the configured host, open `/antigravity` in OpenCode or Pi for accounts, quota, and vault actions.
+After setup, run `opencode auth login` → Google and choose **Google (antigravity-auth pool, browser)** as the login method; afterward, select the saved connection labeled **Antigravity**. Setup does not perform this OpenCode 2 login. For approved vault mode, choose **Use approved Antigravity vault** instead. After starting the configured host, open `/antigravity` in OpenCode or Pi for accounts, quota, and vault actions.
 
 ## Documentation
 

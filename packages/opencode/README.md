@@ -52,9 +52,9 @@ bun run build
 bun run --cwd packages/opencode smoke:tui
 ```
 
-Use **Bun 1.4.2** for TUI regeneration: `bun run --cwd packages/opencode build:tui`. The public loader selects `src/tui-compiled/tui.js` or the raw fallback `src/tui-raw/tui.tsx` for V1; GA has separate compiled/raw trees. Runtime support is probed before selection; unrelated import errors propagate. The private compiler and input archive are repository-only, never shipped.
+Use **Bun 1.4.2** for TUI regeneration: `bun run --cwd packages/opencode build:tui`. The public loader selects `src/tui-compiled/tui.js` or the raw fallback `src/tui-raw/tui.tsx` for V1; OpenCode 2 has separate compiled/raw trees. Runtime support is probed before selection; unrelated import errors propagate. The private compiler and input archive are repository-only, never shipped.
 
-`smoke:tui` installs fresh tarballs in a scratch consumer and checks resolution and renderer startup. It is not native-host activation proof. Use an isolated host config/database for source work, never an everyday profile. See [development and release](docs/DEVELOPMENT.md) for the complete gates.
+`smoke:tui` installs fresh tarballs in a scratch consumer and checks resolution and renderer startup. It does not prove login, provider activation, or request serving in a real OpenCode host. Use an isolated host config/database for source work, never an everyday profile. See [development and release](docs/DEVELOPMENT.md) for the complete gates.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
 # Codebase Structure
 
-For the unified OpenCode 1/OpenCode 2 package map, see the [root structure](../../STRUCTURE.md). [OpenCode 2](docs/OPENCODE-2.md) distinguishes pool-browser/vault login methods from the saved `Antigravity` connection. Its adapter handles outgoing requests carrying the host-prepared Google placeholder; real native Google credentials pass through unchanged. OpenCode 1 leaves an existing saved login unused while approved vault credentials serve.
+For the unified OpenCode 1/OpenCode 2 package map, see the [root structure](../../STRUCTURE.md). [OpenCode 2](docs/OPENCODE-2.md) distinguishes pool-browser/vault login methods from the saved `Antigravity` connection. A non-secret Google placeholder fills the host-prepared `x-goog-api-key`, allowing this adapter to recognize and handle the marked request; it is not an actual Google credential. Real Google keys/native credentials pass through unchanged. OpenCode 1 leaves an existing saved login unused while approved vault credentials serve.
 
 ## Directory Layout
 
