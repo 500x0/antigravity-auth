@@ -392,8 +392,33 @@ function capturePublicCommandAncestry(
   // parent/birth chain to the leader or an already verified descendant.
   for (const expected of [...chain, cursor]) {
     const current = inspector.read(expected.pid)
-    if (!current || current.zombie)
+    if (!current || current.zombie) {
+      try {
+        const serialize = (identity: PublicCommandIdentity) => ({
+          pid: identity.pid,
+          ppid: identity.ppid,
+          pgid: identity.pgid,
+          sid: identity.sid,
+          start: identity.start.toString(),
+          zombie: identity.zombie,
+        })
+        console.error(
+          `PUBLIC_COMMAND_ANCESTRY_REFUSAL=${JSON.stringify({
+            phase: 'revalidation',
+            candidate: serialize(member),
+            expected: serialize(expected),
+            current: current ? serialize(current) : null,
+            chain: chain.map(serialize),
+            endpoint: serialize(cursor),
+            leader: serialize(scope.leader),
+            monitor: { pid: process.pid, ppid: process.ppid },
+          })}`,
+        )
+      } catch {
+        // Diagnostic logging must not replace the refusal that prevents adoption.
+      }
       throw new Error('owned process parent/birth ancestry unavailable')
+    }
     assertPublicCommandIdentity(expected, current, scope.leader)
     if (expected !== cursor && current.ppid !== expected.ppid)
       throw new Error('owned process parent/birth ancestry changed')
