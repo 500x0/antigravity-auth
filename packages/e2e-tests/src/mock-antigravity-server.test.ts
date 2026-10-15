@@ -4,6 +4,18 @@ import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import {
+  createSourceFile,
+  forEachChild,
+  isCallExpression,
+  isExpressionStatement,
+  isIdentifier,
+  isPropertyAccessExpression,
+  isVariableDeclaration,
+  type Node,
+  ScriptKind,
+  ScriptTarget,
+} from 'typescript'
+import {
   type MockServerHandle,
   startMockAntigravityServer,
 } from './mock-antigravity-server'
@@ -21,6 +33,7 @@ import {
   gaChildEnvironment,
   gaDetachedDispatchSignalMutation,
   gaTimestamp,
+  loadGaOverflowFixture,
   ownedPath,
   parseGaPin,
   prepareGaRoot,
@@ -34,6 +47,89 @@ import {
 import { cleanupE2eRootsForCurrentFile } from './setup'
 
 afterAll(cleanupE2eRootsForCurrentFile)
+
+describe('GA revised oracle transport fixtures (mock-only)', () => {
+  it('returns the exact canned first-title 400 then allows fallback and primary success', async () => {
+    const mock = await startGaMock(
+      'title-primary-fallback',
+      'title-control',
+      process.cwd(),
+    )
+    try {
+      const fixture = loadGaOverflowFixture(process.cwd(), 'gemini')
+      const first = await fetch(`${mock.url}/agy/title`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(first.status).toBe(400)
+      expect(first.headers.get('content-type')).toBe(fixture.contentType)
+      expect(Buffer.from(await first.arrayBuffer()).equals(fixture.bytes)).toBe(
+        true,
+      )
+      const fallback = await fetch(`${mock.url}/agy/title`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(fallback.status).toBe(200)
+      expect(await fallback.text()).toContain('GA_TITLE_title-control')
+      const primary = await fetch(`${mock.url}/agy/primary`, {
+        method: 'POST',
+        body: '{}',
+      })
+      expect(primary.status).toBe(200)
+      expect(await primary.text()).toContain('GA_OK_title-control')
+    } finally {
+      await mock.close()
+    }
+  })
+  it('attributes a held HTTP connection and its natural close to the same physical record', async () => {
+    const mock = await startGaMock(
+      'pty-interrupt-recovery',
+      'peer-control',
+      process.cwd(),
+    )
+    const signal = new AbortController()
+    try {
+      await (
+        await fetch(`${mock.url}/agy/primary`, { method: 'POST', body: '{}' })
+      ).text()
+      const held = await fetch(`${mock.url}/agy/primary`, {
+        method: 'POST',
+        body: '{}',
+        signal: signal.signal,
+      })
+      expect(held.status).toBe(200)
+      await waitForGaObservation(
+        () => mock.events.some((event) => event.event === 'held-content'),
+        'mock held peer',
+      )
+      const record = mock.requests[1]!
+      const observation = mock.events.find(
+        (event) => event.event === 'held-content',
+      )!
+      expect(observation).toMatchObject({ requestIndex: 1, peer: record.peer })
+      expect(record.peer).toBeGreaterThan(0)
+      signal.abort()
+      await waitForGaObservation(
+        () =>
+          mock.events.some(
+            (event) =>
+              event.event === 'peer-close' &&
+              event.peer === record.peer &&
+              event.requestIndex === 1,
+          ),
+        'mock natural-close of held peer',
+        2000,
+      )
+      expect(mock.events.some((event) => event.event === 'forced-close')).toBe(
+        false,
+      )
+    } finally {
+      signal.abort()
+      await mock.close()
+    }
+  })
+})
 
 async function withServer(
   fn: (server: MockServerHandle) => Promise<void>,
@@ -1245,32 +1341,219 @@ describe('GA cancellation ruling preparation (mock-only, not production binding 
     }
   }, 5000)
 
-  it('mutates only the same options signal observed and passed to unchanged agyTransport', () => {
-    const source =
-      'async function dispatch(job) {\nconst options = { signal: job.signal };\ndeps.observeRawSenderSignal?.(options.signal);\nreturn agyTransport(job.endpoint, options);\n}'
+  // These emitted function shapes have separate observer bindings: the engine
+  // collaborator forwards url/init/options, while createGaRawSender derives
+  // the request from input. Both dispatch through fetchWithAgyCliTransport.
+  const transport = `function gaEngineCollaborators(input2) {
+  const observe = input2.overrides.observeRawSenderSignal;
+  return {
+    transport: (url, init, options) => {
+      const transportOptions = {
+        ...options,
+        idleTimeoutMs: options?.idleTimeoutMs ?? GA_TRANSPORT_IDLE_TIMEOUT_MS
+      };
+      if (observe && transportOptions.signal) {
+        try {
+          observe(transportOptions.signal);
+        } catch {}
+      }
+      return fetchWithAgyCliTransport(url, init, transportOptions);
+    }
+  };
+}`
+  const sender = `function createGaRawSender(overrides = {}) {
+  const send = overrides.send;
+  if (send) return (input) => send(input);
+  const observe = overrides.observeRawSenderSignal;
+  return (input) => {
+    const transportOptions = {
+      signal: input.signal,
+      idleTimeoutMs: GA_RAW_IDLE_TIMEOUT_MS
+    };
+    if (observe) {
+      try {
+        observe(transportOptions.signal);
+      } catch {}
+    }
+    return fetchWithAgyCliTransport(
+      input.endpoint + GA_STREAM_PATH,
+      { method: "POST", headers: { Authorization: "Bearer " + input.auth.access }, body: JSON.stringify(input.envelope) },
+      transportOptions
+    );
+  };
+}`
+  const packed = `${transport}\n${sender}`
+  it('selects only the packed three-parameter physical transport observation', () => {
+    const source = packed
     const mutation = gaDetachedDispatchSignalMutation(source)
     expect(mutation.control).toBe('ga.raw-cancel.detached-dispatch-signal')
-    expect(mutation.line).toBe(3)
+    expect(mutation.line).toBe(11)
     expect(mutation.source).toContain(
-      'options.signal = new AbortController().signal',
+      'transportOptions.signal = new AbortController().signal',
     )
+    expect(mutation.source).toContain(sender)
     expect(mutation.source).toContain(
-      'deps.observeRawSenderSignal?.(options.signal)',
+      'fetchWithAgyCliTransport(url, init, transportOptions)',
     )
-    expect(mutation.source).toContain('agyTransport(job.endpoint, options)')
+  })
+
+  it('refuses missing, ambiguous and non-forwarding packed transport candidates', () => {
+    expect(() => gaDetachedDispatchSignalMutation(sender)).toThrow('Missing')
     expect(() =>
       gaDetachedDispatchSignalMutation(
-        source.replace(
-          'agyTransport(job.endpoint, options)',
-          'agyTransport(job.endpoint, otherOptions)',
+        `${packed}\n${transport.replace('gaEngineCollaborators', 'secondCollaborator')}`,
+      ),
+    ).toThrow('ambiguous')
+    for (const changed of [
+      transport.replace('...options,', '...otherOptions,'),
+      transport.replace(
+        'fetchWithAgyCliTransport(url, init, transportOptions)',
+        'fetchWithAgyCliTransport(otherUrl, init, transportOptions)',
+      ),
+      transport.replace(
+        'fetchWithAgyCliTransport(url, init, transportOptions)',
+        'fetchWithAgyCliTransport(url, otherInit, transportOptions)',
+      ),
+      transport.replace(
+        'fetchWithAgyCliTransport(url, init, transportOptions)',
+        'fetchWithAgyCliTransport(url, init, otherOptions)',
+      ),
+      transport
+        .replace(
+          'return fetchWithAgyCliTransport',
+          'const nested = () => fetchWithAgyCliTransport(url, init, transportOptions);\nreturn fetchWithAgyCliTransport',
+        )
+        .replace(
+          'return fetchWithAgyCliTransport(url, init, transportOptions)',
+          'return nested()',
         ),
-      ),
-    ).toThrow('share one dispatch-options object')
-    expect(() =>
-      gaDetachedDispatchSignalMutation(
-        `${source}\n${source.replace('dispatch(job)', 'second(job)')}`,
-      ),
-    ).toThrow('ambiguous actual dispatch-signal')
+    ])
+      expect(() =>
+        gaDetachedDispatchSignalMutation(`${changed}\n${sender}`),
+      ).toThrow('Missing')
+    expect(() => gaDetachedDispatchSignalMutation(transport)).toThrow(
+      'unchanged raw sender',
+    )
+  })
+
+  it('shows the old global matcher throws on both measured packed bindings', () => {
+    const oldGlobalMatcher = (source: string) => {
+      const tree = createSourceFile(
+        'packed-server.js',
+        source,
+        ScriptTarget.ESNext,
+        true,
+        ScriptKind.JS,
+      )
+      const aliases = new Set(['observeRawSenderSignal'])
+      const observations: Node[] = []
+      const walk = (node: Node, visit: (node: Node) => void) => {
+        visit(node)
+        forEachChild(node, (child) => walk(child, visit))
+      }
+      // The former selector collected every observer-alias signal call across
+      // the bundle and required exactly one, even across unrelated functions.
+      // It refused this fixture before checking the dispatch relationship.
+      walk(tree, (node) => {
+        if (
+          isVariableDeclaration(node) &&
+          isIdentifier(node.name) &&
+          node.initializer &&
+          isPropertyAccessExpression(node.initializer) &&
+          node.initializer.name.text === 'observeRawSenderSignal'
+        )
+          aliases.add(node.name.text)
+      })
+      walk(tree, (node) => {
+        if (!isCallExpression(node)) return
+        const callee = node.expression
+        const name = isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : isIdentifier(callee)
+            ? callee.text
+            : ''
+        const argument = node.arguments[0]
+        if (
+          aliases.has(name) &&
+          node.arguments.length === 1 &&
+          argument &&
+          isPropertyAccessExpression(argument) &&
+          argument.name.text === 'signal' &&
+          isIdentifier(argument.expression) &&
+          isExpressionStatement(node.parent)
+        )
+          observations.push(node.parent)
+      })
+      if (observations.length !== 1)
+        throw new Error(
+          'Missing or ambiguous actual dispatch-signal observation binding',
+        )
+      return observations[0]!.getStart(tree)
+    }
+    expect(() => oldGlobalMatcher(packed)).toThrow('ambiguous')
+    expect(() => oldGlobalMatcher(transport)).not.toThrow()
+  })
+
+  it('rejects cancellation attribution when the unrelated packed sender is targeted', async () => {
+    const attribute = async (source: string) => {
+      let observed: AbortSignal | undefined
+      let dispatched: AbortSignal | undefined
+      const create = new Function(
+        'fetchWithAgyCliTransport',
+        'GA_TRANSPORT_IDLE_TIMEOUT_MS',
+        'GA_RAW_IDLE_TIMEOUT_MS',
+        'GA_STREAM_PATH',
+        `${source}; return gaEngineCollaborators;`,
+      )
+      const engine = create(
+        (_url: string, _init: unknown, options: { signal: AbortSignal }) => {
+          dispatched = options.signal
+        },
+        60_000,
+        60_000,
+        '/streamGenerateContent',
+      )
+      const original = new AbortController()
+      engine({
+        overrides: {
+          observeRawSenderSignal: (signal: AbortSignal) => {
+            observed = signal
+          },
+        },
+      }).transport(
+        'https://example.invalid',
+        { method: 'POST' },
+        { signal: original.signal },
+      )
+      original.abort()
+      expect(dispatched).toBe(observed)
+      // Only signal attribution is simulated here. runGaDetachedBindingControl
+      // separately measures the real native sender's signal and peer closure
+      // before closing its fixture.
+      const assertions = [
+        {
+          name: 'ga.raw-cancel.sender-signal-aborted' as const,
+          passed: observed?.aborted === true,
+          observedAt: null,
+        },
+        {
+          name: 'ga.raw-cancel.peer-closed-before-teardown' as const,
+          passed: false,
+          observedAt: null,
+        },
+      ]
+      assertGaRawBindingControl(assertions, {
+        name: 'ga.raw-cancel.uncancelled-request-completes',
+        completed: true,
+        primaryRequests: 1,
+        infrastructureFailures: [],
+      })
+    }
+    await attribute(gaDetachedDispatchSignalMutation(packed).source)
+    const wrongTarget = `${transport}\n${sender.replace('observe(transportOptions.signal);', 'transportOptions.signal = new AbortController().signal; // NON-VACUITY BREAK: unrelated sender\nobserve(transportOptions.signal);')}`
+    await expect(attribute(wrongTarget)).rejects.toThrow(
+      'both required mechanisms',
+    )
   })
 
   it('removes only its own passive signal listener at teardown', () => {
