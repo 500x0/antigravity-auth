@@ -3,7 +3,6 @@ import { join, resolve } from 'node:path'
 import {
   ANTIGRAVITY_PROVIDER_ID,
   getPiAntigravityVaultDir,
-  getPiConfigDir,
   loadCommonAuthClaustrum,
   loadCommonAuthFs,
   loadCommonAuthPiSlot,
@@ -34,18 +33,24 @@ import {
 
 const PI_PLACEHOLDER_KEY = 'antigravity-vault-custody'
 
-function nativeAuthPath(host: SetupHost): string {
+function nativeAuthPath(
+  host: SetupHost,
+  context: SetupCallbackContext,
+): string {
   return host === 'opencode'
     ? nativeOpenCodeAuthPath()
-    : join(getPiConfigDir(), 'auth.json')
+    : join(context.piAgentDir, 'auth.json')
 }
 
 function provider(host: SetupHost): string {
   return host === 'opencode' ? OPENCODE_VAULT_PROVIDER : ANTIGRAVITY_PROVIDER_ID
 }
 
-async function nativeAuth(host: SetupHost): Promise<Record<string, unknown>> {
-  const path = nativeAuthPath(host)
+async function nativeAuth(
+  host: SetupHost,
+  context: SetupCallbackContext,
+): Promise<Record<string, unknown>> {
+  const path = nativeAuthPath(host, context)
   try {
     const info = await lstat(path)
     if (!info.isFile() || info.nlink !== 1)
@@ -67,14 +72,15 @@ export async function assertSetupHostsStopped(): Promise<void> {
 async function writeNativeSlot(
   host: SetupHost,
   slot: unknown,
+  context: SetupCallbackContext,
   expectedAuthority: 'local' | 'vault' = 'local',
 ): Promise<void> {
-  const before = await nativeAuth(host)
+  const before = await nativeAuth(host, context)
   const key = provider(host)
   if (JSON.stringify(before[key]) === JSON.stringify(slot)) return
   const fs = await loadCommonAuthFs()
   await fs.writeJsonAtomic(
-    nativeAuthPath(host),
+    nativeAuthPath(host, context),
     { ...before, [key]: slot },
     {
       beforeRename: async () => {
@@ -93,7 +99,10 @@ async function writeNativeSlot(
           throw new Error(
             'Vault enrollment changed during setup; native auth was not replaced.',
           )
-        if (JSON.stringify(await nativeAuth(host)) !== JSON.stringify(before))
+        if (
+          JSON.stringify(await nativeAuth(host, context)) !==
+          JSON.stringify(before)
+        )
           throw new Error(
             'Native auth changed during setup; rerun with hosts stopped.',
           )
@@ -105,13 +114,18 @@ async function writeNativeSlot(
 /** Pi stores its local login in auth.json, not OpenCode's account pool. */
 export async function persistPiSetupLogin(
   result: AntigravityTokenExchangeSuccess,
+  context: SetupCallbackContext,
 ): Promise<void> {
-  await writeNativeSlot('pi', {
-    type: 'oauth',
-    refresh: result.refresh,
-    access: result.access,
-    expires: result.expires,
-  })
+  await writeNativeSlot(
+    'pi',
+    {
+      type: 'oauth',
+      refresh: result.refresh,
+      access: result.access,
+      expires: result.expires,
+    },
+    context,
+  )
 }
 
 export async function createSetupPlugin(
@@ -150,7 +164,7 @@ export async function createSetupPlugin(
     if (host === 'opencode' && context.opencodeGeneration === '2') return
     claustrum.assertHostSlotMatchesMode({
       mode: 'local',
-      auth: (await nativeAuth(host))[provider(host)],
+      auth: (await nativeAuth(host, context))[provider(host)],
       provider: provider(host),
     })
     if (host === 'pi') {
@@ -158,7 +172,7 @@ export async function createSetupPlugin(
       if (
         (
           await openPiSlot({
-            authPath: nativeAuthPath(host),
+            authPath: nativeAuthPath(host, context),
             stashPath: join(piDir, 'google-login-stash.json'),
             provider: ANTIGRAVITY_PROVIDER_ID,
             placeholderKey: PI_PLACEHOLDER_KEY,
@@ -196,13 +210,13 @@ export async function createSetupPlugin(
         ) {
           claustrum.assertHostSlotMatchesMode({
             mode: 'custody',
-            auth: (await nativeAuth(selected))[provider(selected)],
+            auth: (await nativeAuth(selected, context))[provider(selected)],
             provider: provider(selected),
           })
         } else if (selected === 'pi') {
           const { openPiSlot } = await loadCommonAuthPiSlot()
           const inspection = await openPiSlot({
-            authPath: nativeAuthPath('pi'),
+            authPath: nativeAuthPath('pi', context),
             stashPath: join(piDir, 'google-login-stash.json'),
             provider: ANTIGRAVITY_PROVIDER_ID,
             placeholderKey: PI_PLACEHOLDER_KEY,
@@ -226,7 +240,7 @@ export async function createSetupPlugin(
       // The OpenCode 2 host login creates its Google integration connection.
       // A standalone OAuth flow here cannot create it and would require a second login.
       if (host === 'opencode' && context.opencodeGeneration === '2') return
-      const slot = (await nativeAuth(host))[provider(host)]
+      const slot = (await nativeAuth(host, context))[provider(host)]
       const source =
         host === 'opencode'
           ? await deps.accountStore.read(deps.accountStore.legacyPath())
@@ -252,16 +266,20 @@ export async function createSetupPlugin(
           claustrum.classifyHostSlot(slot, provider(host)) !== 'login'
         ) {
           const account = accounts[0]!
-          await writeNativeSlot(host, {
-            type: 'oauth',
-            access: '',
-            expires: 0,
-            refresh: [
-              account.refreshToken,
-              account.projectId ?? '',
-              account.managedProjectId ?? '',
-            ].join('|'),
-          })
+          await writeNativeSlot(
+            host,
+            {
+              type: 'oauth',
+              access: '',
+              expires: 0,
+              refresh: [
+                account.refreshToken,
+                account.projectId ?? '',
+                account.managedProjectId ?? '',
+              ].join('|'),
+            },
+            context,
+          )
         }
         return
       }
@@ -274,6 +292,7 @@ export async function createSetupPlugin(
         },
         deps.openBrowser,
         host,
+        context,
       )
       if (host === 'opencode') openCodeLogin = result
     },
@@ -293,12 +312,16 @@ export async function createSetupPlugin(
           context.opencodeGeneration !== '2' &&
           openCodeLogin
         )
-          await writeNativeSlot(host, {
-            type: 'oauth',
-            refresh: openCodeLogin.refresh,
-            access: openCodeLogin.access,
-            expires: openCodeLogin.expires,
-          })
+          await writeNativeSlot(
+            host,
+            {
+              type: 'oauth',
+              refresh: openCodeLogin.refresh,
+              access: openCodeLogin.access,
+              expires: openCodeLogin.expires,
+            },
+            context,
+          )
         if (needsOpenCode2) nativeNextStep(OPENCODE2_POOL_AUTH_LABEL)
         return
       }
@@ -309,7 +332,7 @@ export async function createSetupPlugin(
           nativeNextStep(OPENCODE2_VAULT_AUTH_LABEL)
           return
         }
-        const slot = (await nativeAuth(host))[provider(host)]
+        const slot = (await nativeAuth(host, context))[provider(host)]
         claustrum.assertHostSlotMatchesMode({
           mode: 'custody',
           auth: slot,
@@ -318,6 +341,7 @@ export async function createSetupPlugin(
         await writeNativeSlot(
           host,
           claustrum.custodyPlaceholder(provider(host)),
+          context,
           'vault',
         )
         if (needsOpenCode2) nativeNextStep(OPENCODE2_VAULT_AUTH_LABEL)
@@ -327,7 +351,7 @@ export async function createSetupPlugin(
         const { openPiSlot } = await loadCommonAuthPiSlot()
         await assertSetupHostsStopped()
         await openPiSlot({
-          authPath: nativeAuthPath(host),
+          authPath: nativeAuthPath(host, context),
           stashPath: join(piDir, 'google-login-stash.json'),
           provider: ANTIGRAVITY_PROVIDER_ID,
           placeholderKey: PI_PLACEHOLDER_KEY,
@@ -389,9 +413,5 @@ export async function runPluginSetup(
     migrateOpenCode,
     argv.includes('--login'),
   )
-  await runSetup(plugin, argv, {
-    ...io,
-    // The adapters' existing Pi resolver owns enrollment and the native auth path.
-    env: { ...(io.env ?? process.env), PI_CODING_AGENT_DIR: getPiConfigDir() },
-  })
+  await runSetup(plugin, argv, io)
 }

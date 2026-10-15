@@ -58,10 +58,13 @@ const onWarning = (warning) => {
     console.error(warning.stack ?? `${warning.name}: ${warning.message}`)
   }
 }
-const authPath = join(root, 'pi', 'auth.json')
+const nativeDir = join(root, 'pi-native')
+const extensionDir = join(root, 'pi-extension')
+const authPath = join(nativeDir, 'auth.json')
+const decoyAuthPath = join(extensionDir, 'auth.json')
 const stashPath = join(
   root,
-  'pi',
+  'pi-extension',
   'antigravity-auth-vault',
   'google-login-stash.json',
 )
@@ -79,9 +82,9 @@ const env = {
   XDG_CACHE_HOME: join(root, 'cache'),
   OPENCODE_CONFIG_DIR: join(root, 'config', 'opencode'),
   OPENCODE_DB: join(root, 'isolated.db'),
-  PI_AGENT_DIR: join(root, 'pi'),
-  PI_CODING_AGENT_DIR: join(root, 'pi'),
-  PI_ANTIGRAVITY_AUTH_FILE: join(root, 'pi', 'antigravity-accounts.json'),
+  PI_AGENT_DIR: extensionDir,
+  PI_CODING_AGENT_DIR: nativeDir,
+  PI_ANTIGRAVITY_AUTH_FILE: join(extensionDir, 'antigravity-accounts.json'),
   SUBC_CONNECTION_FILE: join(root, 'absent-connection.json'),
   CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-connection.json'),
 }
@@ -150,7 +153,7 @@ try {
       .digest('hex')
   }
   const expectedArchive =
-    'd635d2136348796a723841c0b91c5a2ba9ad85bdc006b7bfdeb47109d068db90'
+    '989d981064154136463a1f270063676b748f2f46daa5974a9f621e620e56c0af'
   for (const receiptPath of [
     'packages/core/dist/common-auth-embedded/source-output.json',
     'packages/opencode/dist/src/common-auth-embedded/source-output.json',
@@ -213,7 +216,7 @@ try {
   }
   const { loadCommonAuthFs, loadCommonAuthPiSlot, loadCommonAuthClaustrum } =
     await import('../../packages/core/dist/index.js')
-  const { assertSetupHostsStopped } = await import(
+  const { assertSetupHostsStopped, createSetupPlugin } = await import(
     '../../packages/opencode/dist/src/setup.js'
   )
   const fs = await loadCommonAuthFs()
@@ -227,6 +230,25 @@ try {
       expires: 1,
     },
   })
+  const { createDefaultCliDependencies } = await import(
+    '../../packages/opencode/dist/src/cli.js'
+  )
+  const deps = createDefaultCliDependencies()
+  deps.performLogin = async () => {
+    throw new Error('This proof must not start OAuth')
+  }
+  const plugin = await createSetupPlugin(deps, async () => 0)
+  await fs.writeJsonAtomic(decoyAuthPath, {
+    google: {
+      type: 'oauth',
+      refresh: 'synthetic-extension-decoy',
+      access: '',
+      expires: 0,
+    },
+  })
+  const decoyBytes = await readFile(decoyAuthPath)
+  const decoyDacl = readTokenDacl(decoyAuthPath)
+  const decoyParentDacl = readTokenDacl(extensionDir)
   const slot = openPiSlot({
     authPath,
     stashPath,
@@ -263,6 +285,7 @@ try {
   await writeFile(join(bin, 'ck.cmd'), '@echo off\r\necho 1.0.0\r\n')
   env.PATH = `${bin};${previous.PATH ?? ''}`
   process.env.PATH = env.PATH
+  const beforePreview = await snapshotFiles()
   const preview = spawnSync(
     process.execPath,
     [
@@ -278,6 +301,10 @@ try {
   assert.equal(preview.error, undefined)
   assert.equal(preview.status, 0, preview.stderr)
   assert.match(preview.stdout, /Pi: found/)
+  assert.ok(preview.stdout.includes(nativeDir))
+  assert.deepEqual(await snapshotFiles(), beforePreview)
+  assert.deepEqual(readTokenDacl(decoyAuthPath), decoyDacl)
+  assert.equal(existsSync(`${decoyAuthPath}.lock`), false)
   assert.match(preview.stdout, /Would run .*pi\.cmd install/)
   for (let index = 0; index < paths.length; index++) {
     assert.deepEqual(await readFile(paths[index]), bytes[index])
@@ -296,6 +323,15 @@ try {
   // without replacing emitWarning.
   process.on('warning', onWarning)
   await assertSetupHostsStopped()
+  await assert.rejects(
+    plugin.beforeSignIn('pi', {
+      hosts: ['pi'],
+      opencodeGeneration: '2',
+      mode: 'local',
+      piAgentDir: nativeDir,
+    }),
+    /vault marker/,
+  )
   assert.deepEqual(await slot.inspect(), {
     slot: 'placeholder',
     stash: 'valid',
@@ -340,12 +376,6 @@ try {
     'both ordinary PrivateFileMigration warnings remained surfaced',
   )
 
-  const { createDefaultCliDependencies } = await import(
-    '../../packages/opencode/dist/src/cli.js'
-  )
-  const { createSetupPlugin } = await import(
-    '../../packages/opencode/dist/src/setup.js'
-  )
   const { runSetup } = await import(
     '../../packages/opencode/dist/src/common-auth-embedded/setup/index.js'
   )
@@ -359,11 +389,6 @@ try {
   })
   const foreign = await readFile(authPath)
   const stashBefore = await readFile(stashPath)
-  const deps = createDefaultCliDependencies()
-  deps.performLogin = async () => {
-    throw new Error('This proof must not start OAuth')
-  }
-  const plugin = await createSetupPlugin(deps, async () => 0)
   plugin.vault.connectionFile = join(root, 'synthetic-connection.json')
   await writeFile(plugin.vault.connectionFile, '{}')
   let ceremonies = 0
@@ -409,6 +434,7 @@ try {
   const beforeMissing = await snapshotFiles()
   await plugin.beforeSignIn('opencode', {
     hosts: ['opencode'],
+    piAgentDir: nativeDir,
     opencodeGeneration: '2',
     mode: 'local',
   })
@@ -449,6 +475,7 @@ try {
   await assert.rejects(
     plugin.beforeSignIn('opencode', {
       hosts: ['opencode'],
+      piAgentDir: nativeDir,
       opencodeGeneration: '2',
       mode: 'local',
     }),
@@ -490,6 +517,13 @@ try {
     weak: weak.map(redactDacl),
     repaired: repairedDescriptors.map(redactDacl),
   }
+  assert.deepEqual(await readFile(decoyAuthPath), decoyBytes)
+  assert.deepEqual(readTokenDacl(decoyAuthPath), decoyDacl)
+  assert.deepEqual(readTokenDacl(extensionDir), decoyParentDacl)
+  assert.equal(existsSync(`${decoyAuthPath}.lock`), false)
+  result.checks.push(
+    'distinct extension auth decoy bytes, DACL and parent DACL remained unchanged while native auth controls executed',
+  )
   result.nativeWindowsQualified = true
   result.warnings = warnings.map((warning) => ({
     name: warning.name,

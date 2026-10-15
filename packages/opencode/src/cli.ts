@@ -20,7 +20,11 @@ import {
   refreshAntigravityToken,
 } from '@cortexkit/antigravity-auth-core'
 import { authorizeAntigravity, exchangeAntigravity } from './antigravity/oauth'
-import type { SetupHost, SetupIO } from './common-auth-embedded/setup/index.js'
+import type {
+  SetupCallbackContext,
+  SetupHost,
+  SetupIO,
+} from './common-auth-embedded/setup/index.js'
 import {
   type AntigravityTokenExchangeSuccess,
   type OAuthLoginRequest,
@@ -50,6 +54,7 @@ export interface CliDependencies {
     request: OAuthLoginRequest,
     openBrowser: (url: string) => Promise<void>,
     host?: SetupHost,
+    context?: SetupCallbackContext,
   ): Promise<AntigravityTokenExchangeSuccess>
   loadAccounts(): Promise<AccountStorageV4 | null>
   getQuota(
@@ -453,15 +458,19 @@ export function createDefaultCliDependencies(): CliDependencies {
           process.env.SSH_TTY ||
           process.env.OPENCODE_HEADLESS,
       ),
-    performLogin: async (request, openBrowser, host) =>
-      performOAuthLogin(request, {
+    performLogin: async (request, openBrowser, host, context) => {
+      if (host === 'pi' && !context)
+        throw new Error(
+          'Pi setup requires its detected native agent directory.',
+        )
+      return performOAuthLogin(request, {
         authorize: authorizeAntigravity,
         exchange: exchangeAntigravity,
         startListener: startOAuthListener,
         openBrowser,
         upsert: async (result) => {
           if (host === 'pi') {
-            await persistPiSetupLogin(result)
+            await persistPiSetupLogin(result, context!)
             return
           }
           if (host === 'opencode') await assertSetupHostsStopped()
@@ -470,7 +479,8 @@ export function createDefaultCliDependencies(): CliDependencies {
             request.startFresh && request.accounts.length === 0,
           )
         },
-      }),
+      })
+    },
     loadAccounts,
     getQuota: (accounts, options) =>
       checkAccountsQuotaStandalone(accounts, options),

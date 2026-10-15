@@ -57,7 +57,7 @@ function profile(temporary = tmpdir()) {
     OPENCODE_CONFIG_DIR: config,
     OPENCODE_DB: join(root, 'opencode-isolated.db'),
     PI_AGENT_DIR: join(root, 'pi'),
-    PI_CODING_AGENT_DIR: join(root, 'pi'),
+    PI_CODING_AGENT_DIR: join(root, 'pi-native'),
     PI_ANTIGRAVITY_AUTH_FILE: join(root, 'pi', 'antigravity-accounts.json'),
     SUBC_CONNECTION_FILE: join(root, 'absent-connection.json'),
     CLAUSTRUM_SUBC_CONNECTION: join(root, 'absent-connection.json'),
@@ -361,6 +361,9 @@ describe('real setup CLI entry', () => {
 describe('setup plugin callbacks', () => {
   const context = {
     hosts: ['opencode', 'pi'],
+    get piAgentDir() {
+      return process.env.PI_CODING_AGENT_DIR!
+    },
     opencodeGeneration: '1',
     mode: 'local',
   } as const
@@ -418,12 +421,13 @@ describe('setup plugin callbacks', () => {
     '1',
     'both',
   ] as const)('generation %s fresh local sign-in reuses OAuth and activates only the selected native host slot', async (opencodeGeneration) => {
+    const p = profile()
     const context = {
       hosts: ['opencode', 'pi'],
+      piAgentDir: p.env.PI_CODING_AGENT_DIR,
       opencodeGeneration,
       mode: 'local',
     } as const
-    const p = profile()
     Object.assign(process.env, p.env)
     const deps = createDefaultCliDependencies()
     const login = {
@@ -434,10 +438,12 @@ describe('setup plugin callbacks', () => {
       projectId: 'synthetic-project',
       email: 'setup-fixture@example.test',
     }
-    deps.performLogin = mock(async (_request, _openBrowser, host) => {
-      if (host === 'pi') await persistPiSetupLogin(login)
-      return login
-    })
+    deps.performLogin = mock(
+      async (_request, _openBrowser, host, callbackContext) => {
+        if (host === 'pi') await persistPiSetupLogin(login, callbackContext!)
+        return login
+      },
+    )
     deps.accountStore.read = async () => ({ kind: 'uninitialized' })
     const migrate = mock(async () => 0)
     const plugin = await createSetupPlugin(deps, migrate)
@@ -455,6 +461,7 @@ describe('setup plugin callbacks', () => {
       expect.objectContaining({ startFresh: false, accounts: [] }),
       deps.openBrowser,
       'opencode',
+      context,
     )
     await plugin.beforeRegister?.('opencode', 'local', context)
     const opencodeAuth = JSON.parse(
@@ -466,10 +473,11 @@ describe('setup plugin callbacks', () => {
       expect.objectContaining({ startFresh: false, accounts: [] }),
       deps.openBrowser,
       'pi',
+      context,
     )
     await plugin.beforeRegister?.('pi', 'local', context)
     const piAuth = JSON.parse(
-      readFileSync(join(p.env.PI_AGENT_DIR, 'auth.json'), 'utf8'),
+      readFileSync(join(p.env.PI_CODING_AGENT_DIR, 'auth.json'), 'utf8'),
     )
     expect(piAuth.google.refresh).toBe(login.refresh)
     expect(piAuth['google-antigravity']).toBeUndefined()
@@ -512,7 +520,12 @@ describe('setup plugin callbacks', () => {
         (name) => [
           name,
           'opencode',
-          { hosts: ['opencode'], opencodeGeneration, mode: 'local' },
+          {
+            hosts: ['opencode'],
+            piAgentDir: p.env.PI_CODING_AGENT_DIR,
+            opencodeGeneration,
+            mode: 'local',
+          },
         ],
       ),
     )
@@ -532,6 +545,7 @@ describe('setup plugin callbacks', () => {
       expect(host).toBe('opencode')
       expect(context).toEqual({
         hosts: ['opencode'],
+        piAgentDir: p.env.PI_CODING_AGENT_DIR,
         opencodeGeneration,
         mode: 'local',
       })
@@ -570,6 +584,7 @@ describe('setup plugin callbacks', () => {
       expect(host).toBe('opencode')
       expect(context).toEqual({
         hosts: ['opencode', 'pi'],
+        piAgentDir: p.env.PI_CODING_AGENT_DIR,
         opencodeGeneration: '2',
         mode: 'local',
       })
@@ -594,15 +609,18 @@ describe('setup plugin callbacks', () => {
     fakeHostCommands(p)
     Object.assign(process.env, p.env)
     const local = seedLocal(p)
-    await persistPiSetupLogin({
-      type: 'success',
-      refresh: 'synthetic-pi-original',
-      access: 'synthetic-pi-access',
-      expires: 1,
-      projectId: 'synthetic-project',
-    })
+    await persistPiSetupLogin(
+      {
+        type: 'success',
+        refresh: 'synthetic-pi-original',
+        access: 'synthetic-pi-access',
+        expires: 1,
+        projectId: 'synthetic-project',
+      },
+      context,
+    )
     const { openPiSlot } = await loadCommonAuthPiSlot()
-    const authPath = join(p.env.PI_AGENT_DIR, 'auth.json')
+    const authPath = join(p.env.PI_CODING_AGENT_DIR, 'auth.json')
     const stashPath = join(
       p.env.PI_AGENT_DIR,
       'antigravity-auth-vault',
@@ -650,15 +668,18 @@ describe('setup plugin callbacks', () => {
     Object.assign(process.env, p.env)
     const local = seedLocal(p)
     writeFileSync(local.authPath, '{not V1 auth')
-    await persistPiSetupLogin({
-      type: 'success',
-      refresh: 'synthetic-pi-original',
-      access: 'synthetic-pi-access',
-      expires: 1,
-      projectId: 'synthetic-project',
-    })
+    await persistPiSetupLogin(
+      {
+        type: 'success',
+        refresh: 'synthetic-pi-original',
+        access: 'synthetic-pi-access',
+        expires: 1,
+        projectId: 'synthetic-project',
+      },
+      context,
+    )
     const { openPiSlot } = await loadCommonAuthPiSlot()
-    const authPath = join(p.env.PI_AGENT_DIR, 'auth.json')
+    const authPath = join(p.env.PI_CODING_AGENT_DIR, 'auth.json')
     const stashPath = join(
       p.env.PI_AGENT_DIR,
       'antigravity-auth-vault',
@@ -722,7 +743,9 @@ describe('setup plugin callbacks', () => {
     const p = profile()
     fakeHostCommands(p)
     mkdirSync(p.env.PI_AGENT_DIR, { mode: 0o700 })
-    const authPath = join(p.env.PI_AGENT_DIR, 'auth.json')
+    mkdirSync(p.env.PI_CODING_AGENT_DIR, { mode: 0o700 })
+    writeFileSync(join(p.env.PI_AGENT_DIR, 'auth.json'), 'extension decoy')
+    const authPath = join(p.env.PI_CODING_AGENT_DIR, 'auth.json')
     writeFileSync(authPath, '{invalid native auth')
     writeFileSync(`${authPath}.lock`, 'owned inspection obstacle', {
       mode: 0o600,
@@ -740,6 +763,7 @@ describe('setup plugin callbacks', () => {
       stderr: '',
     })
     expect(result.stdout).toContain('Pi: found')
+    expect(result.stdout).toContain(p.env.PI_CODING_AGENT_DIR)
     expect(result.stdout).toContain('for opencode, pi (local)')
     expect(snapshot(p.root)).toEqual(before)
   })
@@ -757,6 +781,7 @@ describe('setup plugin callbacks', () => {
       await expect(
         plugin.beforeSignIn?.('opencode', {
           hosts: ['opencode'],
+          piAgentDir: p.env.PI_CODING_AGENT_DIR,
           opencodeGeneration,
           mode: 'claustrum',
         }),
@@ -767,6 +792,7 @@ describe('setup plugin callbacks', () => {
     const invalid = snapshot(p.root)
     await plugin.beforeSignIn?.('opencode', {
       hosts: ['opencode'],
+      piAgentDir: p.env.PI_CODING_AGENT_DIR,
       opencodeGeneration: '2',
       mode: 'claustrum',
     })
@@ -794,6 +820,7 @@ describe('setup plugin callbacks', () => {
     const plugin = await createSetupPlugin(deps, migrate, true)
     const context = {
       hosts: ['opencode'],
+      piAgentDir: p.env.PI_CODING_AGENT_DIR,
       opencodeGeneration: '2',
       mode: 'local',
     } as const
@@ -823,15 +850,18 @@ describe('setup plugin callbacks', () => {
       expires: 123,
       projectId: 'synthetic-project',
     }
-    deps.performLogin = mock(async (_request, _browser, host) => {
-      expect(host).toBe('pi')
-      await persistPiSetupLogin(login)
-      return login
-    })
+    deps.performLogin = mock(
+      async (_request, _browser, host, callbackContext) => {
+        expect(host).toBe('pi')
+        await persistPiSetupLogin(login, callbackContext!)
+        return login
+      },
+    )
     const migrate = mock(async () => 0)
     const plugin = await createSetupPlugin(deps, migrate)
     const context = {
       hosts: ['pi'],
+      piAgentDir: p.env.PI_CODING_AGENT_DIR,
       opencodeGeneration: '2',
       mode: 'local',
     } as const
@@ -841,8 +871,9 @@ describe('setup plugin callbacks', () => {
     expect(deps.performLogin).toHaveBeenCalledTimes(1)
     expect(migrate).not.toHaveBeenCalled()
     expect(
-      JSON.parse(readFileSync(join(p.env.PI_AGENT_DIR, 'auth.json'), 'utf8'))
-        .google.refresh,
+      JSON.parse(
+        readFileSync(join(p.env.PI_CODING_AGENT_DIR, 'auth.json'), 'utf8'),
+      ).google.refresh,
     ).toBe(login.refresh)
     expect(existsSync(join(p.env.XDG_DATA_HOME, 'opencode', 'auth.json'))).toBe(
       false,
@@ -868,6 +899,7 @@ describe('setup plugin callbacks', () => {
     const plugin = await createSetupPlugin(deps, migrate)
     const context = {
       hosts: ['opencode'],
+      piAgentDir: p.env.PI_CODING_AGENT_DIR,
       opencodeGeneration: '2',
       mode: 'local',
     } as const
