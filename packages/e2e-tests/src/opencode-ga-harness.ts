@@ -32,17 +32,28 @@ import { pathToFileURL } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 import { gunzipSync } from 'node:zlib'
 import {
+  type CallExpression,
   createSourceFile,
   forEachChild,
+  isBinaryExpression,
   isCallExpression,
+  isExportAssignment,
   isExpressionStatement,
+  isFunctionDeclaration,
   isFunctionLike,
   isIdentifier,
+  isMethodDeclaration,
+  isNewExpression,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isSpreadAssignment,
+  isStringLiteralLike,
   isVariableDeclaration,
   type Node,
   ScriptKind,
   ScriptTarget,
+  SyntaxKind,
 } from 'typescript'
 import { getAgyModelEnum } from '../../core/src/agy-request-metadata.ts'
 import { getPublicModelDefinitions } from '../../core/src/model-registry.ts'
@@ -1128,6 +1139,7 @@ export function writeGaWrapper(input: {
   mockUrl: string
   rawSender: boolean
   duplicateCleanup?: boolean
+  recordPreparedOutputCap?: boolean
 }): string {
   const { paths, consumerPrefix, packedServerEntry, mockUrl, rawSender } = input
   requireCondition(
@@ -1222,7 +1234,20 @@ const overrides: GaPluginOverrides = {
 }
 const plugin = createGaAntigravityPlugin(overrides)
   log('setup', { contextKeys: Object.keys(context), rpcKind: typeof context.rpc, rpcRegisterKind: typeof context.rpc?.register })
-  const cleanup = await plugin.setup(context)
+  // Register before the plugin so the cap comes from the host-prepared Google
+  // request, not from the transformed Antigravity envelope being asserted.
+  const preparedWire = ${
+    input.recordPreparedOutputCap
+      ? `await context.session.hook('http.request', async (event) => {
+    if (event.kind !== 'primary') return
+    const body = await event.request.clone().json()
+    if (!event.request.url.startsWith(transportMock + '/direct/v1/') || !Array.isArray(body.contents) || body.request !== undefined) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: expected the host-prepared Google body before rewrite')
+    log('native.prepared-output-cap', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, maxOutputTokens: body.generationConfig?.maxOutputTokens ?? null })
+  }, { providerID: 'google' })`
+      : 'undefined'
+  }
+  let cleanup: Awaited<ReturnType<typeof plugin.setup>>
+  try { cleanup = await plugin.setup(context) } catch (error) { await preparedWire?.dispose(); throw error }
   if (typeof cleanup !== 'function') throw new Error('GA setup did not return initialized Cleanup')
   log('initialized', { runtime: { name: 'Bun', version: Bun.version, revision: Bun.revision } })
   try {
@@ -1230,6 +1255,7 @@ const plugin = createGaAntigravityPlugin(overrides)
     log('native.request', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, url: event.request.url, method: event.request.method, headerNames: Array.from(event.request.headers.keys()) })
   }, { providerID: 'google' })
   const response = await context.session.hook('http.response', async (event) => {
+    if (event.kind === 'title') log('native.title.response', { status: event.response.status })
     if (event.response.status === 400) {
       const bytes = Buffer.from(await event.response.clone().arrayBuffer())
       log('native.400', { status: event.response.status, contentType: event.response.headers.get('content-type'), bytes: bytes.toString('base64'), contextErrorHeader: event.response.headers.get('x-antigravity-context-error') })
@@ -1241,14 +1267,14 @@ const plugin = createGaAntigravityPlugin(overrides)
       observerDisposed = true
       for (const [signal, observation] of observedSignals) signal.removeEventListener('abort', observation.listener)
       observedSignals.clear()
-      await response.dispose(); await wire.dispose()
+      await response.dispose(); await wire.dispose(); await preparedWire?.dispose()
     }
   }
   } catch (error) {
     observerDisposed = true
     for (const [signal, observation] of observedSignals) signal.removeEventListener('abort', observation.listener)
     observedSignals.clear()
-    try { await cleanup() } catch (rollbackError) { log('setup.rollback.failure', { message: String(rollbackError) }) }
+    try { await cleanup() } catch (rollbackError) { log('setup.rollback.failure', { message: String(rollbackError) }) } finally { await preparedWire?.dispose() }
     throw error
   }
 } }
@@ -2743,36 +2769,112 @@ export function gaDetachedDispatchSignalMutation(source: string): {
       scope,
     })
   })
-  requireCondition(
-    candidates.length === 1,
-    'Missing or ambiguous actual dispatch-signal observation binding',
-  )
-  const candidate = candidates[0]
-  requireCondition(
-    candidate,
-    'Missing actual dispatch-signal observation binding',
-  )
-  let directDispatches = 0
-  walk(candidate.scope, (node) => {
-    if (!isCallExpression(node)) return
-    const callee = node.expression
-    const name = isPropertyAccessExpression(callee)
-      ? callee.name.text
-      : isIdentifier(callee)
-        ? callee.text
-        : ''
-    if (
-      (name === 'agyTransport' || name === 'fetchWithAgyCliTransport') &&
-      node.arguments.some(
-        (argument) =>
-          isIdentifier(argument) && argument.text === candidate.options,
+  // The packed facade contains two send paths. createGaRawSender derives
+  // URL/body/options from one input; the shared engine transport instead
+  // forwards its URL/init arguments and spreads caller options into the
+  // same options object whose signal is observed before dispatch.
+  const sameScope = (scope: Node, visit: (node: Node) => void) => {
+    const descend = (node: Node) => {
+      if (node !== scope && isFunctionLike(node)) return
+      visit(node)
+      forEachChild(node, descend)
+    }
+    descend(scope)
+  }
+  const dispatches = (candidate: (typeof candidates)[number]) => {
+    const calls: CallExpression[] = []
+    sameScope(candidate.scope, (node) => {
+      if (
+        isCallExpression(node) &&
+        isIdentifier(node.expression) &&
+        node.expression.text === 'fetchWithAgyCliTransport'
       )
+        calls.push(node)
+    })
+    return calls
+  }
+  const eligible = candidates.filter((candidate) => {
+    if (
+      !isFunctionLike(candidate.scope) ||
+      candidate.scope.parameters.length !== 3
     )
-      directDispatches++
+      return false
+    const parameters = candidate.scope.parameters.map((parameter) =>
+      isIdentifier(parameter.name) ? parameter.name.text : undefined,
+    )
+    const [url, init, options] = parameters
+    if (!url || !init || !options) return false
+    let observedOptions = 0
+    sameScope(candidate.scope, (node) => {
+      if (
+        !isVariableDeclaration(node) ||
+        !isIdentifier(node.name) ||
+        node.name.text !== candidate.options ||
+        !node.initializer ||
+        !isObjectLiteralExpression(node.initializer)
+      )
+        return
+      const properties = node.initializer.properties
+      if (
+        properties.some(
+          (property) =>
+            isSpreadAssignment(property) &&
+            isIdentifier(property.expression) &&
+            property.expression.text === options,
+        ) &&
+        properties.some(
+          (property) =>
+            isPropertyAssignment(property) &&
+            isIdentifier(property.name) &&
+            property.name.text === 'idleTimeoutMs' &&
+            isBinaryExpression(property.initializer) &&
+            property.initializer.operatorToken.kind ===
+              SyntaxKind.QuestionQuestionToken &&
+            isPropertyAccessExpression(property.initializer.left) &&
+            isIdentifier(property.initializer.left.expression) &&
+            property.initializer.left.expression.text === options &&
+            property.initializer.left.name.text === 'idleTimeoutMs',
+        )
+      )
+        observedOptions++
+    })
+    const calls = dispatches(candidate)
+    const call = calls[0]
+    return (
+      observedOptions === 1 &&
+      calls.length === 1 &&
+      call &&
+      isCallExpression(call) &&
+      call.arguments.length === 3 &&
+      [url, init, candidate.options].every((name, index) => {
+        const argument = call.arguments[index]
+        return argument && isIdentifier(argument) && argument.text === name
+      })
+    )
   })
   requireCondition(
-    directDispatches === 1,
-    'Observer and unchanged agyTransport do not share one dispatch-options object',
+    eligible.length > 0,
+    'Missing actual dispatch-signal observation binding',
+  )
+  requireCondition(
+    eligible.length === 1,
+    'ambiguous actual dispatch-signal observation binding',
+  )
+  const candidate = eligible[0]!
+  const rawSenders = candidates.filter((other) => {
+    if (!isFunctionLike(other.scope) || other.scope.parameters.length !== 1)
+      return false
+    const parameter = other.scope.parameters[0]?.name
+    if (!parameter || !isIdentifier(parameter)) return false
+    const calls = dispatches(other)
+    const call = calls[0]
+    if (!call || !isCallExpression(call) || calls.length !== 1) return false
+    const options = call.arguments[2]
+    return options && isIdentifier(options) && options.text === other.options
+  })
+  requireCondition(
+    rawSenders.length === 1,
+    'Missing or ambiguous unchanged raw sender observation binding',
   )
   const position = candidate.statement.getStart(tree)
   return {
@@ -3331,6 +3433,7 @@ export async function createOpenCodeGaHarness(
       mockUrl: mock.url,
       rawSender: options.rawSender ?? false,
       duplicateCleanup: caseId === 'cleanup-idempotent',
+      recordPreparedOutputCap: caseId === 'claude-thinking',
     })
     const accountsMigrationInput = seedGaHost(
       paths,
@@ -3865,21 +3968,34 @@ export async function runGaCoreScenario(
   id: GaCaseId,
   accounts?: GaAccountRpcJoin,
 ): Promise<void> {
-  const model = publicGaModel(
-    id === 'claude-tools' ||
-      id === 'claude-thinking' ||
-      id === 'overflow-claude'
-      ? 'claude'
-      : id === 'image-permissions'
-        ? 'image'
-        : 'gemini',
-  )
+  const model =
+    id === 'claude-thinking'
+      ? 'google/antigravity-claude-sonnet-5-5#low'
+      : publicGaModel(
+          id === 'claude-tools' || id === 'overflow-claude'
+            ? 'claude'
+            : id === 'image-permissions'
+              ? 'image'
+              : 'gemini',
+        )
   if (id === 'catalog-and-titles') {
     const definitions = getPublicModelDefinitions()
     requireCondition(
-      Object.keys(definitions).length === 9,
+      JSON.stringify(Object.keys(definitions).sort()) ===
+        JSON.stringify(
+          [
+            'antigravity-gemini-4-argon',
+            'antigravity-gemini-3.5-flash',
+            'antigravity-gemini-3.1-flash-image',
+            'antigravity-gemini-3.8-flash',
+            'antigravity-claude-sonnet-5-5',
+            'antigravity-claude-opus-5-5',
+            'antigravity-gpt-oss-120b-medium',
+          ].sort(),
+        ),
       'Public catalog inventory changed without a reviewed host case update',
     )
+    configureGaOffCatalogTitle(harness)
     for (const [publicID, definition] of Object.entries(definitions)) {
       const variants = definition.variants
         ? Object.entries(definition.variants)
@@ -4100,15 +4216,37 @@ export async function runGaCoreScenario(
     )
   } else if (id === 'claude-thinking') {
     const request = assertGaWire(primary[0]!, model)
+    const thinking = record(record(request.generationConfig).thinkingConfig)
     requireCondition(
-      record(record(request.generationConfig).thinkingConfig).thinkingBudget ===
-        1024,
-      'Native Claude thinking budget changed',
+      thinking.includeThoughts === true &&
+        thinking.thinkingBudget === 0 &&
+        thinking.thinkingLevel === 'LOW' &&
+        record(JSON.parse(primary[0]!.body)).model === 'claude-sonnet-5-5-low',
+      'Native Sonnet 5.5 low thinking/model changed',
+    )
+    const prepared = harness
+      .readWrapperEvents()
+      .filter(
+        (event) =>
+          event.event === 'native.prepared-output-cap' &&
+          event.kind === 'primary',
+      )
+    requireCondition(
+      prepared.length === primary.length &&
+        prepared[0]?.model === 'antigravity-claude-sonnet-5-5',
+      'Missing independently prepared Claude output cap',
+    )
+    const cap = prepared[0]?.maxOutputTokens
+    requireCondition(
+      cap === null ||
+        (typeof cap === 'number' && Number.isSafeInteger(cap) && cap > 0),
+      'Invalid prepared Claude output cap',
     )
     requireCondition(
-      record(request.generationConfig).maxOutputTokens === 64_000 &&
+      record(request.generationConfig).maxOutputTokens ===
+        (cap === null ? 128_000 : Math.min(cap, 128_000)) &&
         request.providerOptions === undefined,
-      'Native Claude output/options changed',
+      'Native Claude output cap differs from the prepared caller cap/native 128000 limit or retained providerOptions',
     )
   } else if (id === 'capacity-fallback') {
     requireCondition(
@@ -4453,40 +4591,47 @@ export async function runGaRawTlsCase(
   return { nonce: harness.nonce, primaryBodies, nativeErrors: errors }
 }
 
+function configureGaOffCatalogTitle(harness: GaHarness): void {
+  const configPath = join(harness.paths.opencodeConfig, 'opencode.json')
+  const config = record(JSON.parse(readFileSync(configPath, 'utf8')))
+  const providers = record(config.providers)
+  const google = record(providers.google)
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      ...config,
+      agents: {
+        ...record(config.agents ?? {}),
+        title: { model: 'google/gemini-flash-lite-latest' },
+      },
+      providers: {
+        ...providers,
+        google: {
+          ...google,
+          models: {
+            ...record(google.models ?? {}),
+            'gemini-flash-lite-latest': { name: 'Off-catalog title fixture' },
+          },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  )
+}
+
 export async function runGaTitleScenario(
   harness: GaHarness,
   id: 'title-off-catalog' | 'title-primary-fallback' | 'title-overflow',
 ): Promise<void> {
-  if (id === 'title-off-catalog') {
-    const configPath = join(harness.paths.opencodeConfig, 'opencode.json')
-    const config = record(JSON.parse(readFileSync(configPath, 'utf8')))
-    const providers = record(config.providers)
-    const google = record(providers.google)
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        ...config,
-        agents: { title: { model: 'google/gemini-flash-lite-latest' } },
-        providers: {
-          ...providers,
-          google: {
-            ...google,
-            models: {
-              'gemini-flash-lite-latest': { name: 'Off-catalog title fixture' },
-            },
-          },
-        },
-      }),
-      { mode: 0o600 },
-    )
-  }
-  const session = await harness.native.create(
-    harness.paths.project,
-    publicGaModel(),
-  )
+  configureGaOffCatalogTitle(harness)
+  const model =
+    id === 'title-off-catalog'
+      ? publicGaModel()
+      : 'google/antigravity-gemini-3.8-flash#medium'
+  const session = await harness.native.create(harness.paths.project, model)
   const before = await harness.native.get(session)
   assertGaSuccess(
-    await harness.run(publicGaModel(), undefined, false, session),
+    await harness.run(model, undefined, false, session),
     harness.nonce,
   )
   await harness.native.wait(session)
@@ -4499,26 +4644,48 @@ export async function runGaTitleScenario(
       (event) => event.event === 'native.request' && event.kind === 'title',
     )
   requireCondition(
-    titles.length > 0 &&
-      titles.length <= 2 &&
-      titles.every(
-        (request) =>
-          record(JSON.parse(request.body)).model ===
-          'gemini-3.5-flash-extra-low',
+    JSON.stringify(
+      titles.map((request) => record(JSON.parse(request.body)).model),
+    ) ===
+      JSON.stringify(
+        id === 'title-off-catalog'
+          ? ['gemini-3.5-flash-extra-low']
+          : ['gemini-3.5-flash-extra-low', 'gemini-3.8-flash-medium'],
       ),
     'Native titles did not use the exact resolver-derived AGY title wire model',
   )
-  if (id === 'title-off-catalog')
-    requireCondition(
-      observed.some((event) => event.model === 'gemini-flash-lite-latest'),
-      'Configured off-catalog title reference was not actually dispatched',
-    )
-  if (id === 'title-primary-fallback')
+  requireCondition(
+    observed[0]?.model === 'gemini-flash-lite-latest',
+    'Configured off-catalog title reference was not actually dispatched',
+  )
+  if (id !== 'title-off-catalog')
     requireCondition(
       titles.length === 2 &&
         observed.length === 2 &&
-        observed[0]?.model !== observed[1]?.model,
+        observed[1]?.model === 'antigravity-gemini-3.8-flash',
       'Actual title fallback did not use the differing primary reference',
+    )
+  const titleResponses = harness
+    .readWrapperEvents()
+    .filter((event) => event.event === 'native.title.response')
+  requireCondition(
+    JSON.stringify(titleResponses.map((event) => event.status)) ===
+      JSON.stringify(
+        id === 'title-overflow'
+          ? [400, 400]
+          : id === 'title-primary-fallback'
+            ? [400, 200]
+            : [200],
+      ),
+    'Native title response statuses changed or a failed title invented a successful response',
+  )
+  const failures = harness
+    .readWrapperEvents()
+    .filter((event) => event.event === 'native.400')
+  if (id === 'title-primary-fallback')
+    requireCondition(
+      failures.length === 1 && failures[0]?.status === 400,
+      'First title attempt did not retain its HTTP 400',
     )
   if (id === 'title-overflow') {
     const after = await harness.native.get(session)
@@ -4528,10 +4695,8 @@ export async function runGaTitleScenario(
     )
     const fixture = loadGaOverflowFixture(resolve('.'), 'gemini')
     requireCondition(
-      harness
-        .readWrapperEvents()
-        .filter((event) => event.event === 'native.400')
-        .every(
+      failures.length === 2 &&
+        failures.every(
           (event) =>
             event.status === 400 &&
             event.contentType === fixture.contentType &&
@@ -4699,15 +4864,11 @@ export async function runGaDetachedBindingControl(
   const prefix = realpathSync(
     mkdtempSync(join(out, 'detached-dispatch-consumer-')),
   )
-  cpSync('/opt/ga-consumer', prefix, { recursive: true, dereference: false })
-  const entry = join(
-    prefix,
-    'node_modules',
-    '@cortexkit',
-    'opencode-antigravity-auth',
-    'dist',
-    'server.js',
+  const { gaConsumerPrefix, gaInstalledServer } = await import(
+    './opencode-ga-host-inputs.ts'
   )
+  cpSync(gaConsumerPrefix(), prefix, { recursive: true, dereference: false })
+  const entry = gaInstalledServer(prefix, 'import')
   ownedPath(prefix, entry)
   const original = readFileSync(entry, 'utf8')
   const mutation = gaDetachedDispatchSignalMutation(original)
@@ -4778,6 +4939,106 @@ export async function runGaDetachedBindingControl(
     await unaffected?.dispose()
     throw error
   }
+}
+
+/** Check that public ./tui's setup loads the compiled GA file being inspected.
+ * This source check supplements, rather than replaces, the real PTY control.
+ */
+export function gaInstalledCompiledTui(prefix: string): string {
+  const packageRoot = join(
+    prefix,
+    'node_modules/@cortexkit/opencode-antigravity-auth',
+  )
+  const entry = join(packageRoot, 'src/tui-ga-compiled/host-ga.js')
+  ownedPath(prefix, entry)
+  requireCondition(
+    existsSync(entry) && statSync(entry).isFile(),
+    'Actual packed compiled GA arm is missing',
+  )
+  const loader = Bun.resolveSync(
+    '@cortexkit/opencode-antigravity-auth/tui',
+    prefix,
+  )
+  ownedPath(prefix, loader)
+  const tree = createSourceFile(
+    loader,
+    readFileSync(loader, 'utf8'),
+    ScriptTarget.ESNext,
+    true,
+    ScriptKind.JS,
+  )
+  const runtimeTargets: string[] = []
+  let setupCalls = 0
+  const walk = (node: Node, visit: (node: Node) => void) => {
+    visit(node)
+    forEachChild(node, (child) => walk(child, visit))
+  }
+  for (const statement of tree.statements) {
+    if (isFunctionDeclaration(statement) && statement.name?.text === 'loadGa') {
+      walk(statement, (node) => {
+        if (
+          !isCallExpression(node) ||
+          !isIdentifier(node.expression) ||
+          node.expression.text !== 'loadTui'
+        )
+          return
+        const options = node.arguments[0]
+        if (!options || !isObjectLiteralExpression(options)) return
+        for (const property of options.properties) {
+          if (
+            !isPropertyAssignment(property) ||
+            !isIdentifier(property.name) ||
+            property.name.text !== 'runtimeEntry'
+          )
+            continue
+          const value = property.initializer
+          if (
+            !isPropertyAccessExpression(value) ||
+            value.name.text !== 'href' ||
+            !isNewExpression(value.expression) ||
+            !isIdentifier(value.expression.expression) ||
+            value.expression.expression.text !== 'URL'
+          )
+            continue
+          const [target, base] = value.expression.arguments ?? []
+          if (
+            target &&
+            isStringLiteralLike(target) &&
+            base?.getText(tree) === 'import.meta.url'
+          )
+            runtimeTargets.push(resolve(dirname(loader), target.text))
+        }
+      })
+    }
+    if (
+      isExportAssignment(statement) &&
+      isObjectLiteralExpression(statement.expression)
+    ) {
+      for (const property of statement.expression.properties) {
+        if (
+          isMethodDeclaration(property) &&
+          isIdentifier(property.name) &&
+          property.name.text === 'setup'
+        ) {
+          walk(property, (node) => {
+            if (
+              isCallExpression(node) &&
+              isIdentifier(node.expression) &&
+              node.expression.text === 'loadGa'
+            )
+              setupCalls++
+          })
+        }
+      }
+    }
+  }
+  requireCondition(
+    setupCalls === 1 &&
+      runtimeTargets.length === 1 &&
+      runtimeTargets[0] === entry,
+    'Actual packed compiled GA arm disagrees with public ./tui setup runtime selection',
+  )
+  return entry
 }
 
 export async function runGaPtyScenario(
@@ -5883,12 +6144,12 @@ async function runGaRequiredControl(
     id === 'pty-second-instance-control' ||
     id === 'pty-raw-fallback-control'
   ) {
-    const entry =
-      '/opt/ga-consumer/node_modules/@cortexkit/opencode-antigravity-auth/src/tui-compiled/ga/ga/tui/host-ga.tsx'
-    requireCondition(
-      existsSync(entry),
-      'Actual packed compiled GA arm is missing',
+    const { gaConsumerPrefix, gaInstalledServer } = await import(
+      './opencode-ga-host-inputs.ts'
     )
+    const prefix = gaConsumerPrefix()
+    gaInstalledServer(prefix, 'import')
+    const entry = gaInstalledCompiledTui(prefix)
     const source = readFileSync(entry, 'utf8')
     requireCondition(
       !/from\s*['"](?:solid-js|@opentui\/)|import\s*['"]solid-js/.test(source),

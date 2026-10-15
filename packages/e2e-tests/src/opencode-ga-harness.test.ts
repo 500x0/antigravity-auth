@@ -13,6 +13,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { parseConfigFileTextToJson } from 'typescript'
+import { getAgyModelEnum } from '../../core/src/agy-request-metadata.ts'
+import { getPublicModelDefinitions } from '../../core/src/model-registry.ts'
+import { resolveAntigravityModel } from '../../core/src/transform/model-resolver.ts'
 import {
   assertMeasuredNativeJob,
   assertNativeBoundary,
@@ -32,18 +35,24 @@ import {
   assertGaPinnedHostnameMappings,
   captureGaPlaceholder,
   GA_CASE_IDS,
+  type GaHarness,
   gaAllowsDirectProvider,
   gaChildEnvironment,
   gaFreshLoginCase,
+  gaInstalledCompiledTui,
   gaNativeRequest,
   gaPlaceholderImportPolicy,
   importGaPlaceholder,
+  loadGaOverflowFixture,
   prepareGaRoot,
   refreshGaFixtureCredentials,
+  runGaCoreScenario,
+  runGaTitleScenario,
   seedGaHost,
   verifiedArchiveFiles,
   verifiedArchiveMember,
   verifyGaOwnershipConfig,
+  writeGaWrapper,
 } from './opencode-ga-harness.ts'
 import {
   assertGaFixturePins,
@@ -744,5 +753,365 @@ describe('GA ownership harness preparation (source controls, not native proof)',
     } finally {
       await server.stop(true)
     }
+  })
+})
+
+describe('GA native oracle fixtures (synthetic records, not native proof)', () => {
+  function fixture() {
+    const paths = prepareGaRoot(root())
+    seedGaHost(paths, '/owned/wrapper', 'http://127.0.0.1:1234')
+    const requests: Array<{ kind: string; body: string }> = []
+    const events: Record<string, unknown>[] = []
+    const selected: string[] = []
+    const session = { id: 'oracle-session', directory: paths.project }
+    const success = {
+      code: 0,
+      stdout: JSON.stringify({ type: 'text', text: 'GA_OK_fixture' }),
+      timedOut: false,
+      outputCapExceeded: false,
+    }
+    const harness = {
+      paths,
+      nonce: 'fixture',
+      mock: { requests },
+      readWrapperEvents: () => events,
+      native: {
+        create: async (_directory: string, model: string) => {
+          selected.push(model)
+          return session
+        },
+        get: async () => ({ title: 'Unchanged initial title' }),
+        wait: async () => {},
+      },
+      run: async (model: string) => {
+        selected.push(model)
+        return success
+      },
+    } as unknown as GaHarness
+    return { paths, requests, events, selected, harness, success }
+  }
+  function wire(model: string, cap = 128_000) {
+    const [id, variant] = model.replace('google/', '').split('#')
+    const actual = resolveAntigravityModel(
+      `${id}${variant ? `-${variant}` : ''}`,
+    ).actualModel
+    return {
+      model: actual,
+      userAgent: 'antigravity',
+      requestType: 'agent',
+      request: {
+        sessionId: 'oracle-session',
+        labels: {
+          model_enum: getAgyModelEnum(actual),
+          trajectory_id: 'oracle-trajectory',
+        },
+        generationConfig: {
+          maxOutputTokens: cap,
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: 0,
+            thinkingLevel: 'LOW',
+          },
+        },
+      },
+    }
+  }
+  it('keeps all seven public IDs and every enabled catalog variant with deliberate off-catalog titles', async () => {
+    const f = fixture()
+    f.harness.run = async (model) => {
+      const config = JSON.parse(
+        readFileSync(join(f.paths.opencodeConfig, 'opencode.json'), 'utf8'),
+      )
+      expect(config.agents.title.model).toBe('google/gemini-flash-lite-latest')
+      expect(
+        config.providers.google.models['gemini-flash-lite-latest'],
+      ).toBeDefined()
+      f.selected.push(model)
+      f.requests.push(
+        { kind: 'primary', body: JSON.stringify(wire(model)) },
+        { kind: 'title', body: '{"model":"gemini-3.5-flash-extra-low"}' },
+      )
+      return f.success as Awaited<ReturnType<GaHarness['run']>>
+    }
+    await runGaCoreScenario(f.harness, 'catalog-and-titles')
+    expect(
+      [...new Set(f.selected.map((model) => model.split('#')[0]))].sort(),
+    ).toEqual(
+      [
+        'google/antigravity-gemini-4-argon',
+        'google/antigravity-gemini-3.5-flash',
+        'google/antigravity-gemini-3.1-flash-image',
+        'google/antigravity-gemini-3.8-flash',
+        'google/antigravity-claude-sonnet-5-5',
+        'google/antigravity-claude-opus-5-5',
+        'google/antigravity-gpt-oss-120b-medium',
+      ].sort(),
+    )
+    for (const [id, definition] of Object.entries(
+      getPublicModelDefinitions(),
+    )) {
+      expect(f.selected).toContain(`google/${id}`)
+      for (const [variant, settings] of Object.entries(
+        definition.variants ?? {},
+      ))
+        if (!settings.disabled)
+          expect(f.selected).toContain(`google/${id}#${variant}`)
+    }
+  })
+  for (const id of ['title-primary-fallback', 'title-overflow'] as const) {
+    it(`${id} requires two ordered physical attempts and real 400 observations`, async () => {
+      const f = fixture()
+      f.requests.push(
+        ...['gemini-3.5-flash-extra-low', 'gemini-3.8-flash-medium'].map(
+          (model) => ({ kind: 'title', body: JSON.stringify({ model }) }),
+        ),
+      )
+      f.events.push(
+        ...['gemini-flash-lite-latest', 'antigravity-gemini-3.8-flash'].map(
+          (model) => ({ event: 'native.request', kind: 'title', model }),
+        ),
+      )
+      f.events.push(
+        ...[400, id === 'title-overflow' ? 400 : 200].map((status) => ({
+          event: 'native.title.response',
+          status,
+        })),
+      )
+      const overflow = loadGaOverflowFixture(resolve('.'), 'gemini')
+      const error = {
+        event: 'native.400',
+        status: 400,
+        contentType: overflow.contentType,
+        bytes: overflow.bytes.toString('base64'),
+      }
+      f.events.push(error)
+      if (id === 'title-overflow') f.events.push({ ...error })
+      await runGaTitleScenario(f.harness, id)
+      expect(f.selected).toEqual(
+        Array(2).fill('google/antigravity-gemini-3.8-flash#medium'),
+      )
+      const config = JSON.parse(
+        readFileSync(join(f.paths.opencodeConfig, 'opencode.json'), 'utf8'),
+      )
+      expect(config.agents.title.model).toBe('google/gemini-flash-lite-latest')
+      f.requests.reverse()
+      await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+        'exact resolver-derived',
+      )
+      f.requests.reverse()
+      f.events.splice(4)
+      await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+        id === 'title-overflow' ? 'overflow bytes' : 'HTTP 400',
+      )
+      if (id === 'title-overflow') {
+        f.events.push(error, { ...error, contentType: 'text/plain' })
+        await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+          'overflow bytes',
+        )
+        f.events[5] = {
+          ...error,
+          bytes: Buffer.from('invented title').toString('base64'),
+        }
+        await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+          'overflow bytes',
+        )
+        f.events[5] = error
+        f.events[3] = { event: 'native.title.response', status: 200 }
+        await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+          'invented a successful response',
+        )
+        f.events[3] = { event: 'native.title.response', status: 400 }
+        // Return a different title only on the second read of this invocation.
+        let reads = 0
+        f.harness.native.get = async () =>
+          ({ title: ++reads === 1 ? 'Original' : 'Invented title' }) as Awaited<
+            ReturnType<GaHarness['native']['get']>
+          >
+        await expect(runGaTitleScenario(f.harness, id)).rejects.toThrow(
+          'changed the session title',
+        )
+      }
+    })
+  }
+  it('Sonnet 5.5 low compares the physical cap to an independent prepared cap and native limit', async () => {
+    for (const [prepared, expected] of [
+      [8192, 8192],
+      [200_000, 128_000],
+      [null, 128_000],
+    ] as const) {
+      const f = fixture()
+      const envelope = wire(
+        'google/antigravity-claude-sonnet-5-5#low',
+        expected,
+      )
+      f.requests.push({ kind: 'primary', body: JSON.stringify(envelope) })
+      f.events.push({
+        event: 'native.prepared-output-cap',
+        kind: 'primary',
+        model: 'antigravity-claude-sonnet-5-5',
+        maxOutputTokens: prepared,
+      })
+      await runGaCoreScenario(f.harness, 'claude-thinking')
+      expect(f.selected).toEqual(['google/antigravity-claude-sonnet-5-5#low'])
+      envelope.request.generationConfig.maxOutputTokens = expected - 1
+      f.requests[0]!.body = JSON.stringify(envelope)
+      await expect(
+        runGaCoreScenario(f.harness, 'claude-thinking'),
+      ).rejects.toThrow('prepared caller cap')
+      envelope.request.generationConfig.maxOutputTokens = expected
+      envelope.request.generationConfig.thinkingConfig.thinkingBudget = 1024
+      f.requests[0]!.body = JSON.stringify(envelope)
+      await expect(
+        runGaCoreScenario(f.harness, 'claude-thinking'),
+      ).rejects.toThrow('Sonnet 5.5 low')
+    }
+  })
+})
+
+describe('GA installed consumer controls at a non-default prefix', () => {
+  function consumer() {
+    // writeGaWrapper requires an installed package outside the checkout so
+    // tests cannot accidentally exercise workspace source. The test preload
+    // redirects TMPDIR into node_modules, so use the system temp root here.
+    const prefix = realpathSync(
+      mkdtempSync(join(realpathSync('/tmp'), 'ga-installed-consumer-')),
+    )
+    roots.push(prefix)
+    const packageRoot = join(
+      prefix,
+      'node_modules/@cortexkit/opencode-antigravity-auth',
+    )
+    mkdirSync(join(packageRoot, 'src/tui-ga-compiled'), { recursive: true })
+    mkdirSync(join(packageRoot, 'src/tui'), { recursive: true })
+    writeFileSync(join(prefix, 'package.json'), '{"type":"module"}')
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({
+        name: '@cortexkit/opencode-antigravity-auth',
+        type: 'module',
+        exports: {
+          './server': { import: './server.js' },
+          './tui': { import: './src/tui/entry.mjs' },
+        },
+      }),
+    )
+    const loader = join(packageRoot, 'src/tui/entry.mjs')
+    const target = join(packageRoot, 'src/tui-ga-compiled/host-ga.js')
+    writeFileSync(target, 'export const GA_SIDEBAR_PULL_MS = 1000')
+    const source = `import { loadTui } from '../common-auth-embedded/tui/index.js'
+let gaRoot
+function loadGa() {
+  gaRoot ??= loadTui({ rawEntry: new URL('../tui-ga-raw/host-ga.tsx', import.meta.url).href,
+    runtimeEntry: new URL('../tui-ga-compiled/host-ga.js', import.meta.url).href })
+  return gaRoot
+}
+export default { async setup(context) { return (await loadGa()).setup(context) } }
+`
+    writeFileSync(loader, source)
+    return { prefix, packageRoot, loader, target, source }
+  }
+  it('binds the packed compiled GA target to the public ./tui setup arm', () => {
+    const c = consumer()
+    expect(c.prefix).not.toContain('/opt/ga-consumer')
+    expect(gaInstalledCompiledTui(c.prefix)).toBe(c.target)
+    writeFileSync(
+      c.loader,
+      c.source.replace(
+        "'../tui-ga-compiled/host-ga.js'",
+        "'../tui-compiled/tui.js'",
+      ),
+    )
+    expect(() => gaInstalledCompiledTui(c.prefix)).toThrow(
+      'public ./tui setup runtime selection',
+    )
+    writeFileSync(
+      c.loader,
+      c.source.replace('(await loadGa())', '(await loadV1())'),
+    )
+    expect(() => gaInstalledCompiledTui(c.prefix)).toThrow(
+      'public ./tui setup runtime selection',
+    )
+    writeFileSync(c.loader, c.source)
+    rmSync(c.target)
+    expect(() => gaInstalledCompiledTui(c.prefix)).toThrow(
+      'compiled GA arm is missing',
+    )
+  })
+  it('records the host-prepared cap before plugin transformation, without consuming the request', async () => {
+    const c = consumer()
+    writeFileSync(
+      join(c.packageRoot, 'server.js'),
+      `export function createGaAntigravityPlugin() {
+      return { async setup(context) {
+        await context.session.hook('http.request', async event => {
+          event.request = new Request(event.request.url, { method: 'POST', body: JSON.stringify({ generationConfig: { maxOutputTokens: 128000 } }) })
+        })
+        return async () => {}
+      } }
+    }`,
+    )
+    const paths = prepareGaRoot(root())
+    const wrapper = writeGaWrapper({
+      paths,
+      consumerPrefix: c.prefix,
+      packedServerEntry: gaInstalledServer(c.prefix, 'import'),
+      mockUrl: 'http://127.0.0.1:1234',
+      rawSender: false,
+      recordPreparedOutputCap: true,
+    })
+    const hooks: Array<
+      (event: {
+        kind: string
+        model: { id: string }
+        request: Request
+        sessionID: string
+      }) => Promise<void>
+    > = []
+    let disposed = 0
+    const cleanup = await (
+      await import(join(wrapper, 'index.ts'))
+    ).default.setup({
+      location: { directory: paths.project },
+      session: {
+        hook: async (name: string, handler: (typeof hooks)[number]) => {
+          if (name === 'http.request') hooks.push(handler)
+          return {
+            dispose: async () => {
+              disposed++
+            },
+          }
+        },
+      },
+    })
+    const request = new Request(
+      'http://127.0.0.1:1234/direct/v1/models/claude:streamGenerateContent',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          contents: [],
+          generationConfig: { maxOutputTokens: 8192 },
+        }),
+      },
+    )
+    const event = {
+      request,
+      kind: 'primary',
+      model: { id: 'antigravity-claude-sonnet-5-5' },
+      sessionID: 'prepared-session',
+    }
+    for (const hook of hooks) await hook(event)
+    expect(request.bodyUsed).toBe(false)
+    expect((await event.request.json()).generationConfig.maxOutputTokens).toBe(
+      128000,
+    )
+    const events = readFileSync(join(paths.state, 'wrapper.ndjson'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(
+      events.find((entry) => entry.event === 'native.prepared-output-cap'),
+    ).toMatchObject({ maxOutputTokens: 8192, sessionID: 'prepared-session' })
+    await cleanup()
+    expect(disposed).toBe(3)
   })
 })
