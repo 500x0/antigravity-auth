@@ -83,6 +83,40 @@ export function isCreditBudgetEntry(value) {
         optional(value, 'remaining', isFiniteNumber) &&
         optional(value, 'unit', isString));
 }
+function isQuotaCounter(value) {
+    return (isRecord(value) &&
+        isFiniteNumber(value.value) &&
+        Number.isInteger(value.value) &&
+        value.value >= 0 &&
+        isFiniteNumber(value.checkedAt));
+}
+export function isQuotaCounters(value) {
+    return isRecord(value) && Object.values(value).every(isQuotaCounter);
+}
+/** Keep usable counters without letting one malformed count hide a quota map. */
+export function readQuotaCounters(value) {
+    if (!isRecord(value))
+        return undefined;
+    const entries = Object.entries(value).filter(([, entry]) => isQuotaCounter(entry));
+    return entries.length === 0
+        ? undefined
+        : Object.fromEntries(entries);
+}
+/** Decode persisted quota, dropping malformed counters but not limit evidence. */
+export function decodeQuotaMap(value) {
+    // A valid map is returned as the same object, so stored quota keeps the
+    // identity it had before counters existed; only a map with a malformed
+    // counter is copied without it.
+    if (isQuotaMap(value))
+        return value;
+    if (!isRecord(value))
+        return undefined;
+    const { counters: rawCounters, ...rest } = value;
+    if (!isQuotaMap(rest))
+        return undefined;
+    const counters = readQuotaCounters(rawCounters);
+    return { ...rest, ...(counters === undefined ? {} : { counters }) };
+}
 /**
  * True when `value` is a well-formed quota map. Unrecognised top-level keys
  * are tolerated (and preserved by merge) so a newer writer's additions
@@ -101,5 +135,6 @@ export function isQuotaMap(value) {
             return false;
         seen.add(key);
     }
-    return optional(value, 'budget', isCreditBudgetEntry);
+    return (optional(value, 'budget', isCreditBudgetEntry) &&
+        optional(value, 'counters', isQuotaCounters));
 }

@@ -773,21 +773,21 @@ describe('authorized local quota fetcher', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Account-store quota checks over the genuine released store
+// Account-store quota checks over the genuine public store
 //
-// Use the released store and filesystem code copied into the core package.
+// Use the pinned candidate's store and filesystem code copied into the core package.
 // Its common-auth-embedded/source-output.json records each file's size and
-// SHA-256 from the published archive at
-// `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`. Verify each file against that
+// SHA-256 from the pinned candidate archive at
+// `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`. Verify each file against that
 // record before loading it with loadCommonAuthStoreModules; any difference
 // fails the test. Account files live in a separate disposable directory.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.16.0',
+  version: '0.17.0',
   tarballSha256:
-    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
+    '989d981064154136463a1f270063676b748f2f46daa5974a9f621e620e56c0af',
 } as const
 
 async function embeddedFilesBelow(
@@ -807,8 +807,8 @@ let genuine: Promise<CommonAuthStoreModules> | undefined
 
 /**
  * Loads the embedded store and fs modules after each file matches the
- * size and SHA-256 recorded for the published archive at
- * `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`.
+ * size and SHA-256 recorded for the pinned candidate archive at
+ * `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -832,12 +832,12 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
       throw new Error(
-        `source-output.json does not record the published common-auth ${RELEASED_COMMON_AUTH.version} archive`,
+        `source-output.json does not record the pinned candidate common-auth ${RELEASED_COMMON_AUTH.version} archive`,
       )
     }
     const recorded = receipt.files.filter((file) =>

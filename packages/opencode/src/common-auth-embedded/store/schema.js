@@ -420,7 +420,8 @@ function parseEntry(raw, codec) {
         return undefined;
     if ('disabledReason' in raw && typeof raw.disabledReason !== 'string')
         return undefined;
-    if ('quota' in raw && !codec.validate(raw.quota))
+    const quota = 'quota' in raw && codec.decode ? codec.decode(raw.quota) : raw.quota;
+    if ('quota' in raw && !codec.validate(quota))
         return undefined;
     if ('staged' in raw && !parseReservation(raw.staged))
         return undefined;
@@ -430,7 +431,7 @@ function parseEntry(raw, codec) {
         ...(typeof raw.disabledReason === 'string'
             ? { disabledReason: raw.disabledReason }
             : {}),
-        ...('quota' in raw ? { quota: raw.quota } : {}),
+        ...('quota' in raw ? { quota } : {}),
     };
 }
 function credentialFor(raw, stateEntry) {

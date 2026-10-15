@@ -3,6 +3,28 @@ import type { ClaustrumEnrollmentConnection, hostEnrollmentPaths } from '../clau
 export type SetupHost = 'opencode' | 'pi';
 export type OpenCodeGeneration = '1' | '2' | 'both';
 export type SetupEnvironment = Record<string, string | undefined>;
+/**
+ * What setup decided before calling a plugin callback. The OpenCode generation
+ * is the one being registered, after `--opencode` or the interactive choice, so
+ * a plugin can sign in the way that generation expects (OpenCode 2 does not
+ * read OpenCode 1's login file).
+ */
+export interface SetupCallbackContext {
+    opencodeGeneration: OpenCodeGeneration;
+    mode: 'local' | 'claustrum';
+    /**
+     * Every host this run sets up, in order, so the first `beforeSignIn` can
+     * check conditions across all of them (for example that their storage paths
+     * do not overlap) before any host is changed.
+     */
+    hosts: readonly SetupHost[];
+    /**
+     * Pi's agent folder, resolved the way Pi itself does (`PI_CODING_AGENT_DIR`,
+     * with `~` expanded, else `~/.pi/agent`). Pi's own `auth.json` lives here;
+     * use it rather than a plugin path setting, which can point elsewhere.
+     */
+    piAgentDir: string;
+}
 /** Provider login, credential migration and vault activation stay in plugin callbacks. */
 export interface SetupPlugin {
     packages: {
@@ -19,10 +41,17 @@ export interface SetupPlugin {
             paths: Parameters<typeof hostEnrollmentPaths>[0];
         }>;
     };
-    signInLocal(host: SetupHost): Promise<void>;
-    migrate(host: SetupHost): Promise<void>;
+    /**
+     * Runs for each host on a real run after the host, mode and generation are
+     * chosen and before the vault ceremony or `signInLocal`, while nothing has
+     * changed yet. Rejecting stops setup for that host, so a plugin can ask for
+     * consent or check preconditions before any credential or authority change.
+     */
+    beforeSignIn?(host: SetupHost, context: SetupCallbackContext): Promise<void>;
+    signInLocal(host: SetupHost, context: SetupCallbackContext): Promise<void>;
+    migrate(host: SetupHost, context: SetupCallbackContext): Promise<void>;
     /** Reject mixed local/vault credentials and activate provider-specific vault access before registration. */
-    beforeRegister?(host: SetupHost, mode: 'local' | 'claustrum'): Promise<void>;
+    beforeRegister?(host: SetupHost, mode: 'local' | 'claustrum', context: SetupCallbackContext): Promise<void>;
 }
 export interface CommandResult {
     exitCode: number;

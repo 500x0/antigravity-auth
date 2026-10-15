@@ -53,7 +53,13 @@ npx @cortexkit/opencode-antigravity-auth setup --yes --dry-run --opencode=1 --no
 npx @cortexkit/opencode-antigravity-auth setup --yes --opencode=2 --no-claustrum
 ```
 
-`--opencode=1|2|both` resolves ambiguous host detection; `--dry-run` writes nothing. `--no-claustrum` skips vault enrollment, `--claustrum` requires the running vault and its operator to approve host enrollment with `ck auth enroll approve`, and `--login` requests a new local OAuth login instead of reusing one. `--yes` accepts host selection; it does not bypass stopped-host checks or OAuth/vault approval. Start the configured host afterward and run `/antigravity`.
+`--opencode=1|2|both` resolves ambiguous host detection; `--dry-run` writes nothing and performs no credential inspection or locking. `--no-claustrum` skips vault enrollment, `--claustrum` requires the running vault and its operator to approve host enrollment with `ck auth enroll approve`, and `--login` requests a new local OAuth login for OpenCode 1 or Pi instead of reusing one. `--yes` accepts host selection; it does not bypass stopped-host checks or OAuth/vault approval. Start the configured host afterward and run `/antigravity`.
+
+For OpenCode 2 local mode, setup defers OAuth to the native host: run `opencode auth login`, select **Google**, then choose **Google (antigravity-auth pool, browser)**. The installed plugin must make **Google (antigravity-auth pool, browser)** available in that login menu; stop if the choice is absent and use a plugin version that provides it. Setup has not created or completed the native Google connection. For vault mode, use the same host login route and choose **Use approved Antigravity vault** after approval. With `--opencode=both`, the V1 `auth.json` slot is only for OpenCode 1; complete the OpenCode 2 native step separately. Do not substitute an API key or use the vault method for local mode.
+
+Pi's native login follows `PI_CODING_AGENT_DIR` (including `~` expansion), or `~/.pi/agent` by default. Plugin account/vault state settings are separate. See the [setup guide](packages/opencode/README.md#guided-setup) for custom folders and bounded real-run lock/permission effects; dry-run performs no credential inspection, locking, repairs or writes.
+
+On macOS/Linux, the stopped-host detector does not support an unquoted Node/Bun host-script path containing spaces as rendered by `ps` (for example, `node /tmp/owned host/opencode`). For that form, the absence of a refusal is not proof that the host exited. Quit all host instances and confirm they are stopped before running setup; `--yes` does not override that requirement.
 
 ### OpenCode V1 (npm)
 

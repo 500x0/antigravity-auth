@@ -44,16 +44,27 @@ export interface CreditBudgetCleared {
     checkedAt: number;
 }
 export type CreditBudgetEntry = CreditBudgetReading | CreditBudgetCleared;
+export interface QuotaCounter {
+    value: number;
+    checkedAt: number;
+}
 export interface QuotaMap {
     limits: QuotaEntry[];
     /** Absent means no observation has reported on the budget yet. */
     budget?: CreditBudgetEntry;
+    /** Provider-named counts, each with its own observation time. */
+    counters?: Record<string, QuotaCounter>;
 }
 export declare function emptyQuotaMap(): QuotaMap;
 /** The time an entry speaks for: its reading, retirement or absence time. */
 export declare function entryTime(entry: QuotaEntry): number;
 export declare function limitKey(scope: string, label: string): string;
 export declare function isCreditBudgetEntry(value: unknown): value is CreditBudgetEntry;
+export declare function isQuotaCounters(value: unknown): value is Record<string, QuotaCounter>;
+/** Keep usable counters without letting one malformed count hide a quota map. */
+export declare function readQuotaCounters(value: unknown): Record<string, QuotaCounter> | undefined;
+/** Decode persisted quota, dropping malformed counters but not limit evidence. */
+export declare function decodeQuotaMap(value: unknown): QuotaMap | undefined;
 /**
  * True when `value` is a well-formed quota map. Unrecognised top-level keys
  * are tolerated (and preserved by merge) so a newer writer's additions

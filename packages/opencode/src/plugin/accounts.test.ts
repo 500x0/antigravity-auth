@@ -2915,18 +2915,16 @@ describe('loadAccountManagerFromRepository', () => {
   })
 })
 
-// These per-send checks use the common-auth store and fs modules embedded
-// in the core package, loaded with `loadCommonAuthStoreModules`, in a private
-// config directory. Before loading them, the tests compare each module file's
-// size and SHA-256 with the provenance record in `source-output.json` for the
-// published archive at `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`.
-// A mismatch fails the tests.
+// These per-send checks use the real embedded store in a private config
+// directory. The source-output.json inventory records each file's size and
+// SHA-256 from the pinned producer archive; matching every entry prevents a
+// stale or modified embedded module from standing in for that producer.
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
-  version: '0.16.0',
+  version: '0.17.0',
   tarballSha256:
-    '0faa8575e4f4569f82bf232882b3fa0b5bba5c596538c791814301b64f1d9b78',
+    '989d981064154136463a1f270063676b748f2f46daa5974a9f621e620e56c0af',
 } as const
 
 async function embeddedFilesBelow(
@@ -2945,9 +2943,9 @@ async function embeddedFilesBelow(
 let genuine: Promise<CommonAuthStoreModules> | undefined
 
 /**
- * Loads the embedded store and fs modules only after each file's size and
- * SHA-256 match the expected values in `source-output.json`, the release
- * record for `tools/common-auth-build/inputs/cortexkit-common-auth-0.16.0.tgz`.
+ * Rejects stale or modified embedded files before loading the store and fs
+ * modules. The inventory records the expected size and SHA-256 of every file
+ * copied from the pinned producer archive.
  */
 function genuineModules(): Promise<CommonAuthStoreModules> {
   genuine ??= (async () => {
@@ -2971,7 +2969,7 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'released' ||
+      receipt.artifactStatus !== 'candidate' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {

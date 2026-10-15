@@ -3,17 +3,21 @@ import { join, resolve } from 'node:path'
 import {
   ANTIGRAVITY_PROVIDER_ID,
   getPiAntigravityVaultDir,
-  getPiConfigDir,
   loadCommonAuthClaustrum,
   loadCommonAuthFs,
   loadCommonAuthPiSlot,
   resolveClaustrumConnectionPath,
 } from '@cortexkit/antigravity-auth-core'
+import {
+  OPENCODE2_POOL_AUTH_LABEL,
+  OPENCODE2_VAULT_AUTH_LABEL,
+} from './auth-method-labels.ts'
 import type { CliDependencies } from './cli.ts'
 import {
   assertHostsStopped,
   createProcessFence,
   runSetup,
+  type SetupCallbackContext,
   type SetupHost,
   type SetupIO,
   type SetupPlugin,
@@ -29,18 +33,24 @@ import {
 
 const PI_PLACEHOLDER_KEY = 'antigravity-vault-custody'
 
-function nativeAuthPath(host: SetupHost): string {
+function nativeAuthPath(
+  host: SetupHost,
+  context: SetupCallbackContext,
+): string {
   return host === 'opencode'
     ? nativeOpenCodeAuthPath()
-    : join(getPiConfigDir(), 'auth.json')
+    : join(context.piAgentDir, 'auth.json')
 }
 
 function provider(host: SetupHost): string {
   return host === 'opencode' ? OPENCODE_VAULT_PROVIDER : ANTIGRAVITY_PROVIDER_ID
 }
 
-async function nativeAuth(host: SetupHost): Promise<Record<string, unknown>> {
-  const path = nativeAuthPath(host)
+async function nativeAuth(
+  host: SetupHost,
+  context: SetupCallbackContext,
+): Promise<Record<string, unknown>> {
+  const path = nativeAuthPath(host, context)
   try {
     const info = await lstat(path)
     if (!info.isFile() || info.nlink !== 1)
@@ -62,14 +72,15 @@ export async function assertSetupHostsStopped(): Promise<void> {
 async function writeNativeSlot(
   host: SetupHost,
   slot: unknown,
+  context: SetupCallbackContext,
   expectedAuthority: 'local' | 'vault' = 'local',
 ): Promise<void> {
-  const before = await nativeAuth(host)
+  const before = await nativeAuth(host, context)
   const key = provider(host)
   if (JSON.stringify(before[key]) === JSON.stringify(slot)) return
   const fs = await loadCommonAuthFs()
   await fs.writeJsonAtomic(
-    nativeAuthPath(host),
+    nativeAuthPath(host, context),
     { ...before, [key]: slot },
     {
       beforeRename: async () => {
@@ -88,7 +99,10 @@ async function writeNativeSlot(
           throw new Error(
             'Vault enrollment changed during setup; native auth was not replaced.',
           )
-        if (JSON.stringify(await nativeAuth(host)) !== JSON.stringify(before))
+        if (
+          JSON.stringify(await nativeAuth(host, context)) !==
+          JSON.stringify(before)
+        )
           throw new Error(
             'Native auth changed during setup; rerun with hosts stopped.',
           )
@@ -100,13 +114,18 @@ async function writeNativeSlot(
 /** Pi stores its local login in auth.json, not OpenCode's account pool. */
 export async function persistPiSetupLogin(
   result: AntigravityTokenExchangeSuccess,
+  context: SetupCallbackContext,
 ): Promise<void> {
-  await writeNativeSlot('pi', {
-    type: 'oauth',
-    refresh: result.refresh,
-    access: result.access,
-    expires: result.expires,
-  })
+  await writeNativeSlot(
+    'pi',
+    {
+      type: 'oauth',
+      refresh: result.refresh,
+      access: result.access,
+      expires: result.expires,
+    },
+    context,
+  )
 }
 
 export async function createSetupPlugin(
@@ -132,14 +151,20 @@ export async function createSetupPlugin(
       claustrum.hostEnrollmentPaths(hosts[host].paths),
       hosts[host].name,
     )
-  const assertLocal = async (host: SetupHost) => {
+  const assertLocal = async (
+    host: SetupHost,
+    context: SetupCallbackContext,
+  ) => {
     if ((await authority(host)) !== 'local')
       throw new Error(
         'Vault enrollment excludes local sign-in. Resolve vault access before choosing local setup.',
       )
+    // OpenCode 2 reads Google's active integration connection, not OpenCode 1's
+    // auth.json. A dormant V1 slot must neither authorize nor block GA setup.
+    if (host === 'opencode' && context.opencodeGeneration === '2') return
     claustrum.assertHostSlotMatchesMode({
       mode: 'local',
-      auth: (await nativeAuth(host))[provider(host)],
+      auth: (await nativeAuth(host, context))[provider(host)],
       provider: provider(host),
     })
     if (host === 'pi') {
@@ -147,7 +172,7 @@ export async function createSetupPlugin(
       if (
         (
           await openPiSlot({
-            authPath: nativeAuthPath(host),
+            authPath: nativeAuthPath(host, context),
             stashPath: join(piDir, 'google-login-stash.json'),
             provider: ANTIGRAVITY_PROVIDER_ID,
             placeholderKey: PI_PLACEHOLDER_KEY,
@@ -172,9 +197,50 @@ export async function createSetupPlugin(
     displayName: 'Antigravity',
     slashCommand: '/antigravity',
     vault: { connectionFile: await resolveClaustrumConnectionPath(), hosts },
-    signInLocal: async (host) => {
-      await assertLocal(host)
-      const slot = (await nativeAuth(host))[provider(host)]
+    beforeSignIn: async (_host, context) => {
+      // Validate every selected host before the first can change credentials or enrollment.
+      // Public Windows readers may tighten owned file DACLs; never run them on a preview.
+      await assertSetupHostsStopped()
+      for (const selected of context.hosts) {
+        if (context.mode === 'local') {
+          await assertLocal(selected, context)
+        } else if (
+          selected === 'opencode' &&
+          context.opencodeGeneration !== '2'
+        ) {
+          claustrum.assertHostSlotMatchesMode({
+            mode: 'custody',
+            auth: (await nativeAuth(selected, context))[provider(selected)],
+            provider: provider(selected),
+          })
+        } else if (selected === 'pi') {
+          const { openPiSlot } = await loadCommonAuthPiSlot()
+          const inspection = await openPiSlot({
+            authPath: nativeAuthPath('pi', context),
+            stashPath: join(piDir, 'google-login-stash.json'),
+            provider: ANTIGRAVITY_PROVIDER_ID,
+            placeholderKey: PI_PLACEHOLDER_KEY,
+          }).inspect()
+          if (inspection.slot === 'foreign')
+            throw new Error(
+              'Pi has a different login from its saved stash; resolve the conflict before vault setup.',
+            )
+          if (
+            inspection.slot === 'placeholder' &&
+            inspection.stash === 'missing'
+          )
+            throw new Error(
+              'Pi holds a vault marker without its saved login stash; resolve it before vault setup.',
+            )
+        }
+      }
+    },
+    signInLocal: async (host, context) => {
+      await assertLocal(host, context)
+      // The OpenCode 2 host login creates its Google integration connection.
+      // A standalone OAuth flow here cannot create it and would require a second login.
+      if (host === 'opencode' && context.opencodeGeneration === '2') return
+      const slot = (await nativeAuth(host, context))[provider(host)]
       const source =
         host === 'opencode'
           ? await deps.accountStore.read(deps.accountStore.legacyPath())
@@ -200,16 +266,20 @@ export async function createSetupPlugin(
           claustrum.classifyHostSlot(slot, provider(host)) !== 'login'
         ) {
           const account = accounts[0]!
-          await writeNativeSlot(host, {
-            type: 'oauth',
-            access: '',
-            expires: 0,
-            refresh: [
-              account.refreshToken,
-              account.projectId ?? '',
-              account.managedProjectId ?? '',
-            ].join('|'),
-          })
+          await writeNativeSlot(
+            host,
+            {
+              type: 'oauth',
+              access: '',
+              expires: 0,
+              refresh: [
+                account.refreshToken,
+                account.projectId ?? '',
+                account.managedProjectId ?? '',
+              ].join('|'),
+            },
+            context,
+          )
         }
         return
       }
@@ -222,25 +292,47 @@ export async function createSetupPlugin(
         },
         deps.openBrowser,
         host,
+        context,
       )
       if (host === 'opencode') openCodeLogin = result
     },
-    beforeRegister: async (host, mode) => {
+    beforeRegister: async (host, mode, context) => {
+      const needsOpenCode2 =
+        host === 'opencode' && context.opencodeGeneration !== '1'
+      const nativeNextStep = (label: string) => {
+        deps.stdout.write(
+          `In OpenCode 2, run opencode auth login, select Google, then choose ${label}.\n` +
+            'Setup has not completed the OpenCode 2 native Google connection.\n',
+        )
+      }
       if (mode === 'local') {
-        await assertLocal(host)
-        if (host === 'opencode' && openCodeLogin)
-          await writeNativeSlot(host, {
-            type: 'oauth',
-            refresh: openCodeLogin.refresh,
-            access: openCodeLogin.access,
-            expires: openCodeLogin.expires,
-          })
+        await assertLocal(host, context)
+        if (
+          host === 'opencode' &&
+          context.opencodeGeneration !== '2' &&
+          openCodeLogin
+        )
+          await writeNativeSlot(
+            host,
+            {
+              type: 'oauth',
+              refresh: openCodeLogin.refresh,
+              access: openCodeLogin.access,
+              expires: openCodeLogin.expires,
+            },
+            context,
+          )
+        if (needsOpenCode2) nativeNextStep(OPENCODE2_POOL_AUTH_LABEL)
         return
       }
       if ((await authority(host)) !== 'vault')
         throw new Error('Vault access must be approved before activation.')
       if (host === 'opencode') {
-        const slot = (await nativeAuth(host))[provider(host)]
+        if (context.opencodeGeneration === '2') {
+          nativeNextStep(OPENCODE2_VAULT_AUTH_LABEL)
+          return
+        }
+        const slot = (await nativeAuth(host, context))[provider(host)]
         claustrum.assertHostSlotMatchesMode({
           mode: 'custody',
           auth: slot,
@@ -249,29 +341,42 @@ export async function createSetupPlugin(
         await writeNativeSlot(
           host,
           claustrum.custodyPlaceholder(provider(host)),
+          context,
           'vault',
         )
+        if (needsOpenCode2) nativeNextStep(OPENCODE2_VAULT_AUTH_LABEL)
       } else {
         // Pi's existing slot editor moves the original login to its private stash.
         // Serving sees only the non-secret marker, never simultaneous local/vault credentials.
         const { openPiSlot } = await loadCommonAuthPiSlot()
         await assertSetupHostsStopped()
         await openPiSlot({
-          authPath: nativeAuthPath(host),
+          authPath: nativeAuthPath(host, context),
           stashPath: join(piDir, 'google-login-stash.json'),
           provider: ANTIGRAVITY_PROVIDER_ID,
           placeholderKey: PI_PLACEHOLDER_KEY,
         }).enterVault()
       }
     },
-    migrate: async (host) => {
+    migrate: async (host, context) => {
+      if (context.mode === 'local') await assertLocal(host, context)
+      else if ((await authority(host)) !== 'vault')
+        throw new Error('Vault access must remain approved during setup.')
       if (host === 'opencode') {
         // Vault activation must not import dormant local credentials into a store.
         const current = await authority(host)
-        if (current === 'vault') return
+        if (context.mode === 'claustrum') {
+          if (current !== 'vault')
+            throw new Error('Vault access must remain approved during setup.')
+          return
+        }
         if (current === 'unreadable')
           throw new Error(
             'Vault enrollment is unreadable; account migration was not started.',
+          )
+        if (current !== 'local')
+          throw new Error(
+            'Vault enrollment changed during setup; account migration was not started.',
           )
         const source = await deps.accountStore.read(
           deps.accountStore.legacyPath(),
@@ -308,9 +413,5 @@ export async function runPluginSetup(
     migrateOpenCode,
     argv.includes('--login'),
   )
-  await runSetup(plugin, argv, {
-    ...io,
-    // The adapters' existing Pi resolver owns enrollment and the native auth path.
-    env: { ...(io.env ?? process.env), PI_CODING_AGENT_DIR: getPiConfigDir() },
-  })
+  await runSetup(plugin, argv, io)
 }

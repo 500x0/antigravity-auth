@@ -23,8 +23,8 @@ import {
   validatePublication,
 } from '../../packages/opencode/scripts/embed-common-auth.ts'
 import legacy from '../common-auth-094-adoption/embed-build/publication.json'
+import publication from '../common-auth-0170-producer/candidate.json'
 import closure from './closure.json'
-import publication from './publication.json'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '../..')
@@ -33,9 +33,28 @@ const digest = (bytes: Uint8Array | string) =>
   createHash('sha256').update(bytes).digest('hex')
 const sorted = (values: Iterable<string>) => [...new Set(values)].sort()
 
+test('producer.native_windows_archive_pin', async () => {
+  const source = await readFile(
+    join(root, 'test/windows-pi-preflight/verify.mjs'),
+    'utf8',
+  )
+  const pin = /^ {2}const expectedArchive =\s*'([a-f0-9]{64})'/m.exec(
+    source,
+  )?.[1]
+  expect(pin).toBe(publication.sha256)
+  expect(source).toContain(
+    "'packages/core/dist/common-auth-embedded/source-output.json'",
+  )
+  expect(source).toContain(
+    "'packages/opencode/dist/src/common-auth-embedded/source-output.json'",
+  )
+  expect(source).toContain('receipt.tarballSha256,\n      expectedArchive,')
+  expect(source).toContain('assert.equal(oracle.sha256, expectedArchive)')
+})
+
 async function archive() {
   const bytes = await readFile(join(root, inputPath))
-  expect(bytes.length).toBe(279828)
+  expect(bytes.length).toBe(282492)
   expect(digest(bytes)).toBe(publication.sha256)
   const entries = readVerifiedArchive(bytes, publication)
   validatePublication(entries)
@@ -142,7 +161,7 @@ test('producer.public_roots_and_exact_closure', async () => {
       (sum, file) => sum + entries.get(`package/dist/${file}`)!.length,
       0,
     ),
-  ).toBe(924027)
+  ).toBe(932825)
   expect(graph.files.filter((file) => file.startsWith('routing/'))).toEqual(
     closure.routingFiles,
   )
@@ -218,11 +237,11 @@ test('producer.verbatim_map', async () => {
   const map = JSON.parse(
     await readFile(join(target, outputPath, 'source-output.json'), 'utf8'),
   )
-  expect(map.version).toBe('0.16.0')
-  expect(map.artifactStatus).toBe('released')
+  expect(map.version).toBe('0.17.0')
+  expect(map.artifactStatus).toBe('candidate')
   expect(map.publicRoots).toEqual(publication.publicRoots)
   expect(map.canonicalFiles).toBe(176)
-  expect(map.canonicalBytes).toBe(924027)
+  expect(map.canonicalBytes).toBe(932825)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.sri).toBe(publication.sri)
   expect(map.transforms).toEqual([])
@@ -296,7 +315,7 @@ test('producer.shared_core_profile_exact_closure', async () => {
   )
   expect(required.length).toBe(133)
   expect(map.canonicalFiles).toBe(133)
-  expect(map.canonicalBytes).toBe(747481)
+  expect(map.canonicalBytes).toBe(751774)
   expect(map.publicRoots).toEqual(profile.publicRoots)
   expect(map.tarballSha256).toBe(publication.sha256)
   expect(map.files.map((file: { output: string }) => file.output)).toEqual(
