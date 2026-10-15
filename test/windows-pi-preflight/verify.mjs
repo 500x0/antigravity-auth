@@ -19,6 +19,7 @@ import {
   readTokenDacl,
   redactDacl,
 } from '../windows-vault/dacl.mjs'
+import { redactFailureText } from '../windows-vault/failure.mjs'
 import { cliEnvironment, verifyWithReceipt } from './harness.mjs'
 
 if (process.platform !== 'win32') {
@@ -37,6 +38,14 @@ const evidence = resolve(
     ),
 )
 const previous = { ...process.env }
+const fixtureSecrets = [
+  'synthetic-native-proof-refresh',
+  'synthetic-native-proof-access',
+  'synthetic-extension-decoy',
+  'synthetic-foreign-login',
+  'synthetic-foreign-access',
+  'ab'.repeat(32),
+]
 const warnings = []
 const onWarning = (warning) => {
   if (warning.name === 'PrivateFileMigration') {
@@ -335,7 +344,25 @@ async function verify(stage) {
   assert.equal(preview.status, 0, preview.stderr)
   assert.match(preview.stdout, /Pi: found/)
   assert.ok(preview.stdout.includes(nativeDir))
-  assert.deepEqual(await snapshotFiles(), beforePreview)
+  const afterPreview = await snapshotFiles()
+  const changedNames = [
+    ...new Set([...Object.keys(beforePreview), ...Object.keys(afterPreview)]),
+  ].filter((name) => beforePreview[name] !== afterPreview[name])
+  if (changedNames.length > 0) {
+    // Record which files changed without uploading their credential-bearing bytes.
+    const digest = (bytes) =>
+      bytes === undefined
+        ? null
+        : createHash('sha256')
+            .update(Buffer.from(bytes, 'base64'))
+            .digest('hex')
+    result.dryRunFileChanges = changedNames.map((name) => ({
+      relativePath: redactFailureText(name, fixtureSecrets),
+      beforeSha256: digest(beforePreview[name]),
+      afterSha256: digest(afterPreview[name]),
+    }))
+  }
+  assert.deepEqual(afterPreview, beforePreview)
   assert.deepEqual(pathEntries(process.env), pathEntries(previous))
   result.executableSearchPath.parentUnchanged = true
   stage('dry-run-permission-oracle')
@@ -582,14 +609,7 @@ await verifyWithReceipt({
     '../../packages/opencode/dist/windows-pi-preflight-product.mjs',
     import.meta.url,
   ),
-  secrets: [
-    'synthetic-native-proof-refresh',
-    'synthetic-native-proof-access',
-    'synthetic-extension-decoy',
-    'synthetic-foreign-login',
-    'synthetic-foreign-access',
-    'ab'.repeat(32),
-  ],
+  secrets: fixtureSecrets,
   cleanup: [
     ['warning-listener', () => process.off('warning', onWarning)],
     [
