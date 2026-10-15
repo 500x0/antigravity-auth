@@ -81,6 +81,20 @@ export interface ProcessFence {
         pid: number;
         command: string;
     }>>;
+    /**
+     * For a dry run, which must change nothing: the hosts found without starting
+     * any program that writes files. On Windows that skips the PowerShell query
+     * for Node and Bun command lines (PowerShell writes a startup cache into the
+     * user's profile), so Node or Bun processes are only counted. A fence without
+     * it is previewed with `listRunningHosts`.
+     */
+    previewRunningHosts?(env?: SetupEnvironment): Promise<{
+        hosts: Array<{
+            pid: number;
+            command: string;
+        }>;
+        uncheckedRuntimes: number;
+    }>;
 }
 /** Defaults use the process terminal and environment; overrides are test seams. */
 export interface SetupIO {

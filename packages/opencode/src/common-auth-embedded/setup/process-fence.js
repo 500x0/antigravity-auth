@@ -203,7 +203,7 @@ export async function listSetupProcesses(runner = defaultCommandRunner, options 
             throw new ProcessInspectionError(inspection);
         // tasklist identifies native hosts, but npm Pi/OpenCode scripts appear as Node or Bun.
         const runtimes = processes.filter((entry) => entry.pid !== process.pid && /^(?:node|bun)\.exe$/i.test(entry.command));
-        if (windows && runtimes.length) {
+        if (windows && runtimes.length && options.inspectRuntimes !== false) {
             const details = await inspect('CIM', 'powershell.exe', [
                 '-NoProfile',
                 '-NonInteractive',
@@ -241,9 +241,25 @@ export async function listSetupProcesses(runner = defaultCommandRunner, options 
     }
 }
 export function createProcessFence(runner = defaultCommandRunner, options = {}) {
+    const isHost = (entry) => entry.pid !== process.pid && hostName(entry.command) !== null;
     return {
         async listRunningHosts(env) {
-            return (await listSetupProcesses(runner, { ...options, env })).filter((entry) => entry.pid !== process.pid && hostName(entry.command) !== null);
+            return (await listSetupProcesses(runner, { ...options, env })).filter(isHost);
+        },
+        async previewRunningHosts(env) {
+            const processes = await listSetupProcesses(runner, {
+                ...options,
+                env,
+                inspectRuntimes: false,
+            });
+            const windows = (options.platform ?? process.platform) === 'win32';
+            return {
+                hosts: processes.filter(isHost),
+                uncheckedRuntimes: windows
+                    ? processes.filter((entry) => entry.pid !== process.pid &&
+                        /^(?:node|bun)\.exe$/i.test(entry.command)).length
+                    : 0,
+            };
         },
     };
 }

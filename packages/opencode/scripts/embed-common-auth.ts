@@ -17,8 +17,8 @@ export const producerVersion = '0.17.0'
 export const artifactStatus = 'candidate'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: '989d981064154136463a1f270063676b748f2f46daa5974a9f621e620e56c0af',
-  sri: 'sha512-B4GdG7RhBYHWHTrlgGv1QBQqmyWOM8yCzp31GmFw6iWQ6zzAnRdC/J4v+I349NbsyhEEXT6hcka8Jv6bAhBkJw==',
+  sha256: '05b68fc2ad684d9a46bdda435c85d877febe7c41d4dce4f196e6a95ea7ad999b',
+  sri: 'sha512-QJCqd491OwyDfxamJdN5x0ZdPKdJ4OixBvuKqtVgrqYXZwCANv7DvTWBszykJVaD8pZQxSKJGy0waNpZ4UcH9g==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -713,8 +713,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/command.js',
-    9677,
-    'cd58ba140c5ebe85be0916a6ad9d1ca602e1d931afce0b0e411f06cfbb4b15f1',
+    10030,
+    '608547e05793d275715c3a72e64d16d84c2aaaae108f97d04c9ba514eb00d9f1',
   ],
   [
     'setup/config-write.js',
@@ -753,13 +753,13 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/process-fence.d.ts',
-    1500,
-    '06bfccb5dd73575e1aa577c04e393a53c735061754ef79605fed8233f5ac94be',
+    1615,
+    '9eda9454a17fb7f8482746d9e8cf0e04a81f752d3ccff07a77880966a3550e7d',
   ],
   [
     'setup/process-fence.js',
-    10250,
-    'e18657c6b4a060560d57813104a1b4cb6e5e3f7cdf3e6652bbf40e644f90e853',
+    10923,
+    'e2db85ab7ae29b99e9801787c0bb4f0bf58acc5b8c231a0c4acef30cde812747',
   ],
   [
     'setup/prompts.js',
@@ -778,8 +778,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/types.d.ts',
-    4344,
-    '2934541048381fc8595de7db4a9a6c20e1153605afbf20dab8bf6ff2ac81b857',
+    4928,
+    '2d357d6345a94e7b75ef7af4e0c64f1145a87a67e7124ec0c22f5169c533f640',
   ],
   [
     'store/attribution.d.ts',

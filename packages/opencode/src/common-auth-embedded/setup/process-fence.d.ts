@@ -31,6 +31,8 @@ export declare function listSetupProcesses(runner?: CommandRunner, options?: {
     platform?: string;
     env?: SetupEnvironment;
     onStep?: (details: ProcessInspectionStep) => void;
+    /** False skips the Windows PowerShell query for Node and Bun command lines. */
+    inspectRuntimes?: boolean;
 }): Promise<Array<{
     pid: number;
     command: string;
