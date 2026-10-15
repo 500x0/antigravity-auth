@@ -29,6 +29,7 @@ import {
   verifiedArchiveMember,
   verifyExecutable,
   verifySri,
+  waitForGaObservation,
 } from './opencode-ga-harness.ts'
 import { cleanupE2eRootsForCurrentFile } from './setup'
 
@@ -800,7 +801,10 @@ describe('GA inventory and evidence controls', () => {
     ).toThrow('Incomplete or unexpected')
     // The expected count is written here by hand rather than derived from
     // GA_CASE_IDS, so adding or dropping a case changes this test.
-    expect(GA_CASE_IDS).toHaveLength(102)
+    expect(GA_CASE_IDS).toHaveLength(105)
+    expect(GA_CASE_IDS[0]).toBe('ga-ownership-pool-login')
+    expect(GA_CASE_IDS).toContain('ga-ownership-passthrough')
+    expect(GA_CASE_IDS).toContain('ga-ownership-empty-pool')
   })
 
   it('rejects source-prepared cases and missing actual scenario observations', () => {
@@ -1290,5 +1294,134 @@ describe('e2e native Pi environment boundary', () => {
     // This checks only the environment the preload sets. It does not load
     // the Pi SDK, so it does not show the SDK resolving this directory.
     expect(process.env.PI_CODING_AGENT_DIR).not.toBe(process.env.HOME)
+  })
+})
+
+describe('GA ownership mock policies (synthetic HTTP controls)', () => {
+  it('returns Google-native success and a nonce-scoped generic 500 only for passthrough', async () => {
+    const nonce = 'a'.repeat(32)
+    const second = 'b'.repeat(32)
+    const server = await startGaMock(
+      'ga-ownership-passthrough',
+      nonce,
+      process.cwd(),
+    )
+    const headers = {
+      'content-type': 'application/json',
+      'x-goog-api-key': 'synthetic-ga-key',
+      'x-opencode-session-id': 'fixed-session',
+      'x-fixture-full-capture': 'retained',
+    }
+    const body = (text: string) =>
+      JSON.stringify({ contents: [{ role: 'user', parts: [{ text }] }] })
+    const send = (text: string) =>
+      fetch(`${server.url}/direct/v1/models/native:streamGenerateContent`, {
+        method: 'POST',
+        headers,
+        body: body(text),
+        signal: AbortSignal.timeout(2000),
+      })
+    try {
+      server.failNextDirectProvider(second)
+      const first = await send(nonce)
+      expect(first.status).toBe(200)
+      const bytes = await first.text()
+      const frame = JSON.parse(bytes.slice('data: '.length).trim())
+      expect(frame.response).toBeUndefined()
+      expect(frame.candidates).toEqual([
+        {
+          index: 0,
+          content: {
+            role: 'model',
+            parts: [{ text: `GA_DIRECT_OK_${nonce}` }],
+          },
+          finishReason: 'STOP',
+        },
+      ])
+      const failed = await send(second)
+      expect(failed.status).toBe(500)
+      expect(failed.headers.get('retry-after')).toBeNull()
+      expect(failed.headers.get('x-should-retry')).toBeNull()
+      expect(await failed.json()).toEqual({
+        error: { message: 'Synthetic internal failure' },
+      })
+      const retried = await send(second)
+      expect(retried.status).toBe(200)
+      expect(await retried.text()).toContain(`GA_DIRECT_OK_${nonce}`)
+      expect(server.requests.map((request) => request.responseStatus)).toEqual([
+        200, 500, 200,
+      ])
+      expect(
+        server.requests.every((request) => request.kind === 'direct-provider'),
+      ).toBe(true)
+      for (const request of server.requests) {
+        expect(request.headers['x-goog-api-key']).toBe('synthetic-ga-key')
+        expect(request.headers['x-opencode-session-id']).toBe('fixed-session')
+        expect(request.headers['x-fixture-full-capture']).toBe('retained')
+        expect(request.rawHeaders).toContain('retained')
+      }
+      expect(server.requests[1]?.body).toBe(server.requests[2]?.body)
+      expect(server.requests[1]?.headers).toEqual(server.requests[2]?.headers)
+    } finally {
+      await server.close()
+    }
+    const owned = await startGaMock('terminal-frame', nonce, process.cwd())
+    try {
+      expect(() => owned.failNextDirectProvider(second)).toThrow(
+        'GA_DIRECT_POLICY_NOT_ADMITTED',
+      )
+      const response = await fetch(`${owned.url}/direct/v1`, {
+        signal: AbortSignal.timeout(2000),
+      })
+      expect(response.status).toBe(418)
+      expect(await response.text()).toContain(
+        'native driver bypassed Antigravity',
+      )
+    } finally {
+      await owned.close()
+    }
+  })
+
+  it('holds the original successful unrelated response until explicit release and captures prepared headers', async () => {
+    const server = await startGaMock(
+      'late-unrelated-response',
+      'c'.repeat(32),
+      process.cwd(),
+    )
+    let received = false
+    const pending = fetch(`${server.url}/foreign/v1`, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': 'synthetic-ga-key',
+        'x-fixture-header': 'unchanged',
+      },
+      body: '{}',
+      signal: AbortSignal.timeout(3000),
+    }).then(async (response) => {
+      received = true
+      return { status: response.status, text: await response.text() }
+    })
+    try {
+      await waitForGaObservation(
+        () => server.events.some((event) => event.event === 'unrelated-held'),
+        'foreign request held',
+        2000,
+      )
+      expect(received).toBe(false)
+      expect(server.requests).toHaveLength(1)
+      expect(server.requests[0]?.headers['x-goog-api-key']).toBe(
+        'synthetic-ga-key',
+      )
+      expect(server.requests[0]?.headers['x-fixture-header']).toBe('unchanged')
+      server.releaseUnrelated()
+      const response = await pending
+      expect(response.status).toBe(200)
+      expect(response.text).toContain('UNRELATED_NATIVE_SUCCESS')
+      expect(response.text).toContain('STOP')
+      expect(() => server.releaseUnrelated()).toThrow('GA_UNRELATED_NOT_HELD')
+    } finally {
+      await server.close()
+      await pending.catch(() => undefined)
+    }
   })
 })

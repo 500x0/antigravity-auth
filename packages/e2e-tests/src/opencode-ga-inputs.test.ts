@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   initializeFreshAccountStore,
   readAccountStoreAdmission,
+  readAccountStoreBinding,
 } from '../../core/src/account-migration.ts'
 import { createAccountRepositoryFactory } from '../../core/src/account-repository.ts'
 import type { RowRef } from '../../core/src/account-repository-types.ts'
@@ -24,15 +32,18 @@ import {
   GA_REAUTHORIZE_ACTION,
   type GaMenu,
   type GaOpenedMenu,
+  prepareGaRoot,
 } from './opencode-ga-harness.ts'
 import {
   actionShape,
+  assertOwnedCurrentStoreInput,
   captureMenuItem,
   findAccountOverrideAction,
   findMenuSection,
   matchSameReadObservation,
   menuRequest,
   normalizeSameReadState,
+  seedOwnedCurrentStore,
 } from './opencode-ga-inputs.ts'
 
 // These tests exercise the parsing and menu-matching helpers on synthetic
@@ -624,6 +635,96 @@ describe('GA menu targeting against the core menu', () => {
       expect(target.actions).not.toContain(GA_REAUTHORIZE_ACTION)
     } finally {
       await dispose()
+    }
+  })
+})
+
+describe('GA current-store fixture admission', () => {
+  it('seeds nothing and admits initialization-required only for the two real-login cases', async () => {
+    const modules = await loadCommonAuthStoreModules()
+    for (const id of ['ga-ownership-pool-login', 'ga-ownership-empty-pool']) {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-fresh-store-')))
+      try {
+        const paths = prepareGaRoot(root)
+        await seedOwnedCurrentStore(paths, id)
+        await assertOwnedCurrentStoreInput(paths, id)
+        const legacyPath = join(
+          paths.opencodeConfig,
+          'antigravity-accounts.json',
+        )
+        expect(
+          (await readAccountStoreBinding(legacyPath, modules, Date.now)).status,
+        ).toBe('initialization-required')
+        expect(existsSync(legacyPath)).toBe(false)
+        expect(readdirSync(paths.opencodeConfig)).toEqual([])
+        for (const other of [
+          'ga-ownership-passthrough',
+          'terminal-frame',
+          'pty-reauthorize-listener',
+        ]) {
+          await expect(
+            assertOwnedCurrentStoreInput(paths, other),
+          ).rejects.toThrow('did not publish a current store')
+        }
+        writeFileSync(legacyPath, JSON.stringify({ version: 4, accounts: [] }))
+        await expect(assertOwnedCurrentStoreInput(paths, id)).rejects.toThrow(
+          'GA_FRESH_STORE_REQUIRED',
+        )
+        await expect(seedOwnedCurrentStore(paths, id)).rejects.toThrow(
+          'pre-existing legacy/profile data',
+        )
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('keeps passthrough populated and preserves both reauthorization fixtures', async () => {
+    const modules = await loadCommonAuthStoreModules()
+    for (const id of [
+      'ga-ownership-passthrough',
+      'pty-reauthorize-listener',
+      'pty-two-location-oauth-bearer',
+    ]) {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-seeded-store-')))
+      try {
+        const paths = prepareGaRoot(root)
+        await seedOwnedCurrentStore(paths, id)
+        await assertOwnedCurrentStoreInput(paths, id)
+        await expect(
+          assertOwnedCurrentStoreInput(paths, 'ga-ownership-pool-login'),
+        ).rejects.toThrow('GA_FRESH_STORE_REQUIRED')
+        const admitted = await readAccountStoreAdmission(
+          join(paths.opencodeConfig, 'antigravity-accounts.json'),
+          modules,
+          Date.now,
+        )
+        expect(admitted.status).toBe('active')
+        if (admitted.status !== 'active')
+          throw new Error('Fixture not admitted')
+        const repository = createAccountRepositoryFactory(modules)({
+          paths: admitted.paths,
+          now: Date.now,
+          exchange: async ({ refreshToken }) => ({
+            refreshToken,
+            accessToken: 'synthetic-access',
+            expiresAt: Date.now() + 3600000,
+          }),
+        })
+        try {
+          const read = await repository.read()
+          expect(read.status).toBe('ready')
+          if (read.status !== 'ready') throw new Error('Fixture not ready')
+          expect(read.rows).toHaveLength(
+            id === 'pty-two-location-oauth-bearer' ? 2 : 1,
+          )
+          expect(read.rows[0]?.enabled).toBe(id === 'ga-ownership-passthrough')
+        } finally {
+          await repository.dispose()
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
     }
   })
 })

@@ -61,7 +61,10 @@ import {
   assertMeasuredNativeJob,
   measureNativeJob,
 } from './fixtures/opencode-ga-host/native-job.ts'
-import { startOwnedCommand } from './fixtures/opencode-ga-host/owned-command.ts'
+import {
+  assertOwnedCommandSucceeded,
+  startOwnedCommand,
+} from './fixtures/opencode-ga-host/owned-command.ts'
 
 // Committed repository files: the pinned OpenCode binary digest and the
 // released host contract. The runner reads them from the checkout, never from
@@ -328,6 +331,9 @@ export function verifyExecutable(
  * debugging; only a run of all of them counts as a complete result.
  */
 export const GA_CASE_IDS = [
+  'ga-ownership-pool-login',
+  'ga-ownership-passthrough',
+  'ga-ownership-empty-pool',
   'catalog-and-titles',
   'title-off-catalog',
   'title-primary-fallback',
@@ -433,6 +439,41 @@ export const GA_CASE_IDS = [
 ] as const
 export type GaCaseId = (typeof GA_CASE_IDS)[number]
 
+export function gaFreshLoginCase(caseId: string): boolean {
+  return (
+    caseId === 'ga-ownership-pool-login' || caseId === 'ga-ownership-empty-pool'
+  )
+}
+
+export function gaOwnershipCase(caseId: GaCaseId): boolean {
+  return gaFreshLoginCase(caseId) || caseId === 'ga-ownership-passthrough'
+}
+
+export function gaAllowsDirectProvider(caseId: GaCaseId): boolean {
+  return caseId === 'ga-ownership-passthrough'
+}
+
+export function gaPlaceholderImportPolicy(
+  caseId: GaCaseId,
+): 'never' | 'after-foreign-held' | 'before-prompt' {
+  if (gaOwnershipCase(caseId)) return 'never'
+  return caseId === 'late-unrelated-response'
+    ? 'after-foreign-held'
+    : 'before-prompt'
+}
+
+export function assertGaNoDirectProvider(
+  caseId: GaCaseId,
+  count: number,
+): void {
+  requireCondition(
+    Number.isInteger(count) &&
+      count >= 0 &&
+      (gaAllowsDirectProvider(caseId) || count === 0),
+    `Public provider fallthrough: ${caseId}`,
+  )
+}
+
 export interface GaCaseObservation {
   id: GaCaseId
   state: 'source-prepared' | 'runtime-verified'
@@ -476,11 +517,7 @@ export function assertGaObservations(
       `Missing or reused scenario nonce: ${observation.id}`,
     )
     nonces.add(observation.nonce)
-    requireCondition(
-      Number.isInteger(observation.directProviderRequests) &&
-        observation.directProviderRequests === 0,
-      `Public provider fallthrough: ${observation.id}`,
-    )
+    assertGaNoDirectProvider(observation.id, observation.directProviderRequests)
     requireCondition(
       Number.isInteger(observation.primaryRequests) &&
         observation.primaryRequests >= 0,
@@ -1146,7 +1183,7 @@ const overrides: GaPluginOverrides = {
     log('accounts.snapshot', { observation })
     return undefined
   },
-  refreshAccessToken: ${refreshGaFixtureCredentials.toString()},
+  refreshAccessToken: (...args) => { log('refreshAccessToken'); return (${refreshGaFixtureCredentials.toString()})(...args) },
   ensureProjectContext: async (auth) => {
     const response = await fetch(transportMock + '/loadCodeAssist', { method: 'POST', body: JSON.stringify({ project: 'synthetic-ga-project' }) })
     if (!response.ok) throw new Error('Fixture project context failed')
@@ -1528,15 +1565,20 @@ export interface GaRecordedRequest {
   path: string
   authorization: string
   endpoint: string
+  headers: Record<string, string | string[]>
+  rawHeaders: string[]
+  responseStatus?: number
 }
 
 export interface GaMock {
   url: string
   requests: GaRecordedRequest[]
   events: Array<{
-    event: 'held-content' | 'peer-close' | 'forced-close'
+    event: 'held-content' | 'peer-close' | 'forced-close' | 'unrelated-held'
     at: number
   }>
+  failNextDirectProvider(nonce: string): void
+  releaseUnrelated(): void
   close(): Promise<void>
 }
 
@@ -1574,6 +1616,8 @@ export async function startGaMock(
   let teardown = false
   let primaryCount = 0
   let titleCount = 0
+  let directFailureNonce: string | undefined
+  let releaseUnrelated: (() => void) | undefined
   const canned =
     caseId === 'overflow-gemini' ||
     caseId === 'overflow-claude' ||
@@ -1602,21 +1646,69 @@ export async function startGaMock(
                   : path === '/quota'
                     ? 'quota'
                     : 'direct-provider'
-      requests.push({
+      const recorded: GaRecordedRequest = {
         kind,
         body,
         path,
         authorization: String(request.headers.authorization ?? ''),
         endpoint: String(request.headers['x-agy-endpoint'] ?? ''),
-      })
+        headers: Object.fromEntries(
+          Object.entries(request.headers).filter(
+            (entry): entry is [string, string | string[]] =>
+              entry[1] !== undefined,
+          ),
+        ),
+        rawHeaders: [...request.rawHeaders],
+      }
+      requests.push(recorded)
       if (kind === 'unrelated') {
-        response.writeHead(200, { 'content-type': 'text/event-stream' })
-        response.end(
-          `data: ${JSON.stringify({ candidates: [{ index: 0, content: { role: 'model', parts: [{ text: 'UNRELATED_NATIVE_SUCCESS' }] }, finishReason: 'STOP' }] })}\r\n\r\n`,
-        )
+        const complete = () => {
+          recorded.responseStatus = 200
+          response.writeHead(200, { 'content-type': 'text/event-stream' })
+          response.end(
+            `data: ${JSON.stringify({ candidates: [{ index: 0, content: { role: 'model', parts: [{ text: 'UNRELATED_NATIVE_SUCCESS' }] }, finishReason: 'STOP' }] })}\r\n\r\n`,
+          )
+        }
+        if (caseId === 'late-unrelated-response') {
+          requireCondition(!releaseUnrelated, 'GA_UNRELATED_ALREADY_HELD')
+          releaseUnrelated = complete
+          events.push({ event: 'unrelated-held', at: gaTimestamp() })
+        } else complete()
         return
       }
       if (kind === 'direct-provider') {
+        if (gaAllowsDirectProvider(caseId)) {
+          const contents = record(JSON.parse(body)).contents
+          const fail =
+            directFailureNonce !== undefined &&
+            Array.isArray(contents) &&
+            contents.some((content) => {
+              const parts = record(content).parts
+              return (
+                record(content).role === 'user' &&
+                Array.isArray(parts) &&
+                parts.some(
+                  (part) =>
+                    typeof record(part).text === 'string' &&
+                    String(record(part).text).includes(directFailureNonce!),
+                )
+              )
+            })
+          if (fail) directFailureNonce = undefined
+          recorded.responseStatus = fail ? 500 : 200
+          response.writeHead(recorded.responseStatus, {
+            'content-type': fail ? 'application/json' : 'text/event-stream',
+          })
+          response.end(
+            fail
+              ? JSON.stringify({
+                  error: { message: 'Synthetic internal failure' },
+                })
+              : `data: ${JSON.stringify({ candidates: [{ index: 0, content: { role: 'model', parts: [{ text: `GA_DIRECT_OK_${nonce}` }] }, finishReason: 'STOP' }] })}\r\n\r\n`,
+          )
+          return
+        }
+        recorded.responseStatus = 418
         response.writeHead(418, { 'content-type': 'application/json' })
         response.end(
           '{"error":{"message":"native driver bypassed Antigravity"}}',
@@ -1876,6 +1968,21 @@ export async function startGaMock(
     url: `http://127.0.0.1:${address.port}`,
     requests,
     events,
+    failNextDirectProvider(nonce) {
+      requireCondition(
+        gaAllowsDirectProvider(caseId) &&
+          /^[a-f0-9]{32}$/.test(nonce) &&
+          directFailureNonce === undefined,
+        'GA_DIRECT_POLICY_NOT_ADMITTED',
+      )
+      directFailureNonce = nonce
+    },
+    releaseUnrelated() {
+      requireCondition(releaseUnrelated, 'GA_UNRELATED_NOT_HELD')
+      const complete = releaseUnrelated
+      releaseUnrelated = undefined
+      complete()
+    },
     async close() {
       teardown = true
       server.closeAllConnections()
@@ -1892,13 +1999,14 @@ export function seedGaHost(
   mockUrl: string,
   accountCount: 0 | 1 | 2 = 1,
   rawSender = false,
+  caseId?: GaCaseId,
 ): string {
   // Old-format account file used only as input to the account migration; the
   // host serves the migrated store. Runtime checks read accounts through the
   // state RPC and the menu, never from this file.
   const accountsFile = join(paths.opencodeConfig, 'antigravity-accounts.json')
   const now = Date.now()
-  if (accountCount > 0)
+  if (accountCount > 0 && !(caseId && gaFreshLoginCase(caseId)))
     writeFileSync(
       accountsFile,
       JSON.stringify({
@@ -1942,7 +2050,72 @@ export function seedGaHost(
     join(paths.project, 'README.md'),
     '# Synthetic GA tool fixture\n',
   )
+  if (caseId && gaOwnershipCase(caseId)) {
+    const projectConfig = join(paths.project, '.opencode')
+    mkdirSync(projectConfig, { mode: 0o700 })
+    for (const path of [
+      join(paths.opencodeConfig, 'antigravity.json'),
+      join(projectConfig, 'antigravity.json'),
+    ]) {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          background_quota_refresh: false,
+          proactive_token_refresh: false,
+        }),
+        { mode: 0o600, flag: 'wx' },
+      )
+    }
+  }
   return accountsFile
+}
+
+/** Check the real public loader in a child, since its user path is process-scoped. */
+export async function verifyGaOwnershipConfig(paths: GaPaths): Promise<void> {
+  const loader = pathToFileURL(
+    resolve('packages/opencode/src/plugin/config/index.ts'),
+  ).href
+  const source = `import { loadConfig, getUserConfigPath, getProjectConfigPath } from ${JSON.stringify(loader)}
+const directory = ${JSON.stringify(paths.project)}
+const config = loadConfig(directory)
+console.log(JSON.stringify({ user: getUserConfigPath(), project: getProjectConfigPath(directory), background_quota_refresh: config.background_quota_refresh, proactive_token_refresh: config.proactive_token_refresh, environment: Object.fromEntries(['HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_DB'].map(key => [key, process.env[key]])) }))`
+  const env = gaChildEnvironment(paths, process.env)
+  const result = await startOwnedCommand(process.execPath, ['--eval', source], {
+    cwd: paths.project,
+    env,
+    deadlineMs: 5000,
+    outputCapBytes: 64 * 1024,
+  }).result
+  assertOwnedCommandSucceeded(result)
+  const loaded = record(JSON.parse(result.stdout.trim()))
+  requireCondition(
+    loaded.background_quota_refresh === false &&
+      loaded.proactive_token_refresh === false &&
+      loaded.user === join(paths.opencodeConfig, 'antigravity.json') &&
+      loaded.project === join(paths.project, '.opencode', 'antigravity.json'),
+    'GA_CONFIG_NOT_ISOLATED: public loader did not load both refresh flags as false',
+  )
+  for (const key of [
+    'HOME',
+    'XDG_CONFIG_HOME',
+    'OPENCODE_CONFIG_DIR',
+    'OPENCODE_DB',
+  ]) {
+    requireCondition(
+      record(loaded.environment)[key] === env[key],
+      `GA_CONFIG_ENVIRONMENT_MISMATCH: ${key}`,
+    )
+  }
+  writeFileSync(
+    join(paths.state, 'ownership-config-loader.json'),
+    JSON.stringify({
+      ...loaded,
+      loader,
+      limitation:
+        'Background quota and proactive token refresh are disabled only for the three ownership fixtures; this isolates request-driven effects, not production timer behavior.',
+    }),
+    { mode: 0o600, flag: 'wx' },
+  )
 }
 
 export interface GaBinaryPin {
@@ -2861,7 +3034,178 @@ export function gaSessionErrors(stdout: string): Record<string, unknown>[] {
     })
 }
 
+export async function gaCredentialEntries(
+  url: string,
+): Promise<Record<string, unknown>[]> {
+  const response = record(
+    await gaNativeRequest(url, 'GET', '/api/credential', undefined, 200),
+  )
+  requireCondition(
+    Array.isArray(response.data),
+    'GA_CREDENTIAL_INVENTORY_MISSING',
+  )
+  return response.data.map(record)
+}
+
+function isGaPoolPlaceholder(entry: Record<string, unknown>): boolean {
+  const value = record(entry.value)
+  return (
+    entry.integrationID === 'google' &&
+    entry.active === true &&
+    entry.label === 'Antigravity' &&
+    value.type === 'oauth' &&
+    value.methodID === 'antigravity-auth-pool-browser'
+  )
+}
+
+export async function assertGaActivePlaceholder(
+  url: string,
+  expected?: { id: string; value: unknown },
+): Promise<Record<string, unknown>> {
+  const active = (await gaCredentialEntries(url)).filter(
+    (entry) => entry.integrationID === 'google' && entry.active === true,
+  )
+  const entry = active[0]
+  requireCondition(
+    active.length === 1 &&
+      entry &&
+      isGaPoolPlaceholder(entry) &&
+      (!expected ||
+        (entry.id === expected.id &&
+          JSON.stringify(entry.value) === JSON.stringify(expected.value))),
+    'GA_ACTIVE_PLACEHOLDER_MISSING: expected the captured pool credential to be active',
+  )
+  return entry
+}
+
+/** Retain the host-returned value, not a reconstructed placeholder or a DB edit. */
+export async function captureGaPlaceholder(
+  harness: Pick<
+    GaHarness,
+    'caseId' | 'paths' | 'placeholderFixture' | 'readWrapperEvents'
+  > & { host: Pick<GaHostSession, 'url'> },
+  credentialId: string,
+): Promise<void> {
+  requireCondition(
+    harness.caseId === 'ga-ownership-pool-login',
+    'GA_PLACEHOLDER_CAPTURE_REQUIRES_POOL_LOGIN',
+  )
+  const entry = await assertGaActivePlaceholder(harness.host.url)
+  requireCondition(
+    entry.id === credentialId &&
+      harness
+        .readWrapperEvents()
+        .some(
+          (event) =>
+            event.event === 'oauth.exchange' && event.codePresent === true,
+        ),
+    'GA_PLACEHOLDER_LOGIN_PROVENANCE_MISSING',
+  )
+  const value = record(entry.value)
+  const fixture = {
+    caseId: harness.caseId,
+    credentialId,
+    value,
+    valueSha256: sha256(Buffer.from(JSON.stringify(value))),
+    provenance: {
+      api: 'GET /api/credential',
+      host: harness.host.url,
+      databaseFile: harness.paths.database,
+      pinSha256: sha256(readFileSync(GA_PIN_PATH)),
+      capturedAt: new Date().toISOString(),
+    },
+  }
+  writeFileSync(harness.placeholderFixture, JSON.stringify(fixture), {
+    mode: 0o600,
+    flag: 'wx',
+  })
+  writeFileSync(
+    join(harness.paths.state, 'placeholder-capture.json'),
+    JSON.stringify(fixture),
+    { mode: 0o600, flag: 'wx' },
+  )
+}
+
+export async function importGaPlaceholder(
+  url: string,
+  fixturePath: string,
+  paths: GaPaths,
+): Promise<Record<string, unknown>> {
+  requireCondition(
+    existsSync(fixturePath),
+    'GA_PLACEHOLDER_FIXTURE_MISSING: run ga-ownership-pool-login first',
+  )
+  const fixture = record(JSON.parse(readFileSync(fixturePath, 'utf8')))
+  const value = record(fixture.value)
+  const provenance = record(fixture.provenance)
+  requireCondition(
+    fixture.caseId === 'ga-ownership-pool-login' &&
+      typeof fixture.credentialId === 'string' &&
+      fixture.valueSha256 === sha256(Buffer.from(JSON.stringify(value))) &&
+      provenance.api === 'GET /api/credential' &&
+      provenance.pinSha256 === sha256(readFileSync(GA_PIN_PATH)) &&
+      typeof provenance.host === 'string' &&
+      typeof provenance.databaseFile === 'string' &&
+      typeof provenance.capturedAt === 'string' &&
+      value.type === 'oauth' &&
+      value.methodID === 'antigravity-auth-pool-browser',
+    'GA_PLACEHOLDER_PROVENANCE_INVALID',
+  )
+  const response = record(
+    await gaNativeRequest(
+      url,
+      'POST',
+      '/api/credential',
+      { integrationID: 'google', label: 'Antigravity', value, activate: true },
+      200,
+    ),
+  )
+  const imported = record(response.data)
+  requireCondition(
+    typeof imported.id === 'string',
+    'GA_PLACEHOLDER_IMPORT_MISSING_ID',
+  )
+  const active = await assertGaActivePlaceholder(url, {
+    id: imported.id,
+    value,
+  })
+  writeFileSync(
+    join(paths.state, 'placeholder-import.json'),
+    JSON.stringify({
+      source: fixturePath,
+      sourceCredentialId: fixture.credentialId,
+      credentialId: imported.id,
+      valueSha256: fixture.valueSha256,
+      provenance,
+    }),
+    { mode: 0o600, flag: 'wx' },
+  )
+  return active
+}
+
+export async function importGaHeldResponsePlaceholder(
+  harness: GaHarness,
+): Promise<void> {
+  requireCondition(
+    gaPlaceholderImportPolicy(harness.caseId) === 'after-foreign-held' &&
+      harness.mock.events.some((event) => event.event === 'unrelated-held') &&
+      harness.mock.requests.some(
+        (request) =>
+          request.kind === 'unrelated' &&
+          request.headers['x-goog-api-key'] === 'synthetic-ga-key',
+      ),
+    'GA_PLACEHOLDER_FOREIGN_REQUEST_NOT_HELD',
+  )
+  await importGaPlaceholder(
+    harness.host.url,
+    harness.placeholderFixture,
+    harness.paths,
+  )
+}
+
 export interface GaHarness {
+  caseId: GaCaseId
+  placeholderFixture: string
   paths: GaPaths
   nonce: string
   accountsMigrationInput: string
@@ -2908,6 +3252,7 @@ export async function createOpenCodeGaHarness(
   const pin = readGaPin(repoRoot)
   const root = realpathSync(mkdtempSync(join(outputRoot, `${caseId}-`)))
   const paths = prepareGaRoot(root)
+  const placeholderFixture = join(outputRoot, 'pool-login-placeholder.json')
   const nonce = newGaNonce()
   const executable: GaVerifiedExecutable = {
     path:
@@ -2991,7 +3336,7 @@ export async function createOpenCodeGaHarness(
       paths,
       wrapper,
       mock.url,
-      options.accounts
+      options.accounts || gaFreshLoginCase(caseId)
         ? 0
         : /account-ineligible|validation-required|quota-429|two-location|stale-handle|pty-command-account/.test(
               caseId,
@@ -2999,11 +3344,13 @@ export async function createOpenCodeGaHarness(
           ? 2
           : 1,
       options.rawSender === true,
+      caseId,
     )
     if (options.accounts) {
       await options.accounts.seedCurrentStore(paths, caseId, nonce)
-      await options.accounts.assertCurrentStoreInput(paths)
+      await options.accounts.assertCurrentStoreInput(paths, caseId)
     }
+    if (gaOwnershipCase(caseId)) await verifyGaOwnershipConfig(paths)
     execFileSync('/usr/bin/git', ['init', '-q'], {
       cwd: paths.project,
       env: gaChildEnvironment(paths, process.env),
@@ -3011,6 +3358,9 @@ export async function createOpenCodeGaHarness(
     })
     host = await startGaHost(executable, paths, startup)
     const runningHost = host
+    if (gaPlaceholderImportPolicy(caseId) === 'before-prompt') {
+      await importGaPlaceholder(runningHost.url, placeholderFixture, paths)
+    }
     const readWrapperEvents = () =>
       existsSync(join(paths.state, 'wrapper.ndjson'))
         ? readFileSync(join(paths.state, 'wrapper.ndjson'), 'utf8')
@@ -3020,6 +3370,8 @@ export async function createOpenCodeGaHarness(
         : []
     let runSequence = 0
     return {
+      caseId,
+      placeholderFixture,
       paths,
       nonce,
       accountsMigrationInput,
@@ -3037,6 +3389,16 @@ export async function createOpenCodeGaHarness(
         continuation = false,
         session,
       ) {
+        if (
+          !gaAllowsDirectProvider(caseId) &&
+          !(
+            caseId === 'late-unrelated-response' &&
+            session &&
+            session.directory !== paths.project
+          )
+        ) {
+          await assertGaActivePlaceholder(runningHost.url)
+        }
         const result = session
           ? await launchGaHost(
               executable,
@@ -3082,9 +3444,10 @@ export async function createOpenCodeGaHarness(
             'Pinned CLI runtime identity mismatch',
           )
         }
-        requireCondition(
-          mock.requests.every((request) => request.kind !== 'direct-provider'),
-          'Real native Google driver bypassed Antigravity',
+        assertGaNoDirectProvider(
+          caseId,
+          mock.requests.filter((request) => request.kind === 'direct-provider')
+            .length,
         )
         return result
       },
@@ -3419,7 +3782,7 @@ export interface GaAccountRpcJoin {
     scenario: GaCaseId,
     nonce: string,
   ): Promise<void>
-  assertCurrentStoreInput(paths: GaPaths): Promise<void>
+  assertCurrentStoreInput(paths: GaPaths, scenario: GaCaseId): Promise<void>
   snapshot(
     harness: GaHarness,
     session: GaSessionRef,
@@ -5290,11 +5653,11 @@ export async function runGaFullDriver(
       }
       requireCondition(harness, `Scenario has no actual harness: ${id}`)
       assertGaDatabase(harness.paths)
-      requireCondition(
-        harness.mock.requests.every(
-          (request) => request.kind !== 'direct-provider',
-        ),
-        `Direct-provider fallthrough in ${id}`,
+      assertGaNoDirectProvider(
+        id,
+        harness.mock.requests.filter(
+          (request) => request.kind === 'direct-provider',
+        ).length,
       )
       writeFileSync(
         join(harness.paths.state, 'mock-requests.json'),
