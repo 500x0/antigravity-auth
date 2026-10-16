@@ -431,18 +431,6 @@ new = '''function validateApplyOutput(value: unknown, issues: Issues): void {
   const path: Path = []
   // NON-VACUITY BREAK: skip JSON-safe validation for apply output.'''
 test_file = "packages/opencode/src/ga/rpc/protocol.test.ts"
-list_command = [
-  "bash",
-  "-c",
-  '''set -e
-report=$(mktemp)
-trap 'rm -f "$report"' EXIT
-bun run --cwd packages/core build >/dev/null
-bun test --isolate packages/opencode/src/ga/rpc/protocol.test.ts -t "$1" --reporter=junit --reporter-outfile="$report" >/dev/null 2>&1
-python3 -c 'import json,sys,xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); print(json.dumps([case.attrib.get("classname", "") + " " + case.attrib.get("name", "") for case in root.iter("testcase")]))' "$report"''',
-  "--",
-  "{test}",
-]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/rpc/protocol.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
