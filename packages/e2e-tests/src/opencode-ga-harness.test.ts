@@ -55,6 +55,7 @@ import {
   gaNativeControl,
   gaNativeRequest,
   gaPlaceholderImportPolicy,
+  gaRetryRequestsMatch,
   gaTimestamp,
   importGaPlaceholder,
   loadGaOverflowFixture,
@@ -1681,22 +1682,68 @@ describe('GA ownership harness preparation (source controls, not native proof)',
 
   function passthroughEvidence() {
     const session = { id: 'foreign-session', directory: '/owned/project' }
+    const retryBody = JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: 'retry-nonce' }] }],
+    })
+    const retryHeaders: GaRecordedRequest['headers'][] = [
+      {
+        accept: '*/*',
+        'accept-encoding': 'gzip, deflate, br, zstd',
+        b3: '00ee93b0428118e3672341659ef5780c-cf6160d36757d758-1-bcf40005db959c65',
+        connection: 'keep-alive',
+        'content-length': String(
+          new TextEncoder().encode(retryBody).byteLength,
+        ),
+        'content-type': 'application/json',
+        host: '127.0.0.1:33905',
+        traceparent: '00-00ee93b0428118e3672341659ef5780c-cf6160d36757d758-01',
+        'user-agent': 'opencode/latest/2.0.22/cli',
+        'x-goog-api-key': 'synthetic-ga-key',
+        'x-opencode-client': 'cli',
+        'x-opencode-project': 'global',
+        'x-opencode-session': session.id,
+        'x-opencode-session-id': session.id,
+        'x-session-affinity': session.id,
+        'x-session-id': session.id,
+      },
+      {
+        accept: '*/*',
+        'accept-encoding': 'gzip, deflate, br, zstd',
+        b3: '00ee93b0428118e3672341659ef5780c-66835b38259e4bf0-1-a28c8db3ca155839',
+        connection: 'keep-alive',
+        'content-length': String(
+          new TextEncoder().encode(retryBody).byteLength,
+        ),
+        'content-type': 'application/json',
+        host: '127.0.0.1:33905',
+        traceparent: '00-00ee93b0428118e3672341659ef5780c-66835b38259e4bf0-01',
+        'user-agent': 'opencode/latest/2.0.22/cli',
+        'x-goog-api-key': 'synthetic-ga-key',
+        'x-opencode-client': 'cli',
+        'x-opencode-project': 'global',
+        'x-opencode-session': session.id,
+        'x-opencode-session-id': session.id,
+        'x-session-affinity': session.id,
+        'x-session-id': session.id,
+      },
+    ]
     const requests: GaRecordedRequest[] = [200, 500, 200].map(
       (responseStatus, index) => ({
         kind: 'direct-provider',
         path: '/direct/v1/models/fixture:streamGenerateContent',
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: index === 0 ? 'first' : 'retry-nonce' }],
-            },
-          ],
-        }),
-        headers: {
-          'x-goog-api-key': 'synthetic-ga-key',
-          'x-opencode-session-id': session.id,
-        },
+        body:
+          index === 0
+            ? JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: 'first' }] }],
+              })
+            : retryBody,
+        headers:
+          index === 0
+            ? {
+                'x-goog-api-key': 'synthetic-ga-key',
+                'x-opencode-session-id': session.id,
+              }
+            : retryHeaders[index - 1]!,
         rawHeaders: [],
         authorization: '',
         endpoint: '',
@@ -1752,7 +1799,7 @@ describe('GA ownership harness preparation (source controls, not native proof)',
     return { session, requests, events, snapshot, harness, results }
   }
 
-  it('accepts unchanged native primary wire evidence, without counting snapshots as acquisition', () => {
+  it('accepts a 500→200 retry when only valid per-attempt trace headers differ', () => {
     const f = passthroughEvidence()
     expect(() =>
       assertGaPassthroughEvidence(
@@ -1766,6 +1813,88 @@ describe('GA ownership harness preparation (source controls, not native proof)',
       ),
     ).not.toThrow()
   })
+
+  const retryMismatches: [string, (requests: GaRecordedRequest[]) => void][] = [
+    [
+      'a changed body byte',
+      (requests) => {
+        requests[2]!.body = `${requests[2]!.body} `
+      },
+    ],
+    [
+      'a changed API key',
+      (requests) => {
+        requests[2]!.headers['x-goog-api-key'] = 'another-api-key'
+      },
+    ],
+    [
+      'a changed host session header',
+      (requests) => {
+        requests[2]!.headers['x-opencode-session-id'] = 'another-session'
+      },
+    ],
+    [
+      'a changed content length',
+      (requests) => {
+        requests[2]!.headers['content-length'] = '1'
+      },
+    ],
+    [
+      'an added non-trace header',
+      (requests) => {
+        requests[2]!.headers['x-added-header'] = 'value'
+      },
+    ],
+    [
+      'a removed non-trace header',
+      (requests) => {
+        delete requests[2]!.headers['user-agent']
+      },
+    ],
+    [
+      'different trace IDs across attempts',
+      (requests) => {
+        requests[2]!.headers.b3 =
+          '11ee93b0428118e3672341659ef5780c-66835b38259e4bf0-1-a28c8db3ca155839'
+        requests[2]!.headers.traceparent =
+          '00-11ee93b0428118e3672341659ef5780c-66835b38259e4bf0-01'
+      },
+    ],
+    [
+      'different B3 and W3C trace IDs within an attempt',
+      (requests) => {
+        requests[2]!.headers.traceparent =
+          '00-11ee93b0428118e3672341659ef5780c-66835b38259e4bf0-01'
+      },
+    ],
+    [
+      'different B3 and W3C client span IDs within an attempt',
+      (requests) => {
+        requests[2]!.headers.traceparent =
+          '00-00ee93b0428118e3672341659ef5780c-76835b38259e4bf0-01'
+      },
+    ],
+    [
+      'a malformed B3 trace header',
+      (requests) => {
+        requests[2]!.headers.b3 = 'not-a-valid-b3-header'
+      },
+    ],
+    [
+      'a malformed W3C trace header',
+      (requests) => {
+        requests[2]!.headers.traceparent = 'not-a-valid-traceparent'
+      },
+    ],
+  ]
+
+  for (const [mismatch, mutate] of retryMismatches) {
+    it(`rejects a retry with ${mismatch}`, () => {
+      const f = passthroughEvidence()
+      mutate(f.requests)
+      expect(gaRetryRequestsMatch(f.requests[1], f.requests[2])).toBe(false)
+    })
+  }
 
   it('rejects a send.start in the passthrough measured interval', () => {
     const f = passthroughEvidence()

@@ -102,6 +102,97 @@ function requireCondition(
   if (!condition) throw new Error(message)
 }
 
+function isGaRetryTraceHeader(name: string): boolean {
+  return name === 'b3' || name === 'traceparent'
+}
+
+function parseGaB3Trace(
+  value: string | string[] | undefined,
+): { traceId: string; spanId: string } | undefined {
+  if (typeof value !== 'string') return undefined
+  const match =
+    /^([0-9a-f]{32})-([0-9a-f]{16})-([01])(?:-([0-9a-f]{16}))?$/.exec(value)
+  if (
+    match === null ||
+    /^0+$/.test(match[1]!) ||
+    /^0+$/.test(match[2]!) ||
+    (match[4] !== undefined && /^0+$/.test(match[4]))
+  ) {
+    return undefined
+  }
+  return { traceId: match[1]!, spanId: match[2]! }
+}
+
+function parseGaTraceparent(
+  value: string | string[] | undefined,
+): { traceId: string; spanId: string } | undefined {
+  if (typeof value !== 'string') return undefined
+  const match = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/.exec(value)
+  if (match === null || /^0+$/.test(match[1]!) || /^0+$/.test(match[2]!)) {
+    return undefined
+  }
+  return { traceId: match[1]!, spanId: match[2]! }
+}
+
+function sameGaRetryHeaderValue(
+  first: string | string[] | undefined,
+  second: string | string[] | undefined,
+): boolean {
+  if (typeof first === 'string') return first === second
+  return (
+    Array.isArray(first) &&
+    Array.isArray(second) &&
+    first.length === second.length &&
+    first.every((value, index) => value === second[index])
+  )
+}
+
+export function gaRetryRequestsMatch(
+  first: Pick<GaRecordedRequest, 'body' | 'headers'> | undefined,
+  second: Pick<GaRecordedRequest, 'body' | 'headers'> | undefined,
+): boolean {
+  if (
+    first === undefined ||
+    second === undefined ||
+    first.body !== second.body
+  ) {
+    return false
+  }
+
+  const firstHeaders = Object.entries(first.headers).filter(
+    ([name]) => !isGaRetryTraceHeader(name),
+  )
+  const secondHeaders = Object.entries(second.headers).filter(
+    ([name]) => !isGaRetryTraceHeader(name),
+  )
+  if (
+    firstHeaders.length !== secondHeaders.length ||
+    !firstHeaders.every(
+      ([name, value]) =>
+        Object.hasOwn(second.headers, name) &&
+        sameGaRetryHeaderValue(value, second.headers[name]),
+    )
+  ) {
+    return false
+  }
+
+  const firstB3 = parseGaB3Trace(first.headers.b3)
+  const firstTraceparent = parseGaTraceparent(first.headers.traceparent)
+  const secondB3 = parseGaB3Trace(second.headers.b3)
+  const secondTraceparent = parseGaTraceparent(second.headers.traceparent)
+  return (
+    firstB3 !== undefined &&
+    firstTraceparent !== undefined &&
+    secondB3 !== undefined &&
+    secondTraceparent !== undefined &&
+    firstB3.traceId === firstTraceparent.traceId &&
+    firstB3.spanId === firstTraceparent.spanId &&
+    secondB3.traceId === secondTraceparent.traceId &&
+    secondB3.spanId === secondTraceparent.spanId &&
+    firstB3.traceId === secondB3.traceId
+  )
+}
+
 export function record(value: unknown): Record<string, unknown> {
   requireCondition(
     value !== null && typeof value === 'object' && !Array.isArray(value),
@@ -5281,9 +5372,7 @@ export async function runGaOwnershipPassthrough(
     'GA_PASSTHROUGH_NATIVE_RETRY_MISSING',
   )
   requireCondition(
-    secondRecords[0]?.body === secondRecords[1]?.body &&
-      JSON.stringify(secondRecords[0]?.headers) ===
-        JSON.stringify(secondRecords[1]?.headers),
+    gaRetryRequestsMatch(secondRecords[0], secondRecords[1]),
     'GA_PASSTHROUGH_RETRY_BYTES_CHANGED',
   )
   const after = await accounts.snapshot(harness, session)
@@ -5348,9 +5437,7 @@ export function assertGaPassthroughEvidence(
     'GA_PASSTHROUGH_FOREIGN_WIRE_CHANGED',
   )
   requireCondition(
-    records[1]?.body === records[2]?.body &&
-      JSON.stringify(records[1]?.headers) ===
-        JSON.stringify(records[2]?.headers),
+    gaRetryRequestsMatch(records[1], records[2]),
     'GA_PASSTHROUGH_RETRY_BYTES_CHANGED',
   )
   requireCondition(
