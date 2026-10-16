@@ -9,6 +9,7 @@ import {
 import { join } from 'node:path'
 import {
   assertOwnedCommandSucceeded,
+  type OwnedCommandResult,
   startOwnedCommand,
 } from './owned-command.ts'
 
@@ -130,11 +131,40 @@ export function assertMeasuredNativeJob(): void {
   )
 }
 
+export interface NativeProbeCommandResult {
+  code: number | null
+  signal: string | null
+  stdout: string
+  stderr: string
+  timedOut: boolean
+  outputCapExceeded: boolean
+  spawnError: string | null
+  cleanup: {
+    outcome: 'clean' | 'failed'
+    signaled: number
+    signals: readonly unknown[]
+    preexisting: readonly unknown[]
+    survivors: readonly unknown[] | null
+    failures: readonly string[]
+  }
+}
+export type NativeProbeLauncher = (
+  binary: string,
+  args: string[],
+  options: {
+    cwd: string
+    env: Record<string, string>
+    timeoutMs: number
+    outputCapBytes: number
+  },
+) => Promise<NativeProbeCommandResult>
+
 export async function measureNativeJob(
   repo: string,
   scratch: string,
   env: NodeJS.ProcessEnv,
   evidence: string,
+  runCommand?: NativeProbeLauncher,
 ): Promise<void> {
   check(process.platform === 'linux', 'Native job requires Linux')
   assertNativeKernel(
@@ -152,13 +182,26 @@ export async function measureNativeJob(
     probe.startsWith(`${realpathSync(repo)}/`),
     'Native probe escaped the selected checkout',
   )
-  const result = await startOwnedCommand('/usr/bin/python3', [probe, scratch], {
-    cwd: scratch,
-    env,
-    deadlineMs: 15_000,
-    outputCapBytes: 64 * 1024,
-  }).result
-  // Preserve probe stdout/stderr/exit and owned-child cleanup errors even when validation fails.
+  let result: OwnedCommandResult | NativeProbeCommandResult
+  if (runCommand) {
+    const definedEnv: Record<string, string> = {}
+    for (const [key, value] of Object.entries(env))
+      if (value !== undefined) definedEnv[key] = value
+    result = await runCommand('/usr/bin/python3', [probe, scratch], {
+      cwd: scratch,
+      env: definedEnv,
+      timeoutMs: 15_000,
+      outputCapBytes: 64 * 1024,
+    })
+  } else {
+    result = await startOwnedCommand('/usr/bin/python3', [probe, scratch], {
+      cwd: scratch,
+      env,
+      deadlineMs: 15_000,
+      outputCapBytes: 64 * 1024,
+    }).result
+  }
+  // Write raw probe output and launcher cleanup evidence before rejecting failure.
   writeFileSync(
     evidence,
     JSON.stringify(
@@ -173,7 +216,21 @@ export async function measureNativeJob(
     ),
     { mode: 0o600, flag: 'wx' },
   )
-  assertOwnedCommandSucceeded(result)
+  if ('cleanup' in result) {
+    check(
+      result.code === 0 &&
+        result.signal === null &&
+        result.spawnError === null &&
+        !result.timedOut &&
+        !result.outputCapExceeded &&
+        result.cleanup.outcome === 'clean' &&
+        result.cleanup.signaled === 0 &&
+        result.cleanup.signals.length === 0 &&
+        result.cleanup.failures.length === 0 &&
+        result.cleanup.survivors?.length === 0,
+      `Qualified native probe failed: ${JSON.stringify(result)}`,
+    )
+  } else assertOwnedCommandSucceeded(result)
   const namespace = assertNativeBoundary(JSON.parse(result.stdout))
   check(
     readlinkSync('/proc/self/ns/net') === namespace,

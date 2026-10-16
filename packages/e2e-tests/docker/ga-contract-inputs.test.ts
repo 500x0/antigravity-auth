@@ -1,13 +1,20 @@
-import { describe, expect, test } from 'bun:test'
-import { spawnSync } from 'node:child_process'
+import { describe, expect, spyOn, test } from 'bun:test'
+import * as childProcess from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,12 +24,22 @@ import {
   createProgram,
   createSourceFile,
   flattenDiagnosticMessageText,
+  forEachChild,
   getPreEmitDiagnostics,
+  isArrowFunction,
+  isBlock,
+  isCallExpression,
+  isFunctionDeclaration,
+  isIfStatement,
+  isReturnStatement,
+  isVariableDeclaration,
   ModuleKind,
   ModuleResolutionKind,
+  type Node,
   ScriptTarget,
   version as typescriptVersion,
 } from 'typescript'
+import type { NativeProbeCommandResult } from '../src/fixtures/opencode-ga-host/native-job.ts'
 import {
   assertRewriteConformance,
   GA_LOOPBACK_REQUEST_CONTRACT,
@@ -32,26 +49,190 @@ import {
   assertCliCompletion,
   assertConformance,
   assertNative,
+  assertNativeJobAdmission,
+  assertNativeRunnerUnchanged,
   classify,
   commandForCase,
   inventory,
   isolatedEnv,
   type Matrix,
+  MatrixSchema,
   materialize,
+  nativeHostEnv,
+  observeNativeRunner,
   PinSchema,
   PORTS,
   parseArgs,
   parseLines,
   parseTunnelRequests,
+  prepareNativeGit,
+  qualifyNativeProcessScope,
+  runNativeCommand,
+  scopedProcesses,
   selectCases,
   sha256,
+  snapshotNativeComparison,
   sourceDigests,
+  threadGroupHasLiveTasks,
   validateMatrix,
   verifiedBinary,
   type Wire,
 } from './measure-ga-proxy-matrix.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+function nativeTestProfile(env: NodeJS.ProcessEnv): 'portable' | 'motor-inert' {
+  if (!('GA_NATIVE_JOB_TEST_PROFILE' in env)) return 'portable'
+  if (env.GA_NATIVE_JOB_TEST_PROFILE !== 'motor-inert')
+    throw new Error(
+      'unknown GA_NATIVE_JOB_TEST_PROFILE; omit it or select motor-inert',
+    )
+  return 'motor-inert'
+}
+const selectedTestProfile = nativeTestProfile(process.env)
+const CLEANUP_GROUP =
+  'qualified private namespace native cleanup source and inert controls'
+const GIT_GROUP = 'native Git and retained comparison source controls'
+const motorRegistered: string[] = []
+const motorExecuted: string[] = []
+// Keep the frozen release-gate list independent of registration loops so losing
+// an inert case fails completeness instead of silently shrinking expected coverage.
+const MOTOR_INERT_EXPECTED_R4 = Object.freeze([
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses pid1-mismatch before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses controller-mismatch before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses namespace-mismatch before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses cgroup-mismatch before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-writable before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-rw-mount before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-shadow-mount before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-owner before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-substituted before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses psi-symlink before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses critical-owned before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses memory-limit-owned before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses pid-limit-owned before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses other-pressure-owned before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses executable-owned before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses executable-writable before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > live boundary refuses control-writable before every launch and signal',
+  'qualified private namespace native cleanup source and inert controls > caller-supplied current boundary facts cannot mint cleanup or launch authority',
+  'qualified private namespace native cleanup source and inert controls > qualified spawn failure preserves its error and completes bounded empty cleanup',
+  'qualified private namespace native cleanup source and inert controls > preexisting listener controller and PID1 are protected from native command cleanup',
+  'qualified private namespace native cleanup source and inert controls > a changed captured birth fails closed but remaining owned listener is still reaped',
+  'qualified private namespace native cleanup source and inert controls > boundary invalidation after discovery forbids every cleanup signal',
+  'qualified private namespace native cleanup source and inert controls > foreign live PID1 process ownership refuses before launch and signal calls',
+  'qualified private namespace native cleanup source and inert controls > native cleanup reaps detached pipe-holding listener on success without changing the command result',
+  'qualified private namespace native cleanup source and inert controls > native cleanup reaps detached pipe-holding listener on nonzero without changing the command result',
+  'qualified private namespace native cleanup source and inert controls > native cleanup reaps detached pipe-holding listener on timeout without changing the command result',
+  'qualified private namespace native cleanup source and inert controls > native cleanup reaps detached pipe-holding listener on output-cap without changing the command result',
+  'qualified private namespace native cleanup source and inert controls > the all-root PSI fixture qualifies through the same live admission path',
+  'qualified private namespace native cleanup source and inert controls > live protected private PID and cgroup facts qualify without pretending to attest unit properties',
+  'native Git and retained comparison source controls > native Git never executes caller PATH or copies caller configuration templates',
+  'qualified private namespace native cleanup source and inert controls > extant thread group is unknown while its listener survives original-command close',
+  'qualified private namespace native cleanup source and inert controls > cleanup budget expiry during an empty scan forbids a final rescan',
+  'qualified private namespace native cleanup source and inert controls > partial identity ENOENT is unknown while a real group remains live',
+  'qualified private namespace native cleanup source and inert controls > genuinely exited groups remain clean with zero cleanup signals',
+  'qualified private namespace native cleanup source and inert controls > running runner inode mismatch refuses before dispatch',
+  'qualified private namespace native cleanup source and inert controls > runner recheck hashes kernel-bound bytes and refuses a replaced path',
+  'qualified private namespace native cleanup source and inert controls > terminal zombie snapshot without live kernel tasks remains finished',
+])
+// Keep the prior inventory and map overbroad launch/signal names to the initial
+// qualification phase they actually test. Renaming must not silently drop a case.
+const MOTOR_INERT_R5_REFUSAL_NAMES = Object.freeze([
+  [
+    'live boundary refuses pid1-mismatch before every launch and signal',
+    'initial qualification refuses pid1-mismatch after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses controller-mismatch before every launch and signal',
+    'initial qualification refuses controller-mismatch after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses namespace-mismatch before every launch and signal',
+    'initial qualification refuses namespace-mismatch after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses cgroup-mismatch before every launch and signal',
+    'initial qualification refuses cgroup-mismatch after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-writable before every launch and signal',
+    'initial qualification refuses psi-writable after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-rw-mount before every launch and signal',
+    'initial qualification refuses psi-rw-mount after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-shadow-mount before every launch and signal',
+    'initial qualification refuses psi-shadow-mount after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-owner before every launch and signal',
+    'initial qualification refuses psi-owner after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-substituted before every launch and signal',
+    'initial qualification refuses psi-substituted after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses psi-symlink before every launch and signal',
+    'initial qualification refuses psi-symlink after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses critical-owned before every launch and signal',
+    'initial qualification refuses critical-owned after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses memory-limit-owned before every launch and signal',
+    'initial qualification refuses memory-limit-owned after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses pid-limit-owned before every launch and signal',
+    'initial qualification refuses pid-limit-owned after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses other-pressure-owned before every launch and signal',
+    'initial qualification refuses other-pressure-owned after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses executable-owned before every launch and signal',
+    'initial qualification refuses executable-owned after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses executable-writable before every launch and signal',
+    'initial qualification refuses executable-writable after an unmocked precondition',
+  ],
+  [
+    'live boundary refuses control-writable before every launch and signal',
+    'initial qualification refuses control-writable after an unmocked precondition',
+  ],
+] as const)
+const motorR5Renames = new Map<string, string>(
+  MOTOR_INERT_R5_REFUSAL_NAMES.map(([oldName, newName]) => [
+    `${CLEANUP_GROUP} > ${oldName}`,
+    `${CLEANUP_GROUP} > ${newName}`,
+  ]),
+)
+const MOTOR_INERT_EXPECTED_R5 = Object.freeze([
+  ...MOTOR_INERT_EXPECTED_R4.map((name) => motorR5Renames.get(name) ?? name),
+  'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during signal requalification forbids subsequent reads and signals',
+  'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during target identity read forbids subsequent reads and signals',
+  'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during final scoped check forbids subsequent reads and signals',
+])
+function motorTest(
+  group: string,
+  name: string,
+  body: () => void | Promise<void>,
+): void {
+  if (selectedTestProfile !== 'motor-inert') return
+  const fullName = `${group} > ${name}`
+  test(name, async () => {
+    motorExecuted.push(fullName)
+    console.log(`MOTOR_INERT_EXECUTED=${JSON.stringify(fullName)}`)
+    await body()
+  })
+  motorRegistered.push(fullName)
+}
 const pin = PinSchema.parse(
   JSON.parse(readFileSync(join(HERE, 'ga-binary-pin.json'), 'utf8')),
 )
@@ -98,9 +279,10 @@ const wire = (
   body: '{}',
   connection,
 })
-function matrix(): Matrix {
+function matrix(): Extract<Matrix, { profile: 'docker' }> {
   return {
     schema: 1,
+    profile: 'docker',
     full: true,
     binarySha256: pin.binarySha256,
     native: assertNative(native),
@@ -122,6 +304,3048 @@ function matrix(): Matrix {
     }),
   }
 }
+
+function processBoundaryFixture() {
+  const directory = { uid: 0, gid: 0, mode: 0o755, jobWritable: false }
+  const file = { uid: 0, gid: 0, mode: 0o644, jobWritable: false }
+  return {
+    policy: {
+      source: 'MOTOR owner-qualified supervisor contract',
+      privatePids: true,
+      killMode: 'control-group',
+      jobEndBackstop: 'systemd teardown',
+      unitPropertiesObserved: false,
+      signedAttestation: false,
+    },
+    namespace: { self: 'pid:[456]', pid1: 'pid:[456]' },
+    cgroup: {
+      self: '/system.slice/motor-job-01234567-0123-4123-a123-0123456789ab.service',
+      pid1: '/system.slice/motor-job-01234567-0123-4123-a123-0123456789ab.service',
+      directory,
+      parents: {
+        '/sys/fs/cgroup': directory,
+        '/sys/fs/cgroup/system.slice': directory,
+      },
+      controls: {
+        'cgroup.procs': file,
+        'cgroup.threads': file,
+        'cgroup.kill': { ...file, mode: 0o200 },
+        'cgroup.events': { ...file, mode: 0o444 },
+        'cgroup.subtree_control': file,
+        'memory.max': file,
+        'pids.max': file,
+      },
+      pressureObservation: {
+        name: 'memory.pressure',
+        fileType: 'regular',
+        ...file,
+        mount: {
+          point: '/sys/fs/cgroup',
+          root: '/',
+          type: 'cgroup2',
+          source: 'cgroup',
+          options: ['ro', 'nosuid', 'nodev', 'noexec'],
+          superOptions: ['rw'],
+        },
+      },
+    },
+    pid1: {
+      uid: 999,
+      kernel: {
+        NoNewPrivs: '1',
+        Seccomp: '2',
+        CapInh: '0000000000000000',
+        CapPrm: '0000000000000000',
+        CapEff: '0000000000000000',
+        CapBnd: '0000000000000000',
+        CapAmb: '0000000000000000',
+      },
+      comm: 'bash',
+      argvPrefix: ['/bin/bash', '-c'],
+      executable: '/bin/bash',
+      canonicalExecutable: '/usr/bin/bash',
+      executableSha256: 'c'.repeat(64),
+      digestProvenance: 'observed, not an approved artifact pin',
+      protection: directory,
+      parents: { '/': directory, '/usr': directory, '/usr/bin': directory },
+    },
+    controller: {
+      uid: 999,
+      kernel: {
+        NoNewPrivs: '1',
+        Seccomp: '2',
+        CapInh: '0000000000000000',
+        CapPrm: '0000000000000000',
+        CapEff: '0000000000000000',
+        CapBnd: '0000000000000000',
+        CapAmb: '0000000000000000',
+      },
+    },
+  }
+}
+
+interface InertIdentity {
+  pid: number
+  start: string
+  namespace: string
+  cgroup: string
+  pgid: number
+  sid: number
+  port?: number
+}
+// Keep each built-in's overloads and properties while changing a test observation.
+function observeBuiltin<T extends object>(
+  target: T,
+  alter: (value: unknown, args: unknown[]) => unknown,
+): T {
+  return new Proxy(target, {
+    apply(fn, receiver: unknown, args: unknown[]) {
+      if (typeof fn !== 'function')
+        throw new Error('test observation requires a function')
+      const value: unknown = Reflect.apply(fn, receiver, args)
+      return alter(value, args)
+    },
+  })
+}
+function fixtureUid(stat: object, uid: number): number | bigint {
+  return 'uid' in stat && typeof stat.uid === 'bigint' ? BigInt(uid) : uid
+}
+function inertProgram(root: string): string {
+  const path = join(root, 'inert-native-child.mjs')
+  writeFileSync(
+    path,
+    `import { spawn } from 'node:child_process'
+import { readFileSync, writeFileSync, closeSync } from 'node:fs'
+import { readlinkSync } from 'node:fs'
+import { createServer } from 'node:net'
+const [mode, root] = process.argv.slice(2)
+const identity = (pid) => {
+  const stat = readFileSync('/proc/' + pid + '/stat', 'utf8')
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+  return { pid, start: fields[19], pgid: Number(fields[2]), sid: Number(fields[3]), namespace: readlinkSync('/proc/' + pid + '/ns/pid'), cgroup: readFileSync('/proc/' + pid + '/cgroup', 'utf8') }
+}
+if (mode === 'worker' || mode === 'preexisting') {
+  if (mode === 'preexisting') writeFileSync('/proc/self/comm', 'ga-protected')
+  const file = root + '/' + (mode === 'worker' ? 'worker' : 'preexisting') + '.json'
+  writeFileSync(file, JSON.stringify(identity(process.pid)))
+  const server = createServer((socket) => socket.end('inert-listener'))
+  server.listen(0, '127.0.0.1', () => {
+    writeFileSync(file, JSON.stringify({ ...identity(process.pid), port: server.address().port }))
+    writeFileSync(3, 'ready')
+    closeSync(3)
+  })
+} else {
+  writeFileSync(root + '/leader.json', JSON.stringify(identity(process.pid)))
+  const child = spawn(process.execPath, [process.argv[1], 'worker', root], { env: process.env, detached: true, stdio: ['ignore', 'inherit', 'inherit', 'pipe'] })
+  try { writeFileSync(root + '/worker-spawn.json', JSON.stringify(identity(child.pid))) } catch {}
+  child.stdio[3].once('data', () => {
+    if (mode === 'success') process.exit(0)
+    if (mode === 'nonzero') process.exit(7)
+    if (mode === 'output-cap') process.stdout.write('X'.repeat(65536))
+    setInterval(() => {}, 1000)
+  })
+}
+`,
+  )
+  return path
+}
+function fixtureIdentities(root: string): InertIdentity[] {
+  const rows = [
+    'leader.json',
+    'worker-spawn.json',
+    'worker.json',
+    'preexisting.json',
+  ]
+    .filter((name) => existsSync(join(root, name)))
+    .map(
+      (name) =>
+        JSON.parse(readFileSync(join(root, name), 'utf8')) as InertIdentity,
+    )
+  return [
+    ...new Map(rows.map((row) => [`${row.pid}:${row.start}`, row])).values(),
+  ]
+}
+function inertAlive(identity: InertIdentity): boolean {
+  try {
+    const text = readFileSync(`/proc/${identity.pid}/stat`, 'utf8')
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
+    return (
+      fields[19] === identity.start && !['Z', 'X'].includes(fields[0] ?? '')
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+async function finallyReapInert(root: string): Promise<void> {
+  const identities = fixtureIdentities(root)
+  for (const identity of identities) {
+    if (
+      !Number.isInteger(identity.pid) ||
+      identity.pid <= 1 ||
+      identity.pid === process.pid ||
+      !/^\d+$/.test(identity.start)
+    )
+      throw new Error('invalid independent fixture identity')
+    if (!inertAlive(identity)) continue
+    if (
+      identity.namespace !== readlinkSync('/proc/self/ns/pid') ||
+      identity.namespace !== readlinkSync(`/proc/${identity.pid}/ns/pid`) ||
+      identity.cgroup !== readFileSync('/proc/self/cgroup', 'utf8') ||
+      identity.cgroup !== readFileSync(`/proc/${identity.pid}/cgroup`, 'utf8')
+    )
+      throw new Error('independent fixture identity escaped its job')
+    process.kill(identity.pid, 'SIGKILL')
+  }
+  const end = performance.now() + 500
+  while (identities.some(inertAlive) && performance.now() < end)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  if (identities.some(inertAlive))
+    throw new Error('independent fixture cleanup failed')
+  console.log(`INERT_FINALLY_EMPTY=${JSON.stringify(identities)}`)
+}
+async function inertListener(port: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: '127.0.0.1', port })
+    socket.setTimeout(100, () => {
+      socket.destroy()
+      reject(new Error('inert listener probe timed out'))
+    })
+    socket.once('data', (value) => {
+      socket.destroy()
+      resolve(value.toString() === 'inert-listener')
+    })
+    socket.once('error', (error: NodeJS.ErrnoException) => {
+      socket.destroy()
+      if (error.code === 'ECONNREFUSED') resolve(false)
+      else reject(error)
+    })
+  })
+}
+
+function nativeMatrix() {
+  const docker = matrix()
+  const root = '/tmp/ga-native-schema-fixture'
+  return {
+    ...docker,
+    profile: 'native-job' as const,
+    sources: sourceDigests('native-job'),
+    native: {
+      root,
+      executable: {
+        path: `${root}/inputs/ga-verified-opencode`,
+        sha256: pin.binarySha256,
+        bytes: pin.binaryBytes,
+        elfMachine: pin.elfMachine,
+        reportedVersion: pin.reportedVersion,
+      },
+      runtime: structuredClone(pin.runtime),
+      runner: {
+        path: '/usr/local/bin/bun',
+        sha256: 'a'.repeat(64),
+        bytes: 100,
+        elfMachine: 62,
+        version: '1.4.2',
+        revision: pin.runtime.revision,
+        device: '1',
+        inode: '123',
+      },
+      boundary: {
+        architecture: 'x86_64',
+        interfaces: ['lo'],
+        namespace: 'net:[123]',
+        status: {
+          NoNewPrivs: '1',
+          Seccomp: '2',
+          CapInh: '0000000000000000',
+          CapPrm: '0000000000000000',
+          CapEff: '0000000000000000',
+          CapBnd: '0000000000000000',
+          CapAmb: '0000000000000000',
+        },
+        controls: [
+          ...[2, 10].flatMap((family) =>
+            ['external_tcp', 'external_udp'].map((control) => ({
+              control,
+              family,
+              errno: 101,
+            })),
+          ),
+          { control: 'external_dns', errno: 101 },
+          ...[2, 10].map((family) => ({
+            control: 'loopback_tcp',
+            family,
+            roundTrip: true,
+          })),
+          { control: 'unix_round_trip', roundTrip: true },
+          { control: 'child_inheritance', namespace: 'net:[123]', errno: 101 },
+          {
+            control: 'namespace_escape',
+            exit: 1,
+            stderr: 'unshare: Operation not permitted',
+          },
+        ],
+      },
+      processBoundary: processBoundaryFixture(),
+      cleanup: [
+        { id: 'boundary-probe', outcome: 'clean', signaled: 0 },
+        { id: 'version', outcome: 'clean', signaled: 0 },
+        ...docker.rows.flatMap((row) => [
+          { id: `git:${row.id}`, outcome: 'clean', signaled: 0 },
+          { id: row.id, outcome: 'clean', signaled: 0 },
+        ]),
+      ],
+    },
+    rows: docker.rows.map((row) => ({
+      ...row,
+      pluginPath: `${root}/inputs/ga-measure-plugin.ts`,
+      command: [`${root}/inputs/ga-verified-opencode`, ...row.command.slice(1)],
+    })),
+  }
+}
+
+function nativeBoundarySummary() {
+  const parsed = MatrixSchema.parse(nativeMatrix())
+  if (parsed.profile !== 'native-job')
+    throw new Error('expected native schema fixture')
+  return parsed.native.processBoundary
+}
+
+// Supply synthetic /proc and interface values to test the probe-launch callback
+// without qualifying a real machine or starting Python or another child process.
+function modeledProbeKernel() {
+  const boundary = nativeMatrix().native.boundary
+  const read = fs.readFileSync
+  const readdir = fs.readdirSync
+  const readlink = fs.readlinkSync
+  const reads = spyOn(fs, 'readFileSync').mockImplementation(
+    new Proxy(read, {
+      apply(target, receiver, args: unknown[]) {
+        if (String(args[0]) === '/proc/self/status')
+          return Object.entries(boundary.status)
+            .map(([key, value]) => `${key}:\t${value}`)
+            .join('\n')
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const directories = spyOn(fs, 'readdirSync').mockImplementation(
+    new Proxy(readdir, {
+      apply(target, receiver, args: unknown[]) {
+        if (String(args[0]) === '/sys/class/net') return ['lo']
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const links = spyOn(fs, 'readlinkSync').mockImplementation(
+    new Proxy(readlink, {
+      apply(target, receiver, args: unknown[]) {
+        if (String(args[0]) === '/proc/self/ns/net') return boundary.namespace
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  return {
+    boundary,
+    restore: () => {
+      links.mockRestore()
+      directories.mockRestore()
+      reads.mockRestore()
+    },
+  }
+}
+
+describe('native boundary probe launcher source controls', () => {
+  const controls = [
+    'success',
+    'nonzero exit',
+    'missing exit',
+    'signal',
+    'spawn failure',
+    'timeout',
+    'output cap',
+    'failed cleanup',
+    'cleanup signal count',
+    'cleanup signal record',
+    'cleanup failure',
+    'unknown survivors',
+    'remaining survivor',
+  ] as const
+  for (const control of controls)
+    test(`typed probe launcher preserves raw ${control} result and enforces qualified cleanup`, async () => {
+      const { measureNativeJob } = await import(
+        '../src/fixtures/opencode-ga-host/native-job.ts'
+      )
+      const root = mkdtempSync(join(tmpdir(), 'ga-probe-adapter-'))
+      const evidence = join(root, 'boundary-evidence.json')
+      const modeled = modeledProbeKernel()
+      let dispatches = 0
+      let unqualifiedLaunches = 0
+      const launch = spyOn(childProcess, 'spawn').mockImplementation(() => {
+        unqualifiedLaunches++
+        throw new Error('unqualified probe launcher trap')
+      })
+      const raw: NativeProbeCommandResult = {
+        code: 0,
+        signal: null,
+        stdout: JSON.stringify(modeled.boundary),
+        stderr: 'modeled-probe-stderr',
+        timedOut: false,
+        outputCapExceeded: false,
+        spawnError: null,
+        cleanup: {
+          outcome: 'clean',
+          signaled: 0,
+          signals: [],
+          preexisting: [{ protectedModel: true }],
+          survivors: [],
+          failures: [],
+        },
+      }
+      if (control === 'nonzero exit') raw.code = 7
+      if (control === 'missing exit') raw.code = null
+      if (control === 'signal') raw.signal = 'SIGTERM'
+      if (control === 'spawn failure') raw.spawnError = 'modeled spawn failure'
+      if (control === 'timeout') raw.timedOut = true
+      if (control === 'output cap') raw.outputCapExceeded = true
+      if (control === 'failed cleanup') raw.cleanup.outcome = 'failed'
+      if (control === 'cleanup signal count') raw.cleanup.signaled = 1
+      if (control === 'cleanup signal record')
+        raw.cleanup.signals = [{ modeledSignal: true }]
+      if (control === 'cleanup failure')
+        raw.cleanup.failures = ['modeled cleanup failure']
+      if (control === 'unknown survivors') raw.cleanup.survivors = null
+      if (control === 'remaining survivor')
+        raw.cleanup.survivors = [{ modeledSurvivor: true }]
+      const before = JSON.stringify(raw)
+      try {
+        const pending = measureNativeJob(
+          join(HERE, '../../..'),
+          root,
+          { PATH: '/usr/bin:/bin' },
+          evidence,
+          async (binary, args, options) => {
+            dispatches++
+            expect(binary).toBe('/usr/bin/python3')
+            expect(args).toEqual([
+              fs.realpathSync(
+                join(
+                  HERE,
+                  '../src/fixtures/opencode-ga-host/native-boundary.py',
+                ),
+              ),
+              root,
+            ])
+            expect(options).toEqual({
+              cwd: root,
+              env: { PATH: '/usr/bin:/bin' },
+              timeoutMs: 15_000,
+              outputCapBytes: 64 * 1024,
+            })
+            return raw
+          },
+        )
+        if (control === 'success') await pending
+        else
+          await expect(pending).rejects.toThrow(
+            'Qualified native probe failed:',
+          )
+        expect(dispatches).toBe(1)
+        expect(unqualifiedLaunches).toBe(0)
+        const captured: unknown = JSON.parse(readFileSync(evidence, 'utf8'))
+        expect(captured).toEqual({
+          probeSha256: sha256(
+            readFileSync(
+              join(HERE, '../src/fixtures/opencode-ga-host/native-boundary.py'),
+            ),
+          ),
+          result: JSON.parse(before),
+        })
+        expect(JSON.stringify(raw)).toBe(before)
+      } finally {
+        launch.mockRestore()
+        modeled.restore()
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+  test('unchanged non-matrix callers retain the default owned probe launcher', async () => {
+    const { measureNativeJob } = await import(
+      '../src/fixtures/opencode-ga-host/native-job.ts'
+    )
+    const owned = await import(
+      '../src/fixtures/opencode-ga-host/owned-command.ts'
+    )
+    const root = mkdtempSync(join(tmpdir(), 'ga-probe-default-'))
+    const modeled = modeledProbeKernel()
+    let defaults = 0
+    let realSpawnAttempts = 0
+    const spawnTripwire = spyOn(childProcess, 'spawn').mockImplementation(
+      () => {
+        realSpawnAttempts++
+        throw new Error('default probe test must not start a real child')
+      },
+    )
+    const launch = spyOn(owned, 'startOwnedCommand').mockImplementation(
+      (binary, args, options) => {
+        defaults++
+        expect(binary).toBe('/usr/bin/python3')
+        expect(args).toEqual([
+          fs.realpathSync(
+            join(HERE, '../src/fixtures/opencode-ga-host/native-boundary.py'),
+          ),
+          root,
+        ])
+        expect(options).toEqual({
+          cwd: root,
+          env: { PATH: '/usr/bin:/bin' },
+          deadlineMs: 15_000,
+          outputCapBytes: 64 * 1024,
+        })
+        throw new Error(
+          'default owned probe launcher reached; no actor started',
+        )
+      },
+    )
+    try {
+      await expect(
+        measureNativeJob(
+          join(HERE, '../../..'),
+          root,
+          { PATH: '/usr/bin:/bin' },
+          join(root, 'evidence.json'),
+        ),
+      ).rejects.toThrow(
+        'default owned probe launcher reached; no actor started',
+      )
+      expect(defaults).toBe(1)
+      expect(realSpawnAttempts).toBe(0)
+    } finally {
+      launch.mockRestore()
+      spawnTripwire.mockRestore()
+      modeled.restore()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe(CLEANUP_GROUP, () => {
+  for (const control of [
+    'duplicate inventory',
+    'listed unavailable task',
+    'admission turnover',
+  ] as const)
+    test(`source-modeled ${control} refuses unresolved task coverage in the real helper`, () => {
+      const summary = nativeBoundarySummary()
+      const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+      const read = fs.readFileSync
+      let inventories = 0
+      let taskReads = 0
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        new Proxy(read, {
+          apply(target, receiver, args: unknown[]) {
+            const path = String(args[0])
+            if (path === threads) {
+              inventories++
+              return control === 'duplicate inventory'
+                ? '101\n101\n'
+                : control === 'admission turnover' && inventories > 1
+                  ? '102\n'
+                  : '101\n'
+            }
+            if (path === '/proc/101/status') {
+              taskReads++
+              if (control === 'listed unavailable task')
+                throw Object.assign(
+                  new Error('modeled listed task unavailable'),
+                  { code: 'ENOENT' },
+                )
+              return 'Pid:\t101\nTgid:\t100\n'
+            }
+            if (path === '/proc/101/stat') return '101 (terminal-model) Z 0\n'
+            return Reflect.apply(target, receiver, args)
+          },
+        }),
+      )
+      try {
+        const expected = {
+          'duplicate inventory': 'UNKNOWN ambiguous cgroup task inventory',
+          'listed unavailable task':
+            'UNKNOWN listed cgroup task has unavailable identity',
+          'admission turnover':
+            'UNKNOWN cgroup task inventory changed during admission',
+        }[control]
+        expect(() => threadGroupHasLiveTasks(100, summary)).toThrow(expected)
+        expect(inventories).toBe(control === 'duplicate inventory' ? 1 : 2)
+        expect(taskReads).toBe(control === 'duplicate inventory' ? 0 : 1)
+      } finally {
+        reads.mockRestore()
+      }
+    })
+  test('source-modeled replacement task is inspected by the real group helper', () => {
+    const summary = nativeBoundarySummary()
+    const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+    const original = fs.readFileSync
+    const paths: string[] = []
+    let inventories = 0
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          paths.push(path)
+          if (path === threads) return ++inventories === 1 ? '101\n' : '102\n'
+          if (path === '/proc/101/status')
+            throw Object.assign(new Error('modeled old task exited'), {
+              code: 'ENOENT',
+            })
+          if (path === '/proc/102/status') return 'Pid:\t102\nTgid:\t100\n'
+          if (path === '/proc/102/stat') return '102 (replacement-model) S 0\n'
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    try {
+      expect(
+        threadGroupHasLiveTasks(100, summary, {
+          deadline: performance.now() + 3000,
+        }),
+      ).toBe(true)
+      expect(inventories).toBe(3)
+      expect(paths).toContain('/proc/101/status')
+      expect(paths).toContain('/proc/102/status')
+      expect(paths).toContain('/proc/102/stat')
+    } finally {
+      reads.mockRestore()
+    }
+  })
+  test('source-modeled task turnover exhausts the original budget instead of certifying absence', () => {
+    const summary = nativeBoundarySummary()
+    const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+    const original = fs.readFileSync
+    let elapsed = 0
+    let inventories = 0
+    let taskReads = 0
+    const clock = spyOn(performance, 'now').mockImplementation(() => elapsed)
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          if (path === threads) {
+            elapsed += 1000
+            return `${100 + ++inventories}\n`
+          }
+          if (/^\/proc\/10\d\/status$/.test(path)) {
+            taskReads++
+            throw Object.assign(new Error('modeled task turnover'), {
+              code: 'ENOENT',
+            })
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    try {
+      expect(() =>
+        threadGroupHasLiveTasks(100, summary, { deadline: 3000 }),
+      ).toThrow('native cleanup budget exhausted')
+      expect(inventories).toBe(3)
+      expect(taskReads).toBe(2)
+    } finally {
+      reads.mockRestore()
+      clock.mockRestore()
+    }
+  })
+  test('source-modeled stable terminal task inventory certifies only finished groups', () => {
+    const summary = nativeBoundarySummary()
+    const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+    const original = fs.readFileSync
+    let inventories = 0
+    let terminalReads = 0
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          if (path === threads) {
+            inventories++
+            return '101\n'
+          }
+          if (path === '/proc/101/status') return 'Pid:\t101\nTgid:\t100\n'
+          if (path === '/proc/101/stat') {
+            terminalReads++
+            return '101 (terminal-model) Z 0\n'
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    try {
+      expect(threadGroupHasLiveTasks(100, summary)).toBe(false)
+      expect(inventories).toBe(2)
+      expect(terminalReads).toBe(1)
+    } finally {
+      reads.mockRestore()
+    }
+  })
+  test('source-modeled task discovery refuses a live group omitted from both leader inventories without signaling a TID', () => {
+    const summary = nativeBoundarySummary()
+    const cgroup = `/sys/fs/cgroup${summary.cgroup.self}`
+    const original = fs.readFileSync
+    const originalReadDirectory = fs.readdirSync
+    const paths: string[] = []
+    let signals = 0
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          paths.push(path)
+          if (path === `${cgroup}/cgroup.procs`) return '99\n'
+          if (path === `${cgroup}/cgroup.threads`) return '102\n'
+          if (path === '/proc/102/status') return 'Pid:\t102\nTgid:\t100\n'
+          if (path === '/proc/102/stat') return '102 (hidden-group-model) S 0\n'
+          if (path === '/proc/100/stat' || path === '/proc/99/stat')
+            throw Object.assign(new Error('modeled absent leader'), {
+              code: 'ENOENT',
+            })
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    const directories = spyOn(fs, 'readdirSync').mockImplementation(
+      observeBuiltin(originalReadDirectory, (value, args) =>
+        String(args[0]) === '/proc' ? [] : value,
+      ),
+    )
+    const signal = spyOn(process, 'kill').mockImplementation(() => {
+      signals++
+      return true
+    })
+    try {
+      expect(() => scopedProcesses(summary)).toThrow(
+        'UNKNOWN extant thread group 100',
+      )
+      expect(paths).toContain('/proc/100/stat')
+      expect(paths).toContain('/proc/102/status')
+      expect(signals).toBe(0)
+    } finally {
+      signal.mockRestore()
+      directories.mockRestore()
+      reads.mockRestore()
+    }
+  })
+  motorTest(
+    CLEANUP_GROUP,
+    'terminal zombie snapshot without live kernel tasks remains finished',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const original = fs.readFileSync
+      const terminalPid = 2147483647
+      let terminalReads = 0
+      const fields = ['Z', ...Array(18).fill('0'), '1', '0', '0']
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver, args: unknown[]) {
+            if (String(args[0]) === `/proc/${terminalPid}/stat`) {
+              terminalReads++
+              return `${terminalPid} (finished-zombie-control) ${fields.join(' ')}\n`
+            }
+            const value: unknown = Reflect.apply(target, receiver, args)
+            return String(args[0]) ===
+              `/sys/fs/cgroup${scope.summary.cgroup.self}/cgroup.procs` &&
+              typeof value === 'string'
+              ? `${value.trim()}\n${terminalPid}\n`
+              : value
+          },
+        }),
+      )
+      let dispatches = 0
+      const spawnTrap = spyOn(childProcess, 'spawn').mockImplementation(() => {
+        dispatches++
+        throw new Error('finished group empty-command control')
+      })
+      try {
+        const result = await runNativeCommand(scope, '/bin/true', [], {
+          cwd: '/tmp',
+          env: { PATH: '/usr/bin:/bin' },
+          timeoutMs: 100,
+        })
+        expect(terminalReads).toBeGreaterThan(0)
+        expect(dispatches).toBe(1)
+        expect(result.spawnError).toContain(
+          'finished group empty-command control',
+        )
+        expect(result.cleanup.outcome).toBe('clean')
+        expect(result.cleanup.signaled).toBe(0)
+        expect(result.cleanup.survivors).toEqual([])
+        console.log(
+          'TERMINAL_GROUP_CONTROL=source-backed terminal snapshot and real protected task inventory; no actor spawned',
+        )
+      } finally {
+        spawnTrap.mockRestore()
+        reads.mockRestore()
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'runner recheck hashes kernel-bound bytes and refuses a replaced path',
+    () => {
+      qualifyNativeProcessScope()
+      const binding = observeNativeRunner()
+      const originalRead = fs.readFileSync
+      const originalStat = fs.statSync
+      let pathnameReads = 0
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        new Proxy(originalRead, {
+          apply(target, receiver, args: unknown[]) {
+            if (String(args[0]) === binding.path) {
+              pathnameReads++
+              throw new Error('mutable pathname hash trap')
+            }
+            return Reflect.apply(target, receiver, args)
+          },
+        }),
+      )
+      let stats: ReturnType<typeof spyOn<typeof fs, 'statSync'>> | undefined
+      try {
+        expect(() => assertNativeRunnerUnchanged(binding)).not.toThrow()
+        expect(pathnameReads).toBe(0)
+        stats = spyOn(fs, 'statSync').mockImplementation(
+          observeBuiltin(originalStat, (value, args) => {
+            if (
+              String(args[0]) !== binding.path ||
+              !value ||
+              typeof value !== 'object' ||
+              !('ino' in value)
+            )
+              return value
+            const changed: object = Object.create(value)
+            Object.defineProperty(changed, 'ino', {
+              value:
+                typeof value.ino === 'bigint'
+                  ? value.ino + 1n
+                  : Number(value.ino) + 1,
+            })
+            return changed
+          }),
+        )
+        let dispatches = 0
+        expect(() => {
+          assertNativeRunnerUnchanged(binding)
+          dispatches++
+        }).toThrow('running executable inode mismatch')
+        expect(dispatches).toBe(0)
+      } finally {
+        stats?.mockRestore()
+        reads.mockRestore()
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'running runner inode mismatch refuses before dispatch',
+    () => {
+      qualifyNativeProcessScope()
+      const path = fs.realpathSync(process.execPath)
+      const original = fs.statSync
+      let dispatches = 0
+      const stats = spyOn(fs, 'statSync').mockImplementation(
+        observeBuiltin(original, (value, args) => {
+          if (
+            String(args[0]) !== path ||
+            !value ||
+            typeof value !== 'object' ||
+            !('ino' in value)
+          )
+            return value
+          const changed: object = Object.create(value)
+          const inode = value.ino
+          if (typeof inode !== 'bigint' && typeof inode !== 'number')
+            throw new Error('bad runner inode fixture')
+          Object.defineProperty(changed, 'ino', {
+            value: typeof inode === 'bigint' ? inode + 1n : inode + 1,
+          })
+          return changed
+        }),
+      )
+      try {
+        expect(() => {
+          observeNativeRunner()
+          dispatches++
+        }).toThrow('running executable inode mismatch')
+        expect(dispatches).toBe(0)
+      } finally {
+        stats.mockRestore()
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'genuinely exited groups remain clean with zero cleanup signals',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const result = await runNativeCommand(scope, '/bin/true', [], {
+        cwd: '/tmp',
+        env: { PATH: '/usr/bin:/bin' },
+        timeoutMs: 100,
+      })
+      expect(result.code).toBe(0)
+      expect(result.timedOut).toBe(false)
+      expect(result.cleanup.outcome).toBe('clean')
+      expect(result.cleanup.signaled).toBe(0)
+      expect(result.cleanup.survivors).toEqual([])
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'partial identity ENOENT is unknown while a real group remains live',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-partial-identity-'))
+      const script = inertProgram(root)
+      const child = spawn(process.execPath, [script, 'preexisting', root], {
+        cwd: root,
+        env: nativeHostEnv(root, {}),
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let links: ReturnType<typeof spyOn<typeof fs, 'readlinkSync'>> | undefined
+      let launchTrap:
+        | ReturnType<typeof spyOn<typeof childProcess, 'spawn'>>
+        | undefined
+      try {
+        await Promise.race([
+          new Promise<void>((resolve, reject) => {
+            child.stdio[3]!.once('data', () => resolve())
+            child.once('error', reject)
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error('partial identity fixture did not become ready'),
+                ),
+              500,
+            )
+          }),
+        ])
+        const identity = JSON.parse(
+          readFileSync(join(root, 'preexisting.json'), 'utf8'),
+        ) as InertIdentity
+        const original = fs.readlinkSync
+        let observedENOENT = 0
+        let dispatches = 0
+        links = spyOn(fs, 'readlinkSync').mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver, args: unknown[]) {
+              if (String(args[0]) === `/proc/${identity.pid}/ns/pid`) {
+                observedENOENT++
+                throw Object.assign(
+                  new Error('source-backed partial identity ENOENT control'),
+                  { code: 'ENOENT' },
+                )
+              }
+              return Reflect.apply(target, receiver, args)
+            },
+          }),
+        )
+        launchTrap = spyOn(childProcess, 'spawn').mockImplementation(() => {
+          dispatches++
+          throw new Error('partial identity launch trap')
+        })
+        await expect(
+          runNativeCommand(scope, '/bin/true', [], {
+            cwd: root,
+            env: nativeHostEnv(root, {}),
+            timeoutMs: 100,
+          }),
+        ).rejects.toThrow('UNKNOWN extant thread group')
+        expect(observedENOENT).toBeGreaterThan(0)
+        expect(dispatches).toBe(0)
+        expect(inertAlive(identity)).toBe(true)
+        expect(await inertListener(identity.port!)).toBe(true)
+        console.log(
+          'PARTIAL_IDENTITY_ENOENT_CONTROL=source-backed injected error; not the real Z-leader witness',
+        )
+      } finally {
+        launchTrap?.mockRestore()
+        links?.mockRestore()
+        if (timer) clearTimeout(timer)
+        await finallyReapInert(root)
+        child.stdio[3]?.destroy()
+        child.unref()
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'cleanup budget expiry during an empty scan forbids a final rescan',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const originalNow = performance.now.bind(performance)
+      const originalReadDirectory = fs.readdirSync
+      let offset = 0
+      let crossed = false
+      let commandStarted = false
+      let scansAfterExpiry = 0
+      const clock = spyOn(performance, 'now').mockImplementation(
+        () => originalNow() + offset,
+      )
+      const scans = spyOn(fs, 'readdirSync').mockImplementation(
+        observeBuiltin(originalReadDirectory, (value, args) => {
+          if (String(args[0]) === '/proc' && commandStarted) {
+            if (crossed) scansAfterExpiry++
+            else {
+              crossed = true
+              offset = 4000
+            }
+          }
+          return value
+        }),
+      )
+      const spawnTrap = spyOn(childProcess, 'spawn').mockImplementation(() => {
+        commandStarted = true
+        throw new Error('inert controlled empty command')
+      })
+      const pending = runNativeCommand(scope, '/bin/true', [], {
+        cwd: '/tmp',
+        env: { PATH: '/usr/bin:/bin' },
+        timeoutMs: 100,
+      })
+      let oracle: ReturnType<typeof setTimeout> | undefined
+      try {
+        const observed = await Promise.race([
+          pending.then((result) => ({ result })),
+          new Promise<{ expired: true }>((resolve) => {
+            oracle = setTimeout(() => resolve({ expired: true }), 500)
+          }),
+        ])
+        expect('result' in observed).toBe(true)
+        if (!('result' in observed))
+          throw new Error(
+            'budget cleanup did not finish within independent oracle',
+          )
+        expect(crossed).toBe(true)
+        expect(scansAfterExpiry).toBe(0)
+        expect(observed.result.cleanup.signaled).toBe(0)
+        expect(observed.result.spawnError).toContain(
+          'inert controlled empty command',
+        )
+        expect(observed.result.cleanup.outcome).toBe('failed')
+        expect(observed.result.cleanup.survivors).toBeNull()
+        expect(observed.result.cleanup.failures.join('\n')).toContain(
+          'budget exhausted',
+        )
+      } finally {
+        spawnTrap.mockRestore()
+        scans.mockRestore()
+        clock.mockRestore()
+        if (oracle) clearTimeout(oracle)
+        await pending.catch(() => undefined)
+      }
+    },
+  )
+  for (const phase of [
+    'signal requalification',
+    'target identity read',
+    'final scoped check',
+  ] as const)
+    motorTest(
+      CLEANUP_GROUP,
+      `actor-free budget expiry during ${phase} forbids subsequent reads and signals`,
+      async () => {
+        const scope = qualifyNativeProcessScope()
+        const read = fs.readFileSync
+        const readdir = fs.readdirSync
+        const readlink = fs.readlinkSync
+        const now = performance.now.bind(performance)
+        const modeledPid = 2147483647
+        const modeledStat = `${modeledPid} (actor-free-budget-model) ${['S', '1', String(modeledPid), String(modeledPid), ...Array(15).fill('0'), '9223372036854775807', '0'].join(' ')}\n`
+        const group = `/sys/fs/cgroup${scope.summary.cgroup.self}/cgroup.procs`
+        let started = false
+        let reached = false
+        let elapsed = 0
+        let modelReads = 0
+        let scans = 0
+        let readsAfterExpiry = 0
+        let launches = 0
+        let signals = 0
+        const clock = spyOn(performance, 'now').mockImplementation(
+          () => now() + elapsed,
+        )
+        const expire = () => {
+          reached = true
+          elapsed = 4000
+        }
+        const observeAfterExpiry = (path: string) => {
+          if (
+            reached &&
+            (path.startsWith('/proc') || path.startsWith('/sys/fs/cgroup'))
+          )
+            readsAfterExpiry++
+        }
+        const reads = spyOn(fs, 'readFileSync').mockImplementation(
+          new Proxy(read, {
+            apply(target, receiver, args: unknown[]) {
+              const path = String(args[0])
+              observeAfterExpiry(path)
+              if (started && phase !== 'final scoped check') {
+                if (path === `/proc/${modeledPid}/stat`) {
+                  modelReads++
+                  if (phase === 'target identity read' && modelReads === 2)
+                    expire()
+                  return modeledStat
+                }
+                if (path === `/proc/${modeledPid}/status`)
+                  return `Pid:\t${modeledPid}\nTgid:\t${modeledPid}\nUid:\t999\t999\t999\t999\n`
+                if (path === `/proc/${modeledPid}/cgroup`)
+                  return `0::${scope.summary.cgroup.self}\n`
+              }
+              const value: unknown = Reflect.apply(target, receiver, args)
+              if (
+                started &&
+                phase === 'signal requalification' &&
+                modelReads === 1 &&
+                path === `/proc/${process.pid}/stat`
+              )
+                expire()
+              return started &&
+                phase !== 'final scoped check' &&
+                path === group &&
+                typeof value === 'string'
+                ? `${value.trim()}\n${modeledPid}\n`
+                : value
+            },
+          }),
+        )
+        const directories = spyOn(fs, 'readdirSync').mockImplementation(
+          observeBuiltin(readdir, (value, args) => {
+            const path = String(args[0])
+            observeAfterExpiry(path)
+            if (started && path === '/proc') {
+              scans++
+              if (phase === 'final scoped check' && scans === 2) expire()
+              if (phase !== 'final scoped check' && Array.isArray(value))
+                return [...value, String(modeledPid)]
+            }
+            return value
+          }),
+        )
+        const links = spyOn(fs, 'readlinkSync').mockImplementation(
+          new Proxy(readlink, {
+            apply(target, receiver, args: unknown[]) {
+              const path = String(args[0])
+              observeAfterExpiry(path)
+              if (started && path === `/proc/${modeledPid}/ns/pid`)
+                return scope.summary.namespace.self
+              return Reflect.apply(target, receiver, args)
+            },
+          }),
+        )
+        const launch = spyOn(childProcess, 'spawn').mockImplementation(() => {
+          launches++
+          started = true
+          throw new Error('actor-free budget phase spawn trap')
+        })
+        const signal = spyOn(process, 'kill').mockImplementation(() => {
+          signals++
+          return true
+        })
+        try {
+          const result = await runNativeCommand(scope, '/bin/true', [], {
+            cwd: '/tmp',
+            env: { PATH: '/usr/bin:/bin' },
+            timeoutMs: 100,
+          })
+          expect(launches).toBe(1)
+          expect(reached).toBe(true)
+          expect(scans).toBe(phase === 'final scoped check' ? 2 : 1)
+          expect(modelReads).toBe(
+            phase === 'target identity read'
+              ? 2
+              : phase === 'signal requalification'
+                ? 1
+                : 0,
+          )
+          expect(readsAfterExpiry).toBe(0)
+          expect(signals).toBe(0)
+          expect(result.spawnError).toContain(
+            'actor-free budget phase spawn trap',
+          )
+          expect(result.cleanup.signaled).toBe(0)
+          expect(result.cleanup.outcome).toBe('failed')
+          expect(result.cleanup.survivors).toBeNull()
+          expect(result.cleanup.failures.join('\n')).toContain(
+            'native cleanup budget exhausted',
+          )
+        } finally {
+          signal.mockRestore()
+          launch.mockRestore()
+          links.mockRestore()
+          directories.mockRestore()
+          reads.mockRestore()
+          clock.mockRestore()
+        }
+      },
+    )
+  motorTest(
+    CLEANUP_GROUP,
+    'extant thread group is unknown while its listener survives original-command close',
+    async () => {
+      const CHILD_CODE =
+        "import ctypes, errno, json, os, select, socket, sys, threading, time\nroot, fd_text, expected_ns, expected_cgroup = sys.argv[1:5]\nready_fd = int(fd_text)\ntgid = os.getpid()\nready = threading.Event()\nstate = {}\n\n\ndef text(path):\n    with open(path) as stream:\n        return stream.read()\n\n\ndef stat_fields(tid):\n    raw = text('/proc/' + str(tid) + '/stat')\n    fields = raw[raw.rfind(')') + 2:].split()\n    return {'state': fields[0], 'birth': fields[19]}\n\n\ndef identity(tid):\n    status = dict(line.split(':', 1) for line in text('/proc/' + str(tid) + '/status').splitlines() if ':' in line)\n    return {'tid': tid, 'tgid': int(status['Tgid']), 'pid': int(status['Pid']),\n            'uids': [int(value) for value in status['Uid'].split()], **stat_fields(tid),\n            'namespace': os.readlink('/proc/' + str(tid) + '/ns/pid'),\n            'cgroup': text('/proc/' + str(tid) + '/cgroup').strip()}\n\n\ndef attempted(operation):\n    try:\n        return {'value': operation()}\n    except OSError as error:\n        return {'error': str(error), 'errno': error.errno}\n\n\ndef save(value):\n    temporary = root + '/thread-witness.tmp'\n    with open(temporary, 'w') as stream:\n        json.dump(value, stream)\n    os.replace(temporary, root + '/thread-witness.json')\n\n\ndef admitted(value):\n    return value['uids'] == [999,999,999,999] and value['namespace'] == expected_ns and value['cgroup'] == '0::' + expected_cgroup\n\n\nassert sys.platform == 'linux' and os.uname().machine == 'x86_64'\nassert os.getuid() == os.geteuid() == 999\nleader_before = identity(tgid)\nassert admitted(leader_before)\nlibc = ctypes.CDLL(None, use_errno=True)\nthread_exit = libc.syscall\nthread_exit.argtypes = (ctypes.c_long, ctypes.c_long)\nthread_exit.restype = ctypes.c_long\n\n\ndef worker():\n    expiry = time.monotonic() + 0.250\n    listener = None\n    ready_open = True\n    exit_code = 74\n    witnessed = False\n    try:\n        tid = threading.get_native_id()\n        before = identity(tid)\n        assert tid != tgid and before['tgid'] == tgid and before['pid'] == tid and admitted(before)\n        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n        listener.setblocking(False)\n        listener.bind(('127.0.0.1', 0))\n        listener.listen(1)\n        state.update({'tid': tid, 'before': before, 'expiry': expiry, 'admitted': True})\n        save({'phase': 'worker-ready-before-transition', 'leaderBefore': leader_before,\n              'threadBefore': before, 'port': listener.getsockname()[1], 'expiry': expiry})\n        ready.set()\n        while time.monotonic() < expiry:\n            leader = attempted(lambda: stat_fields(tgid))\n            if 'error' in leader and leader.get('errno') not in [errno.ENOENT, errno.ESRCH]:\n                raise RuntimeError('FAILED WITNESS unexpected leader-stat read error: ' + repr(leader))\n            if not witnessed and (('error' in leader and leader.get('errno') in [errno.ENOENT, errno.ESRCH]) or leader.get('value', {}).get('state') in ['Z','X']):\n                after = identity(tid)\n                members = [int(value) for value in text('/sys/fs/cgroup' + expected_cgroup + '/cgroup.threads').split()]\n                assert after['tgid'] == tgid and after['pid'] == tid and after['birth'] == before['birth']\n                assert after['state'] not in ['Z','X'] and admitted(after) and tid in members\n                save({'phase': 'main-exited-live-thread', 'tgid': tgid, 'tid': tid,\n                      'leaderBefore': leader_before, 'threadBefore': before, 'threadAfter': after,\n                      'leaderStatAfter': leader,\n                      'leaderNamespaceAfter': attempted(lambda: os.readlink('/proc/' + str(tgid) + '/ns/pid')),\n                      'port': listener.getsockname()[1], 'expiry': expiry, 'observed': time.monotonic(),\n                      'threadInProtectedCgroupThreads': True})\n                os.write(ready_fd, b'R')\n                os.close(ready_fd)\n                ready_open = False\n                witnessed = True\n                exit_code = 0\n            remaining = expiry - time.monotonic()\n            if remaining <= 0:\n                break\n            readable, _, _ = select.select([listener], [], [], min(0.005, remaining))\n            if not readable:\n                continue\n            try:\n                connection, _ = listener.accept()\n            except BlockingIOError:\n                continue\n            connection.setblocking(False)\n            try:\n                pending = b'inert-listener'\n                while pending and time.monotonic() < expiry:\n                    try:\n                        count = connection.send(pending)\n                        if count <= 0:\n                            break\n                        pending = pending[count:]\n                    except BlockingIOError:\n                        remaining = expiry - time.monotonic()\n                        if remaining <= 0:\n                            break\n                        select.select([], [connection], [], min(0.005, remaining))\n                    except (BrokenPipeError, ConnectionResetError):\n                        break\n            finally:\n                connection.close()\n    except BaseException as error:\n        try:\n            save({'phase': 'witness-error', 'error': repr(error), 'state': state})\n        except BaseException:\n            pass\n    finally:\n        ready.set()\n        if ready_open:\n            try:\n                os.close(ready_fd)\n            except OSError:\n                pass\n        try:\n            if listener is not None:\n                listener.close()\n        finally:\n            os._exit(exit_code)\n\n\nthreading.Thread(target=worker, daemon=False).start()\nif not ready.wait(0.050) or state.get('admitted') is not True or time.monotonic() >= state['expiry']:\n    os._exit(75)\nthread_exit(ctypes.c_long(60), ctypes.c_long(0))\nos._exit(76)"
+      const PARENT_CODE =
+        "import json, math, os, re, select, socket, subprocess, sys, time\nchild_code, root, expected_ns, expected_cgroup = sys.argv[1:5]\nread_fd, write_fd = os.pipe()\nchild = subprocess.Popen(\n    [sys.executable, '-c', child_code, root, str(write_fd), expected_ns, expected_cgroup],\n    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n    close_fds=True, pass_fds=(write_fd,), start_new_session=True,\n)\nos.close(write_fd)\nwith open(root + '/parent-child.json', 'w') as stream:\n    json.dump({'childPid': child.pid}, stream)\ntry:\n    readable, _, _ = select.select([read_fd], [], [], 0.075)\n    if not readable or os.read(read_fd, 1) != b'R':\n        raise RuntimeError('thread transition readiness not reached')\nfinally:\n    os.close(read_fd)\nwith open(root + '/thread-witness.json') as stream:\n    witness = json.load(stream)\npositive_pid = lambda value: type(value) is int and 1 < value < 2147483648\nassert witness['phase'] == 'main-exited-live-thread'\ntid, tgid, port = witness['tid'], witness['tgid'], witness['port']\nassert positive_pid(tid) and positive_pid(tgid) and tid != tgid and tgid == child.pid\nassert type(port) is int and 0 < port < 65536\nassert isinstance(witness['threadBefore']['birth'], str) and re.fullmatch('[0-9]+', witness['threadBefore']['birth'])\nexpiry = witness['expiry']\nassert type(expiry) in [int, float] and math.isfinite(expiry) and time.monotonic() < expiry\nwith open('/proc/' + str(tid) + '/status') as stream:\n    status = dict(line.split(':', 1) for line in stream.read().splitlines() if ':' in line)\nassert int(status['Tgid']) == tgid and int(status['Pid']) == tid\nassert [int(value) for value in status['Uid'].split()] == [999,999,999,999]\nassert os.readlink('/proc/' + str(tid) + '/ns/pid') == expected_ns\nwith open('/proc/' + str(tid) + '/cgroup') as stream:\n    assert stream.read().strip() == '0::' + expected_cgroup\nwith open('/proc/' + str(tid) + '/stat') as stream:\n    stat = stream.read()\nfields = stat[stat.rfind(')') + 2:].split()\nassert fields[0] not in ['Z','X'] and fields[19] == witness['threadBefore']['birth']\nwith open('/sys/fs/cgroup' + expected_cgroup + '/cgroup.threads') as stream:\n    assert tid in [int(value) for value in stream.read().split()]\npeer_deadline = min(expiry, time.monotonic() + 0.025)\nremaining = peer_deadline - time.monotonic()\nassert remaining > 0\nwith socket.create_connection(('127.0.0.1', port), timeout=remaining) as connection:\n    expected_response = b'inert-listener'\n    received = b''\n    while len(received) < len(expected_response):\n        remaining = peer_deadline - time.monotonic()\n        assert remaining > 0\n        connection.settimeout(remaining)\n        chunk = connection.recv(len(expected_response) - len(received))\n        if not chunk:\n            raise RuntimeError('FAILED WITNESS EOF before complete listener response')\n        received += chunk\n        assert received == expected_response[:len(received)]\n    assert received == expected_response\nwith open(root + '/parent-proof.json', 'w') as stream:\n    json.dump({'childPid': child.pid, 'tgid': tgid, 'tid': tid, 'birth': fields[19],\n               'port': port, 'checkedAt': time.monotonic(), 'expiry': expiry}, stream)\n# G has no P stdout/stderr and has closed the only private readiness writer.\nos._exit(0)"
+      const scope = qualifyNativeProcessScope()
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-thread-group-'))
+      const oracleEnd = performance.now() + 500
+      let primary: unknown
+      const cleanupErrors: unknown[] = []
+      let settled = false
+      let oracle: ReturnType<typeof setTimeout> | undefined
+      let cleanupCertified = false
+      let owned:
+        | { tgid: number; tid: number; birth: string; port: number }
+        | undefined
+      const pending = runNativeCommand(
+        scope,
+        '/usr/bin/python3',
+        [
+          '-c',
+          PARENT_CODE,
+          CHILD_CODE,
+          root,
+          scope.summary.namespace.self,
+          scope.summary.cgroup.self,
+        ],
+        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+      ).then(
+        (result) => {
+          settled = true
+          return { result }
+        },
+        (error: unknown) => {
+          settled = true
+          return { error }
+        },
+      )
+      const validPid = (value: unknown): value is number =>
+        typeof value === 'number' &&
+        Number.isSafeInteger(value) &&
+        value > 1 &&
+        value < 2147483648
+      const load = () => {
+        const witness = JSON.parse(
+          readFileSync(join(root, 'thread-witness.json'), 'utf8'),
+        )
+        const parent = JSON.parse(
+          readFileSync(join(root, 'parent-child.json'), 'utf8'),
+        )
+        const tgid = witness.tgid ?? witness.leaderBefore?.tgid
+        const tid = witness.tid ?? witness.threadBefore?.tid
+        const birth = witness.threadBefore?.birth
+        const port = witness.port
+        if (
+          !validPid(parent.childPid) ||
+          !validPid(tgid) ||
+          !validPid(tid) ||
+          tgid !== parent.childPid ||
+          tgid === tid ||
+          tid === process.pid ||
+          tgid === process.pid ||
+          typeof birth !== 'string' ||
+          !/^\d+$/.test(birth) ||
+          typeof port !== 'number' ||
+          !Number.isSafeInteger(port) ||
+          port < 1 ||
+          port > 65535
+        )
+          throw new Error('UNKNOWN malformed/missing owned thread identity')
+        return { witness, identity: { tgid, tid, birth, port } }
+      }
+      const direct = (tid: number) => {
+        try {
+          const raw = readFileSync(`/proc/${tid}/stat`, 'utf8')
+          const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ')
+          const status = Object.fromEntries(
+            readFileSync(`/proc/${tid}/status`, 'utf8')
+              .split('\n')
+              .filter((line) => line.includes(':'))
+              .map((line) => {
+                const at = line.indexOf(':')
+                return [line.slice(0, at), line.slice(at + 1).trim()]
+              }),
+          )
+          return {
+            state: fields[0],
+            birth: fields[19],
+            tgid: Number(status.Tgid),
+            pid: Number(status.Pid),
+            uids: (status.Uid ?? '').split(/\s+/).map(Number),
+            namespace: readlinkSync(`/proc/${tid}/ns/pid`),
+            cgroup: readFileSync(`/proc/${tid}/cgroup`, 'utf8').trim(),
+          }
+        } catch (error) {
+          if (
+            ['ENOENT', 'ESRCH'].includes(
+              (error as NodeJS.ErrnoException).code ?? '',
+            )
+          )
+            return undefined
+          throw error
+        }
+      }
+      const members = () =>
+        readFileSync(
+          `/sys/fs/cgroup${scope.summary.cgroup.self}/cgroup.threads`,
+          'utf8',
+        )
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(Number)
+      const listener = (port: number): Promise<'alive' | 'refused'> =>
+        new Promise((resolve, reject) => {
+          const deadline = Math.min(oracleEnd, performance.now() + 100)
+          if (performance.now() >= deadline) {
+            reject(
+              new Error('UNKNOWN listener check beyond independent oracle'),
+            )
+            return
+          }
+          const expected = Buffer.from('inert-listener')
+          let received = Buffer.alloc(0)
+          let peer: ReturnType<typeof createConnection> | undefined
+          let timer: ReturnType<typeof setTimeout> | undefined
+          let finished = false
+          const finish = (result: 'alive' | 'refused' | Error) => {
+            if (finished) return
+            finished = true
+            if (timer) clearTimeout(timer)
+            peer?.destroy()
+            if (result instanceof Error) reject(result)
+            else resolve(result)
+          }
+          timer = setTimeout(
+            () =>
+              finish(new Error('UNKNOWN listener absolute deadline exceeded')),
+            Math.max(0, deadline - performance.now()),
+          )
+          try {
+            peer = createConnection({ host: '127.0.0.1', port })
+            peer.on('data', (chunk: Buffer) => {
+              if (finished) return
+              if (performance.now() >= deadline) {
+                finish(new Error('UNKNOWN listener data after deadline'))
+                return
+              }
+              if (received.length + chunk.length > expected.length) {
+                finish(new Error('unexpected listener bytes'))
+                return
+              }
+              received = Buffer.concat([received, chunk])
+              if (!received.equals(expected.subarray(0, received.length))) {
+                finish(new Error('unexpected listener bytes'))
+                return
+              }
+              if (received.length === expected.length) finish('alive')
+            })
+            peer.once('error', (error: NodeJS.ErrnoException) => {
+              if (performance.now() >= deadline) {
+                finish(new Error('UNKNOWN listener error after deadline'))
+              } else if (error.code === 'ECONNREFUSED') {
+                finish('refused')
+              } else {
+                finish(error)
+              }
+            })
+            peer.once('end', () =>
+              finish(
+                new Error('UNKNOWN listener EOF before complete response'),
+              ),
+            )
+            peer.once('close', () =>
+              finish(
+                new Error('UNKNOWN listener closed before complete response'),
+              ),
+            )
+          } catch (error) {
+            finish(error instanceof Error ? error : new Error(String(error)))
+          }
+        })
+      try {
+        const observed = await Promise.race([
+          pending,
+          new Promise<{ expired: true }>((resolve) => {
+            oracle = setTimeout(
+              () => resolve({ expired: true }),
+              Math.max(0, oracleEnd - performance.now()),
+            )
+          }),
+        ])
+        if ('error' in observed) throw observed.error
+        if (!('result' in observed))
+          throw new Error('FAILED WITNESS command result not reached')
+        const loaded = load()
+        owned = loaded.identity
+        const { witness } = loaded
+        expect(witness.phase).toBe('main-exited-live-thread')
+        const parentProof = JSON.parse(
+          readFileSync(join(root, 'parent-proof.json'), 'utf8'),
+        )
+        expect(parentProof.childPid).toBe(owned.tgid)
+        expect(parentProof.tid).toBe(owned.tid)
+        expect(parentProof.birth).toBe(owned.birth)
+        const task = direct(owned.tid)
+        expect(task).toBeDefined()
+        expect(task?.state === 'Z' || task?.state === 'X').toBe(false)
+        expect(task?.birth).toBe(owned.birth)
+        expect(task?.tgid).toBe(owned.tgid)
+        expect(task?.pid).toBe(owned.tid)
+        expect(task?.uids).toEqual([999, 999, 999, 999])
+        expect(task?.namespace).toBe(scope.summary.namespace.self)
+        expect(task?.cgroup).toBe(`0::${scope.summary.cgroup.self}`)
+        expect(members()).toContain(owned.tid)
+        expect(
+          (witness.leaderStatAfter.error !== undefined &&
+            [2, 3].includes(witness.leaderStatAfter.errno)) ||
+            ['Z', 'X'].includes(witness.leaderStatAfter.value?.state),
+        ).toBe(true)
+        expect(observed.result.code).toBe(0)
+        expect(observed.result.signal).toBeNull()
+        expect(observed.result.spawnError).toBeNull()
+        expect(observed.result.timedOut).toBe(false)
+        expect(observed.result.outputCapExceeded).toBe(false)
+        expect(await listener(owned.port)).toBe('alive')
+        console.log(
+          `MAIN_EXITED_LIVE_THREAD_AT_COMMAND_RETURN=${JSON.stringify({ witness, task, result: observed.result })}`,
+        )
+        // Intended old-code red, only after the stronger state has actually been proven.
+        expect(observed.result.cleanup.outcome).toBe('failed')
+        expect(observed.result.cleanup.survivors).toBeNull()
+        expect(observed.result.cleanup.signaled).toBe(0)
+      } catch (error) {
+        primary = error
+      } finally {
+        if (oracle) clearTimeout(oracle)
+        if (!owned) {
+          try {
+            owned = load().identity
+          } catch (error) {
+            cleanupErrors.push(error)
+          }
+        }
+        if (owned) {
+          let absent = false
+          try {
+            while (performance.now() < oracleEnd) {
+              const task = direct(owned.tid)
+              const sameLive =
+                task?.birth === owned.birth &&
+                !['Z', 'X'].includes(task.state ?? '')
+              if (
+                !sameLive &&
+                performance.now() < oracleEnd &&
+                !members().includes(owned.tid)
+              ) {
+                absent = true
+                break
+              }
+              await new Promise<void>((resolve) => setImmediate(resolve))
+            }
+          } catch (error) {
+            cleanupErrors.push(error)
+          }
+          if (!absent)
+            cleanupErrors.push(
+              new Error(
+                'UNKNOWN actor did not certify self-expiry within independent oracle',
+              ),
+            )
+          let listenerRefused = false
+          try {
+            if (performance.now() >= oracleEnd)
+              cleanupErrors.push(
+                new Error('UNKNOWN no remaining oracle for listener closure'),
+              )
+            else {
+              listenerRefused = (await listener(owned.port)) === 'refused'
+              if (!listenerRefused)
+                cleanupErrors.push(
+                  new Error('FAILED actor listener remains live'),
+                )
+            }
+          } catch (error) {
+            cleanupErrors.push(error)
+          }
+          cleanupCertified =
+            absent && listenerRefused && settled && cleanupErrors.length === 0
+        }
+        if (!settled)
+          cleanupErrors.push(
+            new Error('UNKNOWN command settlement not certified'),
+          )
+        // No process or group signal exists in this finally.
+        if (cleanupCertified && settled) {
+          try {
+            rmSync(root, { recursive: true, force: true })
+          } catch (error) {
+            cleanupErrors.push(error)
+            cleanupCertified = false
+          }
+        }
+        console.log(
+          `SELF_EXPIRY_CLEANUP=${JSON.stringify({ owned, settled, cleanupCertified, primary: primary === undefined ? null : String(primary), cleanupErrors: cleanupErrors.map(String), root })}`,
+        )
+      }
+      if (primary !== undefined && cleanupErrors.length)
+        throw new AggregateError(
+          [primary, ...cleanupErrors],
+          'primary witness failure and independent cleanup failure',
+        )
+      if (primary !== undefined) throw primary
+      if (cleanupErrors.length)
+        throw new AggregateError(
+          cleanupErrors,
+          'independent cleanup UNKNOWN/FAILED; artifacts retained',
+        )
+    },
+  )
+  test('test-only profile selection is exact and cannot supply production authority', () => {
+    expect(nativeTestProfile({})).toBe('portable')
+    expect(
+      nativeTestProfile({ GA_NATIVE_JOB_TEST_PROFILE: 'motor-inert' }),
+    ).toBe('motor-inert')
+    for (const value of ['', 'portable', 'motor-iner', 'MOTOR-INERT', '1'])
+      expect(() =>
+        nativeTestProfile({ GA_NATIVE_JOB_TEST_PROFILE: value }),
+      ).toThrow('unknown GA_NATIVE_JOB_TEST_PROFILE')
+    expect(
+      readFileSync(join(HERE, 'measure-ga-proxy-matrix.ts'), 'utf8').includes(
+        'GA_NATIVE_JOB_TEST_PROFILE',
+      ),
+    ).toBe(false)
+    expect(
+      nativeHostEnv('/tmp/native-test-profile', {}).GA_NATIVE_JOB_TEST_PROFILE,
+    ).toBeUndefined()
+    expect(() =>
+      nativeHostEnv('/tmp/native-test-profile', {
+        GA_NATIVE_JOB_TEST_PROFILE: 'motor-inert',
+      }),
+    ).toThrow()
+  })
+  test('unqualified serialized facts refuse before any portable launch or signal', async () => {
+    const parsed = MatrixSchema.parse(nativeMatrix())
+    if (parsed.profile !== 'native-job')
+      throw new Error('wrong schema fixture profile')
+    const forged = { summary: parsed.native.processBoundary }
+    let launches = 0
+    let signals = 0
+    const launch = spyOn(childProcess, 'spawn').mockImplementation(() => {
+      launches++
+      throw new Error('portable launch trap')
+    })
+    const signal = spyOn(process, 'kill').mockImplementation(() => {
+      signals++
+      return true
+    })
+    try {
+      await expect(
+        runNativeCommand(forged, '/bin/true', [], {
+          cwd: '/tmp',
+          env: {},
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow('unqualified native process scope')
+      expect(launches).toBe(0)
+      expect(signals).toBe(0)
+    } finally {
+      signal.mockRestore()
+      launch.mockRestore()
+    }
+  })
+  for (const kind of [
+    'pid1-mismatch',
+    'controller-mismatch',
+    'namespace-mismatch',
+    'cgroup-mismatch',
+    'psi-writable',
+    'psi-rw-mount',
+    'psi-shadow-mount',
+    'psi-owner',
+    'psi-substituted',
+    'psi-symlink',
+    'critical-owned',
+    'memory-limit-owned',
+    'pid-limit-owned',
+    'other-pressure-owned',
+    'executable-owned',
+    'executable-writable',
+    'control-writable',
+  ] as const)
+    motorTest(
+      CLEANUP_GROUP,
+      `initial qualification refuses ${kind} after an unmocked precondition`,
+      () => {
+        const unmocked = qualifyNativeProcessScope()
+        expect(unmocked.summary.namespace.self).toBe(
+          readlinkSync('/proc/self/ns/pid'),
+        )
+        const read = fs.readFileSync
+        const stat = fs.lstatSync
+        const access = fs.accessSync
+        const realpath = fs.realpathSync
+        const readlink = fs.readlinkSync
+        const cgroup = `/sys/fs/cgroup${read('/proc/self/cgroup', 'utf8').trim().split('::')[1]}`
+        const pressure = `${cgroup}/memory.pressure`
+        const executable = realpath('/proc/1/exe')
+        const reached: string[] = []
+        const expectedPath = {
+          'pid1-mismatch': '/proc/1/status',
+          'controller-mismatch': `/proc/${process.pid}/status`,
+          'namespace-mismatch': '/proc/1/ns/pid',
+          'cgroup-mismatch': '/proc/1/cgroup',
+          'psi-writable': pressure,
+          'psi-rw-mount': '/proc/self/mountinfo',
+          'psi-shadow-mount': '/proc/self/mountinfo',
+          'psi-owner': pressure,
+          'psi-substituted': pressure,
+          'psi-symlink': pressure,
+          'critical-owned': `${cgroup}/cgroup.procs`,
+          'memory-limit-owned': `${cgroup}/memory.max`,
+          'pid-limit-owned': `${cgroup}/pids.max`,
+          'other-pressure-owned': `${cgroup}/cpu.pressure`,
+          'executable-owned': executable,
+          'executable-writable': executable,
+          'control-writable': `${cgroup}/cgroup.kill`,
+        }[kind]
+        const expectedRefusal = {
+          'pid1-mismatch': 'missing protected PID1/controller identities:',
+          'controller-mismatch':
+            'missing protected PID1/controller identities:',
+          'namespace-mismatch': 'PID namespace differs from PID1',
+          'cgroup-mismatch': 'cgroup differs from PID1',
+          'psi-writable': 'unexpected value true; expected false',
+          'psi-rw-mount':
+            'job-owned PSI observation requires a read-only mount',
+          'psi-shadow-mount': `unexpected value ${pressure}; expected /sys/fs/cgroup`,
+          'psi-owner': 'unexpected value 1000; expected 0,999',
+          'psi-substituted': 'aliased PSI observation path',
+          'psi-symlink': `unprotected file: ${pressure}`,
+          'critical-owned': `unprotected file ${expectedPath}: Error: unexpected value 999; expected 0`,
+          'memory-limit-owned': `unprotected file ${expectedPath}: Error: unexpected value 999; expected 0`,
+          'pid-limit-owned': `unprotected file ${expectedPath}: Error: unexpected value 999; expected 0`,
+          'other-pressure-owned': `unprotected file ${expectedPath}: Error: unexpected value 999; expected 0`,
+          'executable-owned': `unprotected file ${expectedPath}: Error: unexpected value 999; expected 0`,
+          'executable-writable': `unprotected file ${expectedPath}: Error: unexpected value true; expected false`,
+          'control-writable': `unprotected file ${expectedPath}: Error: unexpected value true; expected false`,
+        }[kind]
+        let launches = 0
+        let signals = 0
+        const reads = spyOn(fs, 'readFileSync').mockImplementation(
+          observeBuiltin(read, (value, args) => {
+            const path = String(args[0])
+            if (typeof value !== 'string') return value
+            if (
+              (kind === 'pid1-mismatch' && path === '/proc/1/status') ||
+              (kind === 'controller-mismatch' &&
+                path === `/proc/${process.pid}/status`)
+            ) {
+              reached.push(path)
+              return value.replace(/^Uid:.*$/m, 'Uid:\t1000\t1000\t1000\t1000')
+            }
+            if (kind === 'cgroup-mismatch' && path === '/proc/1/cgroup') {
+              reached.push(path)
+              return '0::/system.slice/motor-job-01234567-0123-4123-a123-0123456789ab.service\n'
+            }
+            if (
+              kind === 'psi-shadow-mount' &&
+              path === '/proc/self/mountinfo'
+            ) {
+              reached.push(path)
+              return `${value}9999 1 0:1 / ${pressure} ro,nosuid,nodev - tmpfs tmpfs rw\n`
+            }
+            if (kind === 'psi-rw-mount' && path === '/proc/self/mountinfo')
+              return value
+                .split('\n')
+                .map((line) => {
+                  const [left, right] = line.split(' - ')
+                  const fields = left?.split(' ') ?? []
+                  if (fields[4] === '/sys/fs/cgroup') {
+                    reached.push(path)
+                    const flags = fields[5]
+                    if (!flags) throw new Error('malformed fixture mount flags')
+                    fields[5] = flags
+                      .split(',')
+                      .map((item) => (item === 'ro' ? 'rw' : item))
+                      .join(',')
+                    return `${fields.join(' ')} - ${right}`
+                  }
+                  return line
+                })
+                .join('\n')
+            return value
+          }),
+        )
+        const stats = spyOn(fs, 'lstatSync').mockImplementation(
+          observeBuiltin(stat, (value, args) => {
+            if (!value || typeof value !== 'object') return value
+            const path = String(args[0])
+            const changed: object = Object.create(value)
+            const target =
+              kind === 'critical-owned'
+                ? `${cgroup}/cgroup.procs`
+                : kind === 'memory-limit-owned'
+                  ? `${cgroup}/memory.max`
+                  : kind === 'pid-limit-owned'
+                    ? `${cgroup}/pids.max`
+                    : kind === 'other-pressure-owned'
+                      ? `${cgroup}/cpu.pressure`
+                      : kind === 'executable-owned'
+                        ? executable
+                        : ''
+            if (path === target) {
+              reached.push(path)
+              Object.defineProperty(changed, 'uid', {
+                value: fixtureUid(value, 999),
+              })
+            }
+            if (path === pressure && kind === 'psi-owner') {
+              reached.push(path)
+              Object.defineProperty(changed, 'uid', {
+                value: fixtureUid(value, 1000),
+              })
+            }
+            if (
+              path === pressure &&
+              (kind === 'psi-writable' || kind === 'psi-rw-mount')
+            )
+              Object.defineProperty(changed, 'uid', {
+                value: fixtureUid(value, 999),
+              })
+            if (path === pressure && kind === 'psi-symlink') {
+              reached.push(path)
+              Object.defineProperty(changed, 'isFile', { value: () => false })
+            }
+            return changed
+          }),
+        )
+        const accesses = spyOn(fs, 'accessSync').mockImplementation(
+          (...args: Parameters<typeof fs.accessSync>) => {
+            const path = String(args[0])
+            if (
+              (kind === 'psi-writable' && path === pressure) ||
+              (kind === 'executable-writable' && path === executable) ||
+              (kind === 'control-writable' && path === `${cgroup}/cgroup.kill`)
+            ) {
+              reached.push(path)
+              return
+            }
+            return access(...args)
+          },
+        )
+        const realpaths = spyOn(fs, 'realpathSync').mockImplementation(
+          observeBuiltin(realpath, (value, args) => {
+            if (kind === 'psi-substituted' && String(args[0]) === pressure) {
+              reached.push(pressure)
+              return `${cgroup}/cgroup.events`
+            }
+            return value
+          }),
+        )
+        const readlinks = spyOn(fs, 'readlinkSync').mockImplementation(
+          observeBuiltin(readlink, (value, args) => {
+            if (
+              kind === 'namespace-mismatch' &&
+              String(args[0]) === '/proc/1/ns/pid'
+            ) {
+              reached.push('/proc/1/ns/pid')
+              return 'pid:[1]'
+            }
+            return value
+          }),
+        )
+        const launchesSpy = spyOn(childProcess, 'spawn').mockImplementation(
+          () => {
+            launches++
+            throw new Error('unqualified launch trap')
+          },
+        )
+        const signalsSpy = spyOn(process, 'kill').mockImplementation(() => {
+          signals++
+          return true
+        })
+        try {
+          let phase = 'initial-qualification'
+          let refusal: unknown
+          try {
+            qualifyNativeProcessScope()
+            phase = 'qualified'
+          } catch (error) {
+            refusal = error
+          }
+          expect(phase).toBe('initial-qualification')
+          expect(reached.length).toBeGreaterThan(0)
+          expect(new Set(reached)).toEqual(new Set([expectedPath]))
+          expect(refusal).toBeInstanceOf(Error)
+          if (!(refusal instanceof Error))
+            throw new Error('missing intended qualification refusal')
+          if (kind === 'pid1-mismatch' || kind === 'controller-mismatch') {
+            const separator = refusal.message.indexOf(':')
+            expect(refusal.message.slice(0, separator + 1)).toBe(
+              expectedRefusal,
+            )
+            const identities: unknown = JSON.parse(
+              refusal.message.slice(separator + 1),
+            )
+            expect(identities).toMatchObject({
+              [kind === 'pid1-mismatch' ? 'pid1' : 'controller']: { uid: 1000 },
+              currentPid: process.pid,
+            })
+          } else expect(refusal.message).toBe(expectedRefusal)
+          expect(launches).toBe(0)
+          expect(signals).toBe(0)
+        } finally {
+          signalsSpy.mockRestore()
+          launchesSpy.mockRestore()
+          readlinks.mockRestore()
+          realpaths.mockRestore()
+          accesses.mockRestore()
+          stats.mockRestore()
+          reads.mockRestore()
+        }
+      },
+    )
+  motorTest(
+    CLEANUP_GROUP,
+    'caller-supplied current boundary facts cannot mint cleanup or launch authority',
+    async () => {
+      const genuine = qualifyNativeProcessScope()
+      const forged = { summary: structuredClone(genuine.summary) }
+      let launches = 0
+      let signals = 0
+      const launchSpy = spyOn(childProcess, 'spawn').mockImplementation(() => {
+        launches++
+        throw new Error('forged launch trap')
+      })
+      const signalSpy = spyOn(process, 'kill').mockImplementation(() => {
+        signals++
+        return true
+      })
+      try {
+        await expect(
+          runNativeCommand(forged, '/bin/true', [], {
+            cwd: '/tmp',
+            env: { PATH: '/usr/bin:/bin' },
+            timeoutMs: 100,
+          }),
+        ).rejects.toThrow('unqualified native process scope')
+        expect(launches).toBe(0)
+        expect(signals).toBe(0)
+      } finally {
+        signalSpy.mockRestore()
+        launchSpy.mockRestore()
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'qualified spawn failure preserves its error and completes bounded empty cleanup',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const result = await runNativeCommand(
+        scope,
+        '/bin/ga-deliberately-absent-inert-command',
+        [],
+        { cwd: '/tmp', env: { PATH: '/usr/bin:/bin' }, timeoutMs: 100 },
+      )
+      expect(result.spawnError).toContain('ENOENT')
+      expect(result.cleanup.outcome).toBe('clean')
+      expect(result.cleanup.signaled).toBe(0)
+      expect(result.cleanup.survivors).toEqual([])
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'preexisting listener controller and PID1 are protected from native command cleanup',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-preexisting-'))
+      const script = inertProgram(root)
+      const child = spawn(process.execPath, [script, 'preexisting', root], {
+        cwd: root,
+        env: nativeHostEnv(root, {}),
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          new Promise<void>((resolve, reject) => {
+            child.stdio[3]!.once('data', () => resolve())
+            child.once('error', reject)
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error('preexisting inert fixture did not become ready'),
+                ),
+              500,
+            )
+          }),
+        ])
+        const identity = JSON.parse(
+          readFileSync(join(root, 'preexisting.json'), 'utf8'),
+        ) as InertIdentity
+        expect(readFileSync(`/proc/${identity.pid}/comm`, 'utf8').trim()).toBe(
+          'ga-protected',
+        )
+        expect(await inertListener(identity.port!)).toBe(true)
+        const result = await runNativeCommand(
+          scope,
+          process.execPath,
+          ['-e', "console.log('inert command')"],
+          { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+        )
+        expect(result.code).toBe(0)
+        expect(result.cleanup.outcome).toBe('clean')
+        expect(result.cleanup.signaled).toBe(0)
+        expect(inertAlive(identity)).toBe(true)
+        expect(await inertListener(identity.port!)).toBe(true)
+        expect(process.kill(process.pid, 0)).toBe(true)
+        expect(process.kill(1, 0)).toBe(true)
+      } finally {
+        if (timer) clearTimeout(timer)
+        await finallyReapInert(root)
+        child.stdio[3]?.destroy()
+        child.unref()
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'a changed captured birth fails closed but remaining owned listener is still reaped',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-birth-'))
+      const script = inertProgram(root)
+      const original = fs.readFileSync
+      let targetReads = 0
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        observeBuiltin(original, (value, args) => {
+          const file = join(root, 'worker.json')
+          if (typeof value === 'string' && existsSync(file)) {
+            const identity = JSON.parse(original(file, 'utf8')) as InertIdentity
+            if (
+              String(args[0]) === `/proc/${identity.pid}/stat` &&
+              ++targetReads === 2
+            ) {
+              const at = value.lastIndexOf(')') + 2
+              const fields = value.slice(at).split(' ')
+              fields[19] = String(BigInt(fields[19]!) + 1n)
+              return value.slice(0, at) + fields.join(' ')
+            }
+          }
+          return value
+        }),
+      )
+      const pending = runNativeCommand(
+        scope,
+        process.execPath,
+        [script, 'success', root],
+        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+      )
+      let oracle: ReturnType<typeof setTimeout> | undefined
+      try {
+        const observed = await Promise.race([
+          pending.then((result) => ({ result })),
+          new Promise<{ expired: true }>((resolve) => {
+            oracle = setTimeout(() => resolve({ expired: true }), 500)
+          }),
+        ])
+        expect('result' in observed).toBe(true)
+        if (!('result' in observed))
+          throw new Error('ownership failure did not finish cleanup')
+        expect(targetReads).toBeGreaterThanOrEqual(2)
+        expect(observed.result.code).toBe(0)
+        expect(observed.result.cleanup.outcome).toBe('failed')
+        expect(observed.result.cleanup.failures.join('\n')).toContain(
+          'identity changed before signal',
+        )
+        expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
+        const worker = JSON.parse(
+          original(join(root, 'worker.json'), 'utf8'),
+        ) as InertIdentity
+        expect(await inertListener(worker.port!)).toBe(false)
+      } finally {
+        reads.mockRestore()
+        if (oracle) clearTimeout(oracle)
+        await finallyReapInert(root)
+        await pending.catch(() => undefined)
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'boundary invalidation after discovery forbids every cleanup signal',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const controlPath = `/sys/fs/cgroup${scope.summary.cgroup.self}/cgroup.procs`
+      const expectedRefusal = `Error: unprotected file ${controlPath}: Error: unexpected value 999; expected 0`
+      const modifiedControls: string[] = []
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-before-signal-'))
+      const script = inertProgram(root)
+      const originalRead = fs.readFileSync
+      const originalStat = fs.lstatSync
+      let invalidate = false
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        observeBuiltin(originalRead, (value, args) => {
+          const file = join(root, 'worker.json')
+          if (typeof value === 'string' && existsSync(file)) {
+            const identity = JSON.parse(
+              originalRead(file, 'utf8'),
+            ) as InertIdentity
+            if (String(args[0]) === `/proc/${identity.pid}/stat`)
+              invalidate = true
+          }
+          return value
+        }),
+      )
+      const stats = spyOn(fs, 'lstatSync').mockImplementation(
+        observeBuiltin(originalStat, (value, args) => {
+          const path = String(args[0])
+          if (
+            !invalidate ||
+            path !== controlPath ||
+            !value ||
+            typeof value !== 'object'
+          )
+            return value
+          const changed: object = Object.create(value)
+          Object.defineProperty(changed, 'uid', {
+            value: fixtureUid(value, 999),
+          })
+          modifiedControls.push(path)
+          return changed
+        }),
+      )
+      const pending = runNativeCommand(
+        scope,
+        process.execPath,
+        [script, 'success', root],
+        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+      )
+      let oracle: ReturnType<typeof setTimeout> | undefined
+      try {
+        const observed = await Promise.race([
+          pending.then((result) => ({ result })),
+          new Promise<{ expired: true }>((resolve) => {
+            oracle = setTimeout(() => resolve({ expired: true }), 500)
+          }),
+        ])
+        expect('result' in observed).toBe(true)
+        if (!('result' in observed))
+          throw new Error('unqualified cleanup did not finish')
+        expect(invalidate).toBe(true)
+        expect(observed.result.code).toBe(0)
+        expect(observed.result.cleanup.outcome).toBe('failed')
+        expect(observed.result.cleanup.signaled).toBe(0)
+        expect(observed.result.cleanup.survivors).toBeNull()
+        expect(modifiedControls.length).toBeGreaterThan(0)
+        expect(new Set(modifiedControls)).toEqual(new Set([controlPath]))
+        expect(observed.result.cleanup.failures).toEqual([expectedRefusal])
+        const worker = JSON.parse(
+          originalRead(join(root, 'worker.json'), 'utf8'),
+        ) as InertIdentity
+        expect(inertAlive(worker)).toBe(true)
+        expect(await inertListener(worker.port!)).toBe(true)
+      } finally {
+        stats.mockRestore()
+        reads.mockRestore()
+        if (oracle) clearTimeout(oracle)
+        await finallyReapInert(root)
+        await pending.catch(() => undefined)
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+  motorTest(
+    CLEANUP_GROUP,
+    'foreign live PID1 process ownership refuses before launch and signal calls',
+    async () => {
+      const original = fs.readFileSync
+      let launches = 0
+      let signals = 0
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        observeBuiltin(original, (value, args) => {
+          return String(args[0]) === '/proc/1/status' &&
+            typeof value === 'string'
+            ? value.replace(/^Uid:.*$/m, 'Uid:\t0\t0\t0\t0')
+            : value
+        }),
+      )
+      const launchesSpy = spyOn(childProcess, 'spawn').mockImplementation(
+        () => {
+          launches++
+          throw new Error('foreign boundary launch trap')
+        },
+      )
+      const signalsSpy = spyOn(process, 'kill').mockImplementation(() => {
+        signals++
+        return true
+      })
+      try {
+        await expect(
+          (async () => {
+            const scope = qualifyNativeProcessScope()
+            await runNativeCommand(scope, '/bin/true', [], {
+              cwd: '/tmp',
+              env: { PATH: '/usr/bin:/bin' },
+              timeoutMs: 100,
+            })
+          })(),
+        ).rejects.toThrow('PID1/controller identities')
+        expect(reads).toHaveBeenCalled()
+        expect(launches).toBe(0)
+        expect(signals).toBe(0)
+      } finally {
+        signalsSpy.mockRestore()
+        launchesSpy.mockRestore()
+        reads.mockRestore()
+      }
+    },
+  )
+  for (const mode of ['success', 'nonzero', 'timeout', 'output-cap'])
+    motorTest(
+      CLEANUP_GROUP,
+      `native cleanup reaps detached pipe-holding listener on ${mode} without changing the command result`,
+      async () => {
+        const scope = qualifyNativeProcessScope()
+        const root = mkdtempSync(join(tmpdir(), 'ga-native-cleanup-'))
+        const script = inertProgram(root)
+        const pending = runNativeCommand(
+          scope,
+          process.execPath,
+          [script, mode, root],
+          {
+            cwd: root,
+            env: nativeHostEnv(root, {}),
+            timeoutMs: 100,
+            outputCapBytes: 1024,
+          },
+        )
+        let oracle: ReturnType<typeof setTimeout> | undefined
+        try {
+          const observed = await Promise.race([
+            pending.then((result) => ({ result })),
+            new Promise<{ expired: true }>((resolve) => {
+              oracle = setTimeout(() => resolve({ expired: true }), 500)
+            }),
+          ])
+          expect('result' in observed).toBe(true)
+          if (!('result' in observed))
+            throw new Error('production cleanup exceeded inert oracle bound')
+          const { result } = observed
+          const worker = JSON.parse(
+            readFileSync(join(root, 'worker.json'), 'utf8'),
+          ) as InertIdentity
+          expect(worker.pgid).toBe(worker.pid)
+          expect(worker.sid).toBe(worker.pid)
+          expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
+          expect(await inertListener(worker.port!)).toBe(false)
+          expect(result.cleanup.outcome).toBe('clean')
+          expect(result.cleanup.signaled).toBeGreaterThan(0)
+          expect(result.timedOut).toBe(mode === 'timeout')
+          expect(result.outputCapExceeded).toBe(mode === 'output-cap')
+          if (mode === 'success' || mode === 'nonzero') {
+            expect(result.code).toBe(mode === 'success' ? 0 : 7)
+            expect(
+              result.cleanup.signals.find(
+                (entry) => entry.identity.pid === worker.pid,
+              )?.identity.parent,
+            ).toBe(1)
+          }
+        } finally {
+          if (oracle) clearTimeout(oracle)
+          await finallyReapInert(root)
+          await pending.catch(() => undefined)
+          rmSync(root, { recursive: true, force: true })
+        }
+      },
+    )
+  test('a non-writable job-owned PSI observation through a read-only mount is truthful evidence', () => {
+    const value = nativeMatrix()
+    value.native.processBoundary.cgroup.pressureObservation.uid = 999
+    const parsed: unknown = MatrixSchema.parse(value)
+    expect(parsed).toEqual(value)
+    expect(validateMatrix(value, pin).rows).toHaveLength(253)
+  })
+  test('the existing all-root protection case remains valid without a PSI owner exception', () => {
+    const value = nativeMatrix()
+    value.native.processBoundary.cgroup.pressureObservation.mount.options = [
+      'rw',
+      'nosuid',
+      'nodev',
+      'noexec',
+    ]
+    const parsed: unknown = MatrixSchema.parse(value)
+    expect(parsed).toEqual(value)
+  })
+  motorTest(
+    CLEANUP_GROUP,
+    'the all-root PSI fixture qualifies through the same live admission path',
+    () => {
+      const original = fs.lstatSync
+      const stats = spyOn(fs, 'lstatSync').mockImplementation(
+        observeBuiltin(original, (value, args) => {
+          if (!value || typeof value !== 'object') return value
+          if (!String(args[0]).endsWith('/memory.pressure')) return value
+          const rootOwned: object = Object.create(value)
+          Object.defineProperty(rootOwned, 'uid', {
+            value: fixtureUid(value, 0),
+          })
+          return rootOwned
+        }),
+      )
+      try {
+        const scope = qualifyNativeProcessScope()
+        expect(scope.summary.cgroup.pressureObservation.uid).toBe(0)
+        expect(scope.summary.pid1.uid).toBe(999)
+        expect(scope.summary.pid1.protection.uid).toBe(0)
+      } finally {
+        stats.mockRestore()
+      }
+    },
+  )
+  test('native schema rejects unsupported process or filesystem authority facts', () => {
+    for (const mutate of [
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.pid1.uid = 0
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.pid1.uid = 1000
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.controller.uid = 1000
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.pid1.protection.uid = 999
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.pid1.protection.jobWritable = true
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.controls['cgroup.procs'].uid = 999
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        Reflect.deleteProperty(
+          v.native.processBoundary.cgroup.controls,
+          'memory.max',
+        )
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        Reflect.deleteProperty(
+          v.native.processBoundary.cgroup.controls,
+          'pids.max',
+        )
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        Object.assign(v.native.processBoundary.cgroup.controls, {
+          'memory.unknown': {
+            uid: 999,
+            gid: 0,
+            mode: 0o644,
+            jobWritable: false,
+          },
+        })
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.uid = 1000
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.uid = 999
+        v.native.processBoundary.cgroup.pressureObservation.mount.options = [
+          'rw',
+        ]
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.jobWritable = true
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.name =
+          'cpu.pressure'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.fileType = 'symlink'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.namespace.pid1 = 'pid:[999]'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pid1 = '/system.slice/foreign.service'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.policy.signedAttestation = true
+      },
+    ]) {
+      const value = nativeMatrix()
+      mutate(value)
+      expect(() => {
+        MatrixSchema.parse(value)
+      }).toThrow()
+    }
+  })
+  test('native cleanup command inventory cannot omit duplicate fail or invent a command', () => {
+    for (const mutate of [
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup.pop()
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup.push(v.native.cleanup[1]!)
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup[1]!.outcome = 'failed'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup[1]!.id = 'unknown'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup[1]!.signaled = -1
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.cleanup[1]!.signaled = 1
+      },
+    ]) {
+      const value = nativeMatrix()
+      mutate(value)
+      expect(() => {
+        validateMatrix(value, pin)
+      }).toThrow()
+    }
+  })
+  for (const control of [
+    'missing',
+    'duplicate',
+    'misordered',
+    'failed',
+    'signaled',
+  ] as const)
+    test(`native boundary-probe cleanup inventory refuses ${control} evidence`, () => {
+      const value = nativeMatrix()
+      expect(value.native.cleanup[0]).toEqual({
+        id: 'boundary-probe',
+        outcome: 'clean',
+        signaled: 0,
+      })
+      const probe = value.native.cleanup[0]!
+      if (control === 'missing') value.native.cleanup.shift()
+      if (control === 'duplicate') value.native.cleanup.push({ ...probe })
+      if (control === 'misordered') {
+        value.native.cleanup[0] = value.native.cleanup[1]!
+        value.native.cleanup[1] = probe
+      }
+      if (control === 'failed') probe.outcome = 'failed'
+      if (control === 'signaled') probe.signaled = 1
+      expect(() => validateMatrix(value, pin)).toThrow(
+        'missing/duplicate/failed native command cleanup evidence',
+      )
+    })
+  test('comparison normalizes only qualified job IDs and preserves PSI protection and cleanup differences', () => {
+    const value = nativeMatrix()
+    const fresh = structuredClone(value)
+    fresh.native.processBoundary.namespace.self = 'pid:[789]'
+    fresh.native.processBoundary.namespace.pid1 = 'pid:[789]'
+    fresh.native.processBoundary.cgroup.self =
+      '/system.slice/motor-job-01234567-0123-4123-a123-0123456789ac.service'
+    fresh.native.processBoundary.cgroup.pid1 =
+      fresh.native.processBoundary.cgroup.self
+    expect(() => assertConformance(fresh, value, pin)).not.toThrow()
+    for (const mutate of [
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.uid = 999
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.mode = 0o444
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.mount.options = [
+          'rw',
+        ]
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.pressureObservation.mount.superOptions.push(
+          'nsdelegate',
+        )
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.cgroup.controls['cgroup.procs'].mode = 0o444
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.processBoundary.pid1.executableSha256 = 'd'.repeat(64)
+      },
+    ]) {
+      const changed = structuredClone(value)
+      mutate(changed)
+      expect(() => assertConformance(changed, value, pin)).toThrow('difference')
+    }
+    const dirty = structuredClone(value)
+    dirty.native.cleanup[1]!.signaled = 1
+    expect(() => assertConformance(dirty, value, pin)).toThrow('cleanup')
+  })
+  motorTest(
+    CLEANUP_GROUP,
+    'live protected private PID and cgroup facts qualify without pretending to attest unit properties',
+    () => {
+      const scope = qualifyNativeProcessScope()
+      expect(scope.summary.namespace.self).toBe(scope.summary.namespace.pid1)
+      expect(scope.summary.cgroup.self).toBe(scope.summary.cgroup.pid1)
+      expect(scope.summary.policy.unitPropertiesObserved).toBe(false)
+      expect(scope.summary.policy.signedAttestation).toBe(false)
+      expect(scope.summary.pid1.digestProvenance).toBe(
+        'observed, not an approved artifact pin',
+      )
+      console.log(
+        `NATIVE_PROCESS_SCOPE_OBSERVED=${JSON.stringify(scope.summary)}`,
+      )
+    },
+  )
+})
+
+function nativeGitRoot(parent: string, name: string): string {
+  const root = join(parent, name)
+  mkdirSync(root)
+  mkdirSync(join(root, 'project'))
+  for (const name of ['home', 'config', 'cache', 'data', 'state'])
+    mkdirSync(join(root, name))
+  return root
+}
+
+describe(GIT_GROUP, () => {
+  test('native source wires owned Git and pre-output snapshot admission into the collector', () => {
+    const source = createSourceFile(
+      'measure-ga-proxy-matrix.ts',
+      readFileSync(join(HERE, 'measure-ga-proxy-matrix.ts'), 'utf8'),
+      ScriptTarget.Latest,
+      true,
+    )
+    const functions = source.statements.filter(isFunctionDeclaration)
+    const inside = functions.find((node) => node.name?.text === 'insideRun')!
+    const nativeRun = functions.find(
+      (node) => node.name?.text === 'nativeJobRun',
+    )!
+    const descendants = (node: Node): Node[] => {
+      const nodes: Node[] = []
+      const visit = (child: Node) => {
+        nodes.push(child)
+        forEachChild(child, visit)
+      }
+      forEachChild(node, visit)
+      return nodes
+    }
+    const insideNodes = descendants(inside)
+    const nativeInvoke = descendants(nativeRun)
+      .filter(isVariableDeclaration)
+      .find((node) => node.name.getText(source) === 'nativeInvoke')!
+    const rejects = descendants(nativeInvoke)
+      .filter(isIfStatement)
+      .find((node) =>
+        node.expression.getText(source).includes('result.spawnError'),
+      )!
+    expect(rejects.expression.getText(source).replace(/\s+/g, '')).toBe(
+      "result.spawnError||result.signal||result.code!==0||result.timedOut||result.outputCapExceeded||result.cleanup.outcome!=='clean'||result.cleanup.signaled!==0",
+    )
+    expect(rejects.thenStatement.getText(source).startsWith('throw ')).toBe(
+      true,
+    )
+    const env = insideNodes
+      .filter(isVariableDeclaration)
+      .find((node) => node.name.getText(source) === 'envForRow')!
+    expect(env.initializer?.getText(source)).toBe(
+      'job ? nativeHostEnv : isolatedEnv',
+    )
+    expect(
+      insideNodes.filter(isIfStatement).some(
+        (node) =>
+          node.expression.getText(source) === 'job' &&
+          descendants(node.thenStatement)
+            .filter(isCallExpression)
+            .some(
+              (call) =>
+                call.expression.getText(source) === 'prepareNativeGit' &&
+                call.arguments.map((arg) => arg.getText(source)).join(',') ===
+                  'root,job.scope',
+            ) &&
+          node.elseStatement?.getText(source) ===
+            "checkedCommand('git', ['-C', join(root, 'project'), 'init'])",
+      ),
+    ).toBe(true)
+    const calls = nativeRun
+      .body!.statements.flatMap((node) => descendants(node))
+      .filter(isCallExpression)
+    const snapshot = calls.find(
+      (node) => node.expression.getText(source) === 'snapshotNativeComparison',
+    )!
+    const mkdir = calls.find(
+      (node) => node.expression.getText(source) === 'mkdirSync',
+    )!
+    const boundary = calls.find((node) =>
+      node.expression.getText(source).endsWith('.measureNativeJob'),
+    )!
+    const probeLauncher = boundary.arguments[4]
+    expect(probeLauncher).toBeDefined()
+    if (!probeLauncher || !isArrowFunction(probeLauncher))
+      throw new Error('matrix probe has no qualified launcher callback')
+    const probeCalls = descendants(probeLauncher).filter(isCallExpression)
+    const probeDispatch = probeCalls.find(
+      (node) => node.expression.getText(source) === 'runNativeCommand',
+    )!
+    expect(probeDispatch.arguments.map((arg) => arg.getText(source))).toEqual([
+      'processScope',
+      'binary',
+      'args',
+      'commandOptions',
+    ])
+    const probeInventory = probeCalls.find(
+      (node) => node.expression.getText(source) === 'probeCleanup.push',
+    )!
+    expect(
+      probeInventory.arguments[0]?.getText(source).replace(/\s+/g, ''),
+    ).toBe(
+      "{id:'boundary-probe',outcome:result.cleanup.outcome,signaled:result.cleanup.signaled,}",
+    )
+    expect(
+      descendants(probeLauncher)
+        .filter(isReturnStatement)
+        .map((node) => node.expression?.getText(source)),
+    ).toEqual(['result'])
+    const identity = calls.find(
+      (node) => node.expression.getText(source) === 'assertNativeJob',
+    )!
+    expect(
+      identity.arguments[0]?.getText(source).replace(/\s+/g, ''),
+    ).toContain('cleanup:probeCleanup,')
+    const qualification = calls.find(
+      (node) => node.expression.getText(source) === 'qualifyNativeProcessScope',
+    )!
+    expect(snapshot.getStart(source)).toBeLessThan(
+      qualification.getStart(source),
+    )
+    expect(qualification.getStart(source)).toBeLessThan(mkdir.getStart(source))
+    expect(qualification.getStart(source)).toBeLessThan(
+      boundary.getStart(source),
+    )
+    expect(snapshot.getStart(source)).toBeLessThan(mkdir.getStart(source))
+    expect(snapshot.getStart(source)).toBeLessThan(boundary.getStart(source))
+    const runnerBinding = calls.find(
+      (node) => node.expression.getText(source) === 'observeNativeRunner',
+    )!
+    expect(runnerBinding.getStart(source)).toBeLessThan(
+      boundary.getStart(source),
+    )
+    const rowCalls = descendants(nativeInvoke).filter(isCallExpression)
+    const rebind = rowCalls.find(
+      (node) =>
+        node.expression.getText(source) === 'assertNativeRunnerUnchanged',
+    )!
+    const rowDispatch = rowCalls.find(
+      (node) => node.expression.getText(source) === 'runNativeCommand',
+    )!
+    expect(rebind).toBeDefined()
+    expect(rebind.getStart(source)).toBeLessThan(rowDispatch.getStart(source))
+    const primitive = functions.find(
+      (node) => node.name?.text === 'runNativeCommand',
+    )!
+    const signal = descendants(primitive)
+      .filter(isCallExpression)
+      .find((node) => node.expression.getText(source) === 'process.kill')!
+    const batch = signal.parent.parent
+    expect(isBlock(batch)).toBe(true)
+    if (!isBlock(batch)) throw new Error('native signal has no checked block')
+    const position = batch.statements.findIndex(
+      (node) => node.getStart(source) === signal.parent.getStart(source),
+    )
+    expect(batch.statements[position - 1]?.getText(source)).toBe(
+      'checkCleanupBudget(budget)',
+    )
+  })
+  test('native host uses only system PATH and owned Git configuration roots', () => {
+    const root = '/tmp/ga-native-environment'
+    const env = nativeHostEnv(root, {})
+    expect(env.PATH).toBe('/usr/bin:/bin')
+    expect(env.HOME).toBe(`${root}/home`)
+    expect(env.XDG_CONFIG_HOME).toBe(`${root}/config`)
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe('1')
+    expect(env.GIT_CONFIG_SYSTEM).toBe('/dev/null')
+    expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null')
+    expect(env.GIT_CONFIG_COUNT).toBe('2')
+    expect(env.GIT_CONFIG_KEY_0).toBe('core.hooksPath')
+    expect(env.GIT_CONFIG_VALUE_0).toBe(`${root}/git-hooks`)
+    expect(env.GIT_CONFIG_KEY_1).toBe('init.templateDir')
+    expect(env.GIT_CONFIG_VALUE_1).toBe(`${root}/git-template`)
+    expect(env.GIT_TEMPLATE_DIR).toBe(`${root}/git-template`)
+    expect(env.GIT_PROXY_COMMAND).toBeUndefined()
+    expect(() => nativeHostEnv(root, { HOME: '/operator-home' })).toThrow()
+    expect(() =>
+      nativeHostEnv(root, { GIT_CONFIG_GLOBAL: '/operator-config' }),
+    ).toThrow()
+  })
+  motorTest(
+    GIT_GROUP,
+    'native Git never executes caller PATH or copies caller configuration templates',
+    async () => {
+      const parent = mkdtempSync(join(tmpdir(), 'ga-native-git-'))
+      const previous = { ...process.env }
+      try {
+        const root = nativeGitRoot(parent, 'row')
+        const bin = join(parent, 'caller-bin')
+        const template = join(parent, 'caller-template')
+        const marker = join(parent, 'caller-code-executed')
+        mkdirSync(bin)
+        mkdirSync(template)
+        mkdirSync(join(template, 'hooks'))
+        writeFileSync(
+          join(template, 'inert-template-canary'),
+          'caller template',
+        )
+        writeFileSync(join(template, 'hooks/pre-commit'), '#!/bin/sh\nexit 0\n')
+        const config = `[init]\n  templateDir = ${template}\n[core]\n  hooksPath = ${template}/hooks\n`
+        writeFileSync(join(root, 'home/.gitconfig'), config)
+        writeFileSync(join(root, 'config/git-config-trap'), config)
+        writeFileSync(
+          join(bin, 'git'),
+          `#!/bin/sh\nprintf 'caller code executed' > ${JSON.stringify(marker)}\nexec /usr/bin/git -c init.templateDir=${JSON.stringify(template)} "$@"\n`,
+        )
+        chmodSync(join(bin, 'git'), 0o700)
+        Object.assign(process.env, {
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+          HOME: join(root, 'home'),
+          XDG_CONFIG_HOME: join(root, 'config'),
+          GIT_CONFIG_GLOBAL: join(root, 'home/.gitconfig'),
+          GIT_CONFIG_SYSTEM: join(root, 'config/git-config-trap'),
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: 'init.templateDir',
+          GIT_CONFIG_VALUE_0: template,
+          GIT_TEMPLATE_DIR: template,
+          GIT_PROXY_COMMAND: join(bin, 'git'),
+        })
+        await prepareNativeGit(root)
+        expect(existsSync(marker)).toBe(false)
+        expect(existsSync(join(root, 'project/.git/HEAD'))).toBe(true)
+        expect(
+          existsSync(join(root, 'project/.git/inert-template-canary')),
+        ).toBe(false)
+        expect(existsSync(join(root, 'project/.git/hooks/pre-commit'))).toBe(
+          false,
+        )
+        const command = JSON.parse(
+          readFileSync(join(root, 'git.command.json'), 'utf8'),
+        )
+        expect(command.binary).toBe('/usr/bin/git')
+        expect(command.env.PATH).toBe('/usr/bin:/bin')
+      } finally {
+        for (const key of Object.keys(process.env)) delete process.env[key]
+        Object.assign(process.env, previous)
+        rmSync(parent, { recursive: true, force: true })
+      }
+    },
+  )
+  test('inert Git template trap copies its canary when exclusions are removed', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'ga-native-git-canary-'))
+    try {
+      const root = nativeGitRoot(parent, 'row')
+      const template = join(parent, 'template')
+      mkdirSync(template)
+      writeFileSync(join(template, 'inert-template-canary'), 'caller template')
+      writeFileSync(
+        join(root, 'home/.gitconfig'),
+        `[init]\n templateDir = ${template}\n`,
+      )
+      const result = spawnSync(
+        '/usr/bin/git',
+        ['-C', join(root, 'project'), 'init'],
+        {
+          encoding: 'utf8',
+          env: {
+            PATH: '/usr/bin:/bin',
+            HOME: join(root, 'home'),
+            GIT_CONFIG_NOSYSTEM: '1',
+          },
+        },
+      )
+      expect(result.status).toBe(0)
+      expect(
+        readFileSync(join(root, 'project/.git/inert-template-canary'), 'utf8'),
+      ).toBe('caller template')
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
+  })
+  const optionsFor = (root: string, compare: string) =>
+    parseArgs([
+      '--profile',
+      'native-job',
+      '--out',
+      join(root, 'fresh'),
+      '--tarball',
+      join(root, 'host.tgz'),
+      '--compare',
+      compare,
+    ])
+  test('native comparison refuses self comparison and invalid inputs before creating output', () => {
+    const root = fs.realpathSync(
+      mkdtempSync(join(tmpdir(), 'ga-native-compare-')),
+    )
+    try {
+      const compare = join(root, 'retained.json')
+      const symlink = join(root, 'retained-link.json')
+      writeFileSync(compare, JSON.stringify(nativeMatrix()))
+      symlinkSync(compare, symlink)
+      const cases = [
+        join(root, 'fresh/matrix.json'),
+        join(root, 'missing.json'),
+        symlink,
+        root,
+      ]
+      for (const path of cases) {
+        expect(() => {
+          snapshotNativeComparison(optionsFor(root, path), pin)
+        }).toThrow()
+        expect(existsSync(join(root, 'fresh'))).toBe(false)
+      }
+      const wrongSource = nativeMatrix()
+      wrongSource.sources['ga-measure-plugin.ts'] = '0'.repeat(64)
+      for (const bytes of [
+        'not JSON',
+        JSON.stringify({ ...nativeMatrix(), full: false }),
+        JSON.stringify(matrix()),
+        JSON.stringify({ ...nativeMatrix(), rows: [] }),
+        JSON.stringify(wrongSource),
+      ]) {
+        writeFileSync(compare, bytes)
+        expect(() => {
+          snapshotNativeComparison(optionsFor(root, compare), pin)
+        }).toThrow()
+        expect(existsSync(join(root, 'fresh'))).toBe(false)
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test('native comparison keeps validated snapshot bytes after the input is overwritten', () => {
+    const root = fs.realpathSync(
+      mkdtempSync(join(tmpdir(), 'ga-native-compare-snapshot-')),
+    )
+    try {
+      const compare = join(root, 'retained.json')
+      const retained = nativeMatrix()
+      const bytes = `${JSON.stringify(retained)}\n`
+      writeFileSync(compare, bytes)
+      const snapshot = snapshotNativeComparison(optionsFor(root, compare), pin)
+      expect(snapshot).toBeDefined()
+      const changed = structuredClone(retained)
+      changed.rows[1]!.outcome = 'proxied'
+      changed.rows[1]!.recorder = 'A'
+      writeFileSync(compare, JSON.stringify(changed))
+      expect(() => snapshot!.compare(retained)).not.toThrow()
+      expect(snapshot!.sha256).toBe(sha256(bytes))
+      expect(() => snapshot!.compare(changed)).toThrow('difference')
+      expect(existsSync(join(root, 'fresh'))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test('native comparison explicitly rejects an existing in-output matrix', () => {
+    const root = fs.realpathSync(
+      mkdtempSync(join(tmpdir(), 'ga-native-compare-self-')),
+    )
+    try {
+      const out = join(root, 'fresh')
+      mkdirSync(out)
+      const compare = join(out, 'matrix.json')
+      writeFileSync(compare, JSON.stringify(nativeMatrix()))
+      expect(() => {
+        snapshotNativeComparison(optionsFor(root, compare), pin)
+      }).toThrow('outside fresh output tree')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('explicit matrix measurement profiles', () => {
+  test('native profile round-trip retains truthful paths and all 253 rows', () => {
+    const value = nativeMatrix()
+    const parsed: unknown = MatrixSchema.parse(
+      JSON.parse(JSON.stringify(value)),
+    )
+    expect(parsed).toEqual(value)
+    expect(validateMatrix(value, pin).rows).toHaveLength(253)
+  })
+  test('Docker profile preserves the exact inner evidence and container row contract', () => {
+    const value = matrix()
+    expect(JSON.stringify(validateMatrix(value, pin).native)).toBe(
+      JSON.stringify(assertNative(native)),
+    )
+    value.rows[0]!.pluginPath = '/tmp/native/inputs/ga-measure-plugin.ts'
+    expect(() => {
+      validateMatrix(value, pin)
+    }).toThrow('unknown/malformed row')
+  })
+  test('Docker four-input layout loads without any native-job fixture', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ga-docker-layout-'))
+    try {
+      for (const name of Object.keys(sourceDigests()))
+        writeFileSync(join(root, name), readFileSync(join(HERE, name)))
+      const result = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `import { readFileSync } from 'node:fs'; import { validateMatrix, PinSchema } from ${JSON.stringify(join(root, 'measure-ga-proxy-matrix.ts'))}; console.log(JSON.stringify(validateMatrix(JSON.parse(readFileSync(0, 'utf8')), PinSchema.parse(JSON.parse(readFileSync(${JSON.stringify(join(root, 'ga-binary-pin.json'))}, 'utf8')))).native))`,
+        ],
+        {
+          encoding: 'utf8',
+          input: JSON.stringify(matrix()),
+          env: { PATH: process.env.PATH },
+        },
+      )
+      expect(result.error).toBeUndefined()
+      expect(result.status).toBe(0)
+      expect(result.stderr).toBe('')
+      expect(result.stdout.trim()).toBe(JSON.stringify(assertNative(native)))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  test('missing and unknown matrix profiles are refused explicitly', () => {
+    const { profile: _profile, ...untagged } = matrix()
+    expect(() => {
+      MatrixSchema.parse(untagged)
+    }).toThrow()
+    expect(() => {
+      MatrixSchema.parse({ ...matrix(), profile: 'unknown' })
+    }).toThrow()
+  })
+  test('mixed profile fields and swapped evidence are refused', () => {
+    const job = nativeMatrix()
+    for (const value of [
+      { ...job, native: { ...job.native, image: native.image } },
+      { ...matrix(), native: { ...native, boundary: job.native.boundary } },
+      { ...job, native },
+      { ...matrix(), native: job.native },
+    ])
+      expect(() => {
+        MatrixSchema.parse(value)
+      }).toThrow()
+  })
+  test('native executable identity is pinned independently of row identities', () => {
+    for (const patch of [
+      { sha256: '0'.repeat(64) },
+      { bytes: 1 },
+      { elfMachine: 183 },
+      { reportedVersion: 'opencode v0.0.0' },
+    ]) {
+      const value = nativeMatrix()
+      Object.assign(value.native.executable, patch)
+      expect(() => {
+        validateMatrix(value, pin)
+      }).toThrow()
+    }
+  })
+  test('native runtime refuses unapproved identities', () => {
+    for (const patch of [
+      { name: 'Node' },
+      { version: '0.0.0' },
+      { revision: '0'.repeat(40) },
+    ]) {
+      const value = nativeMatrix()
+      Object.assign(value.native.runtime, patch)
+      expect(() => {
+        validateMatrix(value, pin)
+      }).toThrow()
+    }
+  })
+  test('native runner requires an ELF x64 identity and the pinned Bun runtime', () => {
+    for (const patch of [
+      { path: 'bun' },
+      { sha256: 'bad' },
+      { bytes: 0 },
+      { elfMachine: 183 },
+      { version: '0.0.0' },
+      { revision: 'bad' },
+    ]) {
+      const value = nativeMatrix()
+      Object.assign(value.native.runner, patch)
+      expect(() => {
+        MatrixSchema.parse(value)
+      }).toThrow()
+    }
+  })
+  test('native containment requires the real fixture control inventory', () => {
+    for (const mutate of [
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.boundary.interfaces.push('eth0')
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.boundary.status.NoNewPrivs = '0'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.boundary.status.CapBnd = '0000000000000001'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.boundary.controls.pop()
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        Object.assign(v.native.boundary.controls[0]!, { errno: 0 })
+      },
+    ]) {
+      const value = nativeMatrix()
+      mutate(value)
+      expect(() => {
+        MatrixSchema.parse(value)
+      }).toThrow()
+    }
+  })
+  test('native layout binds the executable plugin and argv without Docker aliases', () => {
+    for (const mutate of [
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.executable.path = '/tmp/wrong-opencode'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.native.root = '/tmp/../tmp/ga-native-schema-fixture'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.rows[0]!.pluginPath = '/input/ga-measure-plugin.ts'
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.rows[0]!.command = commandForCase(v.rows[0]!.id)
+      },
+      (v: ReturnType<typeof nativeMatrix>) => {
+        v.rows[0]!.command[2] = '--different'
+      },
+    ]) {
+      const value = nativeMatrix()
+      mutate(value)
+      expect(() => {
+        validateMatrix(value, pin)
+      }).toThrow()
+    }
+  })
+  test('native sources are mandatory and partial matrices cannot conform', () => {
+    const value = nativeMatrix()
+    for (const key of Object.keys(value.sources)) {
+      const changed = structuredClone(value)
+      changed.sources[key] = '0'.repeat(64)
+      expect(() => {
+        validateMatrix(changed, pin)
+      }).toThrow('source digest')
+    }
+    expect(() =>
+      assertConformance({ ...value, full: false }, value, pin),
+    ).toThrow()
+    expect(() => assertConformance(value, matrix(), pin)).toThrow()
+  })
+  test('native comparison normalizes only validated job identities and retains raw runner bindings', () => {
+    const value = nativeMatrix()
+    const fresh = structuredClone(value)
+    const root = '/tmp/ga-native-second-schema-fixture'
+    fresh.native.root = root
+    fresh.native.executable.path = `${root}/inputs/ga-verified-opencode`
+    fresh.native.runner.device = '42'
+    fresh.native.runner.inode = '456'
+    fresh.native.boundary.namespace = 'net:[456]'
+    const child = fresh.native.boundary.controls.find(
+      (control) => control.control === 'child_inheritance',
+    )!
+    Object.assign(child, { namespace: 'net:[456]' })
+    for (const row of fresh.rows) {
+      row.pluginPath = `${root}/inputs/ga-measure-plugin.ts`
+      row.command[0] = `${root}/inputs/ga-verified-opencode`
+    }
+    const before = JSON.stringify([fresh, value])
+    expect(() => assertConformance(fresh, value, pin)).not.toThrow()
+    expect(JSON.stringify([fresh, value])).toBe(before)
+    fresh.native.runner.sha256 = 'b'.repeat(64)
+    expect(() => assertConformance(fresh, value, pin)).toThrow('difference')
+    fresh.native.runner.sha256 = value.native.runner.sha256
+    fresh.native.runner.version = '0.0.0'
+    expect(() => assertConformance(fresh, value, pin)).toThrow(
+      'unexpected value 0.0.0; expected 1.4.2',
+    )
+    fresh.native.runner.version = value.native.runner.version
+    fresh.native.runner.inode = '<runner-inode>'
+    expect(() => assertConformance(fresh, value, pin)).toThrow(
+      'malformed string',
+    )
+  })
+  test('native argv is explicit absolute and never mixed with Docker admission', () => {
+    const args = [
+      '--profile',
+      'native-job',
+      '--out',
+      '/tmp/fresh-native',
+      '--tarball',
+      '/tmp/host.tgz',
+    ]
+    expect(parseArgs(args).profile).toBe('native-job')
+    for (const bad of [
+      [...args, '--image', native.image],
+      [...args, '--inside', 'native-container'],
+      args.map((v) => (v === '/tmp/fresh-native' ? 'relative' : v)),
+      args.map((v) => (v === '/tmp/host.tgz' ? 'relative.tgz' : v)),
+      args.map((v) => (v === 'native-job' ? 'unknown' : v)),
+      [
+        ...args.map((v) => (v === 'native-job' ? 'unknown' : v)),
+        '--image',
+        native.image,
+      ],
+      args.slice(0, -2),
+    ])
+      expect(() => parseArgs(bad)).toThrow()
+  })
+  test('native launch admission refuses absent consent TLS bypass architecture and reused roots', () => {
+    const parent = fs.realpathSync(
+      mkdtempSync(join(tmpdir(), 'ga-native-admission-')),
+    )
+    try {
+      const tarball = join(parent, 'host.tgz')
+      writeFileSync(tarball, 'parser fixture only; no host is executed')
+      const options = parseArgs([
+        '--profile',
+        'native-job',
+        '--out',
+        join(parent, 'fresh'),
+        '--tarball',
+        tarball,
+      ])
+      const admitted = { ANTIGRAVITY_GA_HOST_EXECUTION: '1' }
+      expect(() =>
+        assertNativeJobAdmission(options, admitted, 'linux', 'x64'),
+      ).not.toThrow()
+      for (const env of [
+        {},
+        { ANTIGRAVITY_GA_HOST_EXECUTION: '0' },
+        { ...admitted, NODE_TLS_REJECT_UNAUTHORIZED: '0' },
+      ])
+        expect(() =>
+          assertNativeJobAdmission(options, env, 'linux', 'x64'),
+        ).toThrow()
+      expect(() =>
+        assertNativeJobAdmission(options, admitted, 'darwin', 'x64'),
+      ).toThrow()
+      expect(() =>
+        assertNativeJobAdmission(options, admitted, 'linux', 'arm64'),
+      ).toThrow()
+      mkdirSync(options.out)
+      expect(() =>
+        assertNativeJobAdmission(options, admitted, 'linux', 'x64'),
+      ).toThrow()
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
+  })
+})
 
 // This is a parser fixture only. A tiny synthetic ELF must never be executed.
 function syntheticArchive() {
@@ -915,9 +4139,9 @@ test('Docker bootstrap avoids Hub and verifies Bun before extraction', () => {
     `ARG BASE_IMAGE=public.ecr.aws/docker/library/node:24-bookworm-slim@${baseImageDigest}`,
   )
   expect(source).toContain('FROM ${BASE_IMAGE}')
-  expect(source.split('\n').filter((line) => line.startsWith('FROM '))).toEqual([
-    'FROM ${BASE_IMAGE}',
-  ])
+  expect(source.split('\n').filter((line) => line.startsWith('FROM '))).toEqual(
+    ['FROM ${BASE_IMAGE}'],
+  )
   const script = readFileSync(join(HERE, 'run-opencode-ga-test.sh'), 'utf8')
   expect(script).toContain(`BASE_IMAGE_DIGEST="${baseImageDigest}"`)
   expect(script.split(baseImageDigest)).toHaveLength(2)
@@ -959,4 +4183,17 @@ test('Docker bootstrap avoids Hub and verifies Bun before extraction', () => {
       'bun install --cwd tools/common-auth-build --frozen-lockfile --ignore-scripts',
     ),
   ).toBeLessThan(source.indexOf('bun run build'))
+})
+
+test('motor-inert registration equals the independently frozen expanded inventory', () => {
+  const expected =
+    selectedTestProfile === 'motor-inert'
+      ? [...MOTOR_INERT_EXPECTED_R5].sort()
+      : []
+  const registered = [...motorRegistered].sort()
+  console.log(
+    `MOTOR_INERT_INVENTORY=${JSON.stringify({ revision: 'r5', profile: selectedTestProfile, expected, registered, executedAtInventoryCheck: [...motorExecuted], registeredCount: registered.length, executedCountAtInventoryCheck: motorExecuted.length })}`,
+  )
+  expect(registered).toEqual(expected)
+  expect(new Set(motorRegistered).size).toBe(motorRegistered.length)
 })

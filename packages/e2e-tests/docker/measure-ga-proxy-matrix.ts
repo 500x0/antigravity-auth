@@ -1,12 +1,21 @@
 #!/usr/bin/env bun
-import { spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  accessSync,
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import {
@@ -15,6 +24,7 @@ import {
   type IncomingMessage,
   type Server,
 } from 'node:http'
+import { createRequire } from 'node:module'
 import { connect } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +32,20 @@ import { gunzipSync } from 'node:zlib'
 import { GA_LOOPBACK_REQUEST_CONTRACT } from './ga-loopback-request-contract.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+const REPO = resolve(HERE, '../../..')
+const FIXTURE = '../src/fixtures/opencode-ga-host'
+const NATIVE_SOURCES = [
+  `${FIXTURE}/native-job.ts`,
+  `${FIXTURE}/native-boundary.py`,
+  `${FIXTURE}/owned-command.ts`,
+  `${FIXTURE}/package.json`,
+  `${FIXTURE}/bun.lock`,
+] as const
+// Docker copies only its original four inputs. Load the native-only fixture lazily.
+const require = createRequire(import.meta.url)
+function nativeJobFixture(): typeof import('../src/fixtures/opencode-ga-host/native-job.ts') {
+  return require(join(HERE, FIXTURE, 'native-job.ts'))
+}
 export const PORTS = Object.freeze({
   mock: 38191,
   other: 38192,
@@ -622,6 +646,359 @@ export function assertNative(value: unknown) {
     )
   }
 }
+
+function absoluteRoot(value: unknown): string {
+  const root = string(value, /^\//)
+  if (
+    root === '/' ||
+    resolve(root) !== root ||
+    [...root].some((char) => char.charCodeAt(0) < 32)
+  )
+    throw new Error('native layout requires a canonical absolute root')
+  return root
+}
+function nativeLayout(root: string) {
+  return {
+    binary: join(root, 'inputs/ga-verified-opencode'),
+    plugin: join(root, 'inputs/ga-measure-plugin.ts'),
+  }
+}
+function positiveInteger(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
+    throw new Error('expected positive integer')
+  return value
+}
+
+// The MOTOR isolated-job service supplies this supervisor policy. These values
+// describe its configuration, not a fresh unit-property read or signed attestation.
+// Observed kernel/filesystem facts are recorded separately.
+const MOTOR_PROCESS_POLICY = {
+  source: 'MOTOR owner-qualified supervisor contract',
+  privatePids: true,
+  killMode: 'control-group',
+  jobEndBackstop: 'systemd teardown',
+  unitPropertiesObserved: false,
+  signedAttestation: false,
+} as const
+
+function protection(value: unknown) {
+  const p = object(value, ['uid', 'gid', 'mode', 'jobWritable'])
+  const mode = positiveInteger(p.mode)
+  if (mode > 0o777 || (mode & 0o022) !== 0)
+    throw new Error('job-writable protection mode')
+  return {
+    uid: oneOf(p.uid, [0] as const),
+    gid: nonnegativeInteger(p.gid),
+    mode,
+    jobWritable: oneOf(p.jobWritable, [false] as const),
+  }
+}
+function pressureObservation(value: unknown) {
+  const p = object(value, [
+    'name',
+    'fileType',
+    'uid',
+    'gid',
+    'mode',
+    'jobWritable',
+    'mount',
+  ])
+  const mount = object(p.mount, [
+    'point',
+    'root',
+    'type',
+    'source',
+    'options',
+    'superOptions',
+  ])
+  const options = list(mount.options, (value) =>
+    string(value, /^[a-zA-Z0-9_=.-]+$/),
+  )
+  if (
+    new Set(options).size !== options.length ||
+    options.includes('ro') === options.includes('rw')
+  )
+    throw new Error('ambiguous cgroup mount access')
+  const uid = oneOf(p.uid, [0, 999] as const)
+  // PSI watch files grant stall notifications, not process or resource control.
+  // Only this exact regular file may be job-owned, behind a read-only mount.
+  if (uid === 999 && !options.includes('ro'))
+    throw new Error('job-owned PSI observation requires a read-only mount')
+  const mode = positiveInteger(p.mode)
+  if (mode > 0o777 || (mode & 0o022) !== 0)
+    throw new Error('unsafe PSI observation mode')
+  return {
+    name: oneOf(p.name, ['memory.pressure'] as const),
+    fileType: oneOf(p.fileType, ['regular'] as const),
+    uid,
+    gid: nonnegativeInteger(p.gid),
+    mode,
+    jobWritable: oneOf(p.jobWritable, [false] as const),
+    mount: {
+      point: oneOf(mount.point, ['/sys/fs/cgroup'] as const),
+      root: oneOf(mount.root, ['/'] as const),
+      type: oneOf(mount.type, ['cgroup2'] as const),
+      source: string(mount.source, /./),
+      options,
+      superOptions: list(mount.superOptions, (value) =>
+        string(value, /^[a-zA-Z0-9_=.-]+$/),
+      ),
+    },
+  }
+}
+function nonnegativeInteger(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+    throw new Error('expected nonnegative integer')
+  return value
+}
+function privilegedStatus(value: unknown) {
+  const keys = [
+    'NoNewPrivs',
+    'Seccomp',
+    'CapInh',
+    'CapPrm',
+    'CapEff',
+    'CapBnd',
+    'CapAmb',
+  ]
+  const s = object(value, keys)
+  return Object.fromEntries(
+    keys.map((key) => [
+      key,
+      oneOf(s[key], [
+        key === 'NoNewPrivs'
+          ? '1'
+          : key === 'Seccomp'
+            ? '2'
+            : '0000000000000000',
+      ]),
+    ]),
+  )
+}
+function parseProcessBoundary(value: unknown) {
+  const b = object(value, [
+    'policy',
+    'namespace',
+    'cgroup',
+    'pid1',
+    'controller',
+  ])
+  const policy = object(b.policy, Object.keys(MOTOR_PROCESS_POLICY))
+  for (const [key, expected] of Object.entries(MOTOR_PROCESS_POLICY))
+    if (policy[key] !== expected)
+      throw new Error('unqualified supervisor policy')
+  const namespace = object(b.namespace, ['self', 'pid1'])
+  const self = string(namespace.self, /^pid:\[\d+\]$/)
+  if (self !== namespace.pid1)
+    throw new Error('PID namespace differs from PID1')
+  const c = object(b.cgroup, [
+    'self',
+    'pid1',
+    'directory',
+    'parents',
+    'controls',
+    'pressureObservation',
+  ])
+  const cgroup = string(
+    c.self,
+    /^\/system\.slice\/motor-job-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.service$/,
+  )
+  if (cgroup !== c.pid1) throw new Error('cgroup differs from PID1')
+  const controls = record(c.controls)
+  if ('memory.pressure' in controls)
+    throw new Error('PSI observation must have its own named role')
+  for (const key of [
+    'cgroup.procs',
+    'cgroup.threads',
+    'cgroup.kill',
+    'cgroup.events',
+    'cgroup.subtree_control',
+    'memory.max',
+    'pids.max',
+  ])
+    if (!(key in controls)) throw new Error('missing protected cgroup control')
+  const checkedControls = Object.fromEntries(
+    Object.entries(controls).map(([key, value]) => [
+      string(key, /^[a-z][a-z0-9_.]+$/),
+      protection(value),
+    ]),
+  )
+  const p = object(b.pid1, [
+    'uid',
+    'kernel',
+    'comm',
+    'argvPrefix',
+    'executable',
+    'canonicalExecutable',
+    'executableSha256',
+    'digestProvenance',
+    'protection',
+    'parents',
+  ])
+  const argvPrefix = list(p.argvPrefix, (value) => string(value))
+  if (JSON.stringify(argvPrefix) !== '["/bin/bash","-c"]')
+    throw new Error('unqualified PID1 wrapper argv')
+  const controller = object(b.controller, ['uid', 'kernel'])
+  const canonicalExecutable = oneOf(p.canonicalExecutable, [
+    '/bin/bash',
+    '/usr/bin/bash',
+  ] as const)
+  const parents = (value: unknown, paths: string[]) =>
+    Object.fromEntries(
+      Object.entries(object(value, paths)).map(([path, value]) => [
+        path,
+        protection(value),
+      ]),
+    )
+  return {
+    policy: { ...MOTOR_PROCESS_POLICY },
+    namespace: { self, pid1: self },
+    cgroup: {
+      self: cgroup,
+      pid1: cgroup,
+      directory: protection(c.directory),
+      parents: parents(c.parents, [
+        '/sys/fs/cgroup',
+        '/sys/fs/cgroup/system.slice',
+      ]),
+      controls: checkedControls,
+      pressureObservation: pressureObservation(c.pressureObservation),
+    },
+    pid1: {
+      uid: oneOf(p.uid, [999] as const),
+      kernel: privilegedStatus(p.kernel),
+      comm: oneOf(p.comm, ['bash'] as const),
+      argvPrefix,
+      executable: oneOf(p.executable, ['/bin/bash'] as const),
+      canonicalExecutable,
+      executableSha256: digest(p.executableSha256),
+      digestProvenance: oneOf(p.digestProvenance, [
+        'observed, not an approved artifact pin',
+      ] as const),
+      protection: protection(p.protection),
+      parents: parents(
+        p.parents,
+        canonicalExecutable === '/bin/bash'
+          ? ['/', '/bin']
+          : ['/', '/usr', '/usr/bin'],
+      ),
+    },
+    controller: {
+      uid: oneOf(controller.uid, [999] as const),
+      kernel: privilegedStatus(controller.kernel),
+    },
+  }
+}
+
+function assertNativeJob(value: unknown) {
+  const n = object(value, [
+    'root',
+    'executable',
+    'runtime',
+    'runner',
+    'boundary',
+    'processBoundary',
+    'cleanup',
+  ])
+  const root = absoluteRoot(n.root)
+  const e = object(n.executable, [
+    'path',
+    'sha256',
+    'bytes',
+    'elfMachine',
+    'reportedVersion',
+  ])
+  const r = object(n.runner, [
+    'path',
+    'sha256',
+    'bytes',
+    'elfMachine',
+    'version',
+    'revision',
+    'device',
+    'inode',
+  ])
+  const boundary = object(n.boundary, [
+    'architecture',
+    'interfaces',
+    'namespace',
+    'status',
+    'controls',
+  ])
+  object(boundary.status, [
+    'NoNewPrivs',
+    'Seccomp',
+    'CapInh',
+    'CapPrm',
+    'CapEff',
+    'CapBnd',
+    'CapAmb',
+  ])
+  list(boundary.controls, (value) => {
+    const control = record(value)
+    const name = oneOf(control.control, [
+      'external_tcp',
+      'external_udp',
+      'external_dns',
+      'loopback_tcp',
+      'unix_round_trip',
+      'child_inheritance',
+      'namespace_escape',
+    ] as const)
+    const keys =
+      name === 'external_tcp' || name === 'external_udp'
+        ? ['family', 'errno']
+        : name === 'external_dns'
+          ? ['errno']
+          : name === 'loopback_tcp'
+            ? ['family', 'roundTrip']
+            : name === 'unix_round_trip'
+              ? ['roundTrip']
+              : name === 'child_inheritance'
+                ? ['namespace', 'errno']
+                : ['exit', 'stderr']
+    return object(control, ['control', ...keys])
+  })
+  nativeJobFixture().assertNativeBoundary(boundary)
+  if (e.path !== nativeLayout(root).binary)
+    throw new Error('native executable path differs from owned layout')
+  const runnerRuntime = runtime({
+    name: 'Bun',
+    version: r.version,
+    revision: r.revision,
+  })
+  return {
+    root,
+    executable: {
+      path: string(e.path),
+      sha256: digest(e.sha256),
+      bytes: positiveInteger(e.bytes),
+      elfMachine: oneOf(e.elfMachine, [62] as const),
+      reportedVersion: oneOf(e.reportedVersion, ['opencode v2.0.22'] as const),
+    },
+    runtime: runtime(n.runtime),
+    runner: {
+      path: absoluteRoot(r.path),
+      sha256: digest(r.sha256),
+      bytes: positiveInteger(r.bytes),
+      elfMachine: oneOf(r.elfMachine, [62] as const),
+      version: runnerRuntime.version,
+      revision: runnerRuntime.revision,
+      device: string(r.device, /^\d+$/),
+      inode: string(r.inode, /^[1-9]\d*$/),
+    },
+    boundary,
+    processBoundary: parseProcessBoundary(n.processBoundary),
+    cleanup: list(n.cleanup, (value) => {
+      const c = object(value, ['id', 'outcome', 'signaled'])
+      return {
+        id: string(c.id),
+        outcome: oneOf(c.outcome, ['clean', 'failed'] as const),
+        signaled: nonnegativeInteger(c.signaled),
+      }
+    }),
+  }
+}
 function parseRow(value: unknown) {
   const r = object(value, [
     'id',
@@ -657,25 +1034,27 @@ function parseRow(value: unknown) {
 function parseMatrix(value: unknown) {
   const m = object(value, [
     'schema',
+    'profile',
     'full',
     'binarySha256',
     'native',
     'sources',
     'rows',
   ])
+  const profile = oneOf(m.profile, ['docker', 'native-job'] as const)
   const s = object(m.sources, [
     'ga-measure-plugin.ts',
     'ga-loopback-request-contract.ts',
     'measure-ga-proxy-matrix.ts',
     'ga-binary-pin.json',
+    ...(profile === 'native-job' ? NATIVE_SOURCES : []),
   ])
   const rows = list(m.rows, parseRow)
   if (!rows.length) throw new Error('zero rows')
-  return {
+  const common = {
     schema: oneOf(m.schema, [1] as const),
     full: oneOf(m.full, [true, false] as const),
     binarySha256: digest(m.binarySha256),
-    native: assertNative(m.native),
     sources: {
       'ga-measure-plugin.ts': digest(s['ga-measure-plugin.ts']),
       'ga-loopback-request-contract.ts': digest(
@@ -683,13 +1062,28 @@ function parseMatrix(value: unknown) {
       ),
       'measure-ga-proxy-matrix.ts': digest(s['measure-ga-proxy-matrix.ts']),
       'ga-binary-pin.json': digest(s['ga-binary-pin.json']),
+      ...(profile === 'native-job'
+        ? Object.fromEntries(NATIVE_SOURCES.map((key) => [key, digest(s[key])]))
+        : {}),
     },
     rows,
   }
+  return profile === 'docker'
+    ? { ...common, profile, native: assertNative(m.native) }
+    : { ...common, profile, native: assertNativeJob(m.native) }
 }
 export const MatrixSchema = { parse: parseMatrix }
 export type Matrix = ReturnType<typeof parseMatrix>
-export function sourceDigests() {
+export function sourceDigests(
+  profile: 'docker' | 'native-job' = 'docker',
+): Record<string, string> &
+  Record<
+    | 'ga-measure-plugin.ts'
+    | 'ga-loopback-request-contract.ts'
+    | 'measure-ga-proxy-matrix.ts'
+    | 'ga-binary-pin.json',
+    string
+  > {
   return {
     'ga-measure-plugin.ts': sha256(
       readFileSync(join(HERE, 'ga-measure-plugin.ts')),
@@ -703,6 +1097,14 @@ export function sourceDigests() {
     'ga-binary-pin.json': sha256(
       readFileSync(join(HERE, 'ga-binary-pin.json')),
     ),
+    ...(profile === 'native-job'
+      ? Object.fromEntries(
+          NATIVE_SOURCES.map((path) => [
+            path,
+            sha256(readFileSync(join(HERE, path))),
+          ]),
+        )
+      : {}),
   }
 }
 
@@ -733,7 +1135,16 @@ export function validateMatrix(
   const matrix = MatrixSchema.parse(value)
   if (matrix.binarySha256 !== pin.binarySha256)
     throw new Error('matrix binary digest mismatch')
-  if (JSON.stringify(matrix.sources) !== JSON.stringify(sourceDigests()))
+  if (
+    matrix.profile === 'native-job' &&
+    (matrix.native.executable.sha256 !== pin.binarySha256 ||
+      matrix.native.executable.bytes !== pin.binaryBytes)
+  )
+    throw new Error('native executable identity differs from pin')
+  if (
+    JSON.stringify(matrix.sources) !==
+    JSON.stringify(sourceDigests(matrix.profile))
+  )
     throw new Error('measured source digest mismatch')
   if (
     matrix.rows.length !== selected.length ||
@@ -752,8 +1163,19 @@ export function validateMatrix(
       JSON.stringify(row.variables) !== JSON.stringify(variables) ||
       row.binarySha256 !== pin.binarySha256 ||
       JSON.stringify(row.conflicts) !== JSON.stringify(conflicts) ||
-      row.pluginPath !== '/input/ga-measure-plugin.ts' ||
-      JSON.stringify(row.command) !== JSON.stringify(commandForCase(spec.id))
+      row.pluginPath !==
+        (matrix.profile === 'docker'
+          ? '/input/ga-measure-plugin.ts'
+          : nativeLayout(matrix.native.root).plugin) ||
+      JSON.stringify(row.command) !==
+        JSON.stringify(
+          matrix.profile === 'docker'
+            ? commandForCase(spec.id)
+            : [
+                nativeLayout(matrix.native.root).binary,
+                ...commandForCase(spec.id).slice(1),
+              ],
+        )
     )
       throw new Error(`unknown/malformed row ${spec.id}`)
     if (row.outcome === 'error')
@@ -785,12 +1207,74 @@ export function validateMatrix(
     )
   )
     throw new Error('zero-effective requested selector')
+  if (matrix.profile === 'native-job') {
+    const expected = [
+      'boundary-probe',
+      'version',
+      ...matrix.rows.flatMap((row) =>
+        row.outcome === 'excluded' ? [] : [`git:${row.id}`, row.id],
+      ),
+    ]
+    if (
+      JSON.stringify(matrix.native.cleanup.map((entry) => entry.id)) !==
+        JSON.stringify(expected) ||
+      matrix.native.cleanup.some(
+        (entry) => entry.outcome !== 'clean' || entry.signaled !== 0,
+      )
+    )
+      throw new Error(
+        'missing/duplicate/failed native command cleanup evidence',
+      )
+  }
   return matrix
 }
 
 export function normalizedMatrix(matrix: Matrix) {
   return {
     ...matrix,
+    // assertConformance validates both raw matrices before comparing them. Mask
+    // only job-specific roots, network/PID namespaces, cgroup IDs and runner
+    // device/inode here. Raw evidence, executable content/runtime comparisons
+    // and descriptor/path checks before each command are unchanged.
+    ...(matrix.profile === 'native-job'
+      ? {
+          native: {
+            ...matrix.native,
+            root: '<owned-root>',
+            runner: {
+              ...matrix.native.runner,
+              device: '<runner-device>',
+              inode: '<runner-inode>',
+            },
+            executable: {
+              ...matrix.native.executable,
+              path: '<owned-root>/inputs/ga-verified-opencode',
+            },
+            boundary: {
+              ...matrix.native.boundary,
+              namespace: '<network-namespace>',
+              controls: list(matrix.native.boundary.controls, (value) => {
+                const control = record(value)
+                return control.control === 'child_inheritance'
+                  ? { ...control, namespace: '<network-namespace>' }
+                  : control
+              }),
+            },
+            processBoundary: {
+              ...matrix.native.processBoundary,
+              namespace: {
+                self: '<private-pid-namespace>',
+                pid1: '<private-pid-namespace>',
+              },
+              cgroup: {
+                ...matrix.native.processBoundary.cgroup,
+                self: '/system.slice/motor-job-<launch-uuid>.service',
+                pid1: '/system.slice/motor-job-<launch-uuid>.service',
+              },
+            },
+          },
+        }
+      : {}),
     rows: matrix.rows.map((row) => ({
       ...row,
       variables: Object.fromEntries(
@@ -1283,6 +1767,7 @@ export function parseArgs(args: string[]) {
     '--cases',
     '--compare',
     '--inside',
+    '--profile',
   ])
   const values = new Map<string, string>()
   if (args.length % 2) throw new Error('flags require values')
@@ -1308,19 +1793,32 @@ export function parseArgs(args: string[]) {
   const inside = values.get('--inside')
   const image = values.get('--image')
   const tarball = values.get('--tarball')
-  if (inside) {
-    if (
-      inside !== 'native-container' ||
-      image ||
-      tarball ||
-      values.has('--compare')
-    )
-      throw new Error('invalid inside invocation')
-  } else if (!image || !/^sha256:[0-9a-f]{64}$/.test(image) || !tarball)
-    throw new Error(
-      'require local immutable --image sha256:<digest> and --tarball',
-    )
+  const profile = oneOf(values.get('--profile') ?? 'docker', [
+    'docker',
+    'native-job',
+  ] as const)
+  if (profile === 'native-job') {
+    if (inside || image || !tarball)
+      throw new Error('native-job requires --tarball and forbids Docker flags')
+    absoluteRoot(out)
+    absoluteRoot(tarball)
+    if (values.has('--compare')) absoluteRoot(values.get('--compare'))
+  } else {
+    if (inside) {
+      if (
+        inside !== 'native-container' ||
+        image ||
+        tarball ||
+        values.has('--compare')
+      )
+        throw new Error('invalid inside invocation')
+    } else if (!image || !/^sha256:[0-9a-f]{64}$/.test(image) || !tarball)
+      throw new Error(
+        'require local immutable --image sha256:<digest> and --tarball',
+      )
+  }
   return {
+    profile,
     out: resolve(out),
     image,
     tarball: tarball && resolve(tarball),
@@ -1330,52 +1828,1272 @@ export function parseArgs(args: string[]) {
   }
 }
 
-async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
+export function assertNativeJobAdmission(
+  options: ReturnType<typeof parseArgs>,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform,
+  architecture: string = process.arch,
+): void {
+  if (
+    options.profile !== 'native-job' ||
+    env.ANTIGRAVITY_GA_HOST_EXECUTION !== '1'
+  )
+    throw new Error(
+      'native-job requires explicit ANTIGRAVITY_GA_HOST_EXECUTION=1',
+    )
+  if ('NODE_TLS_REJECT_UNAUTHORIZED' in env)
+    throw new Error('TLS bypass variable refuses launch')
+  if (platform !== 'linux' || architecture !== 'x64')
+    throw new Error('native-job requires Linux x64')
+  absoluteRoot(options.out)
+  const parent = dirname(options.out)
+  const stat = lstatSync(parent)
+  if (
+    realpathSync(parent) !== parent ||
+    !stat.isDirectory() ||
+    stat.uid !== process.getuid?.() ||
+    (stat.mode & 0o022) !== 0 ||
+    existsSync(options.out)
+  )
+    throw new Error(
+      'native output requires a fresh root under an owned non-writable canonical parent',
+    )
+  if (
+    !options.tarball ||
+    !lstatSync(options.tarball).isFile() ||
+    realpathSync(options.tarball) !== options.tarball
+  )
+    throw new Error('native tarball requires a canonical regular input file')
+}
+
+export function nativeHostEnv(
+  root: string,
+  variables: Record<string, string>,
+): Record<string, string> {
+  for (const key of Object.keys(variables))
+    oneOf(key, [
+      ...PROXY_VARIABLES,
+      'NO_PROXY',
+      'no_proxy',
+      'GA_MEASURE_LOG',
+      'GA_MOCK_PORT',
+    ])
+  return {
+    ...isolatedEnv(root, variables),
+    PATH: '/usr/bin:/bin',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: join(root, 'git-hooks'),
+    GIT_CONFIG_KEY_1: 'init.templateDir',
+    GIT_CONFIG_VALUE_1: join(root, 'git-template'),
+    GIT_TEMPLATE_DIR: join(root, 'git-template'),
+  }
+}
+
+export async function prepareNativeGit(
+  root: string,
+  scope = qualifyNativeProcessScope(),
+): Promise<NativeCommandResult> {
+  recheckNativeScope(scope)
+  const template = join(root, 'git-template')
+  const hooks = join(root, 'git-hooks')
+  mkdirSync(template, { mode: 0o700 })
+  mkdirSync(hooks, { mode: 0o700 })
+  const binary = '/usr/bin/git'
+  const args = [
+    '-c',
+    `core.hooksPath=${hooks}`,
+    '-c',
+    `init.templateDir=${template}`,
+    '-C',
+    join(root, 'project'),
+    'init',
+    `--template=${template}`,
+  ]
+  const env = nativeHostEnv(root, {})
+  jsonFile(join(root, 'git.command.json'), { binary, args, cwd: root, env })
+  const result = await runNativeCommand(scope, binary, args, {
+    cwd: root,
+    env,
+    timeoutMs: 15_000,
+  })
+  writeFileSync(join(root, 'git.stdout.log'), result.stdout ?? '', {
+    flag: 'wx',
+  })
+  writeFileSync(join(root, 'git.stderr.log'), result.stderr ?? '', {
+    flag: 'wx',
+  })
+  jsonFile(join(root, 'git.exit.json'), result)
+  if (
+    result.spawnError ||
+    result.signal ||
+    result.code !== 0 ||
+    result.timedOut ||
+    result.outputCapExceeded ||
+    result.cleanup.outcome !== 'clean' ||
+    result.cleanup.signaled !== 0 ||
+    !result.stdout.trim()
+  )
+    throw new Error(
+      `native Git preparation failed: ${result.spawnError ?? result.stderr}; cleanup=${result.cleanup.outcome}`,
+    )
+  return result
+}
+
+export function snapshotNativeComparison(
+  options: ReturnType<typeof parseArgs>,
+  pin: Pin,
+) {
+  const path = options.compare
+  if (!path) return undefined
+  if (options.profile !== 'native-job')
+    throw new Error('native comparison requires native-job profile')
+  absoluteRoot(path)
+  const out = absoluteRoot(options.out)
+  if (path === out || path.startsWith(`${out}/`))
+    throw new Error('native comparison input must be outside fresh output tree')
+  const before = lstatSync(path, { bigint: true })
+  if (!before.isFile() || realpathSync(path) !== path)
+    throw new Error(
+      'native comparison requires a canonical regular non-symlink input',
+    )
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  )
+  let bytes: Buffer
+  try {
+    const opened = fstatSync(descriptor, { bigint: true })
+    const current = lstatSync(path, { bigint: true })
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      current.dev !== opened.dev ||
+      current.ino !== opened.ino ||
+      realpathSync(path) !== path
+    )
+      throw new Error('native comparison input changed during open')
+    bytes = readFileSync(descriptor)
+  } finally {
+    closeSync(descriptor)
+  }
+  const retained = validateMatrix(JSON.parse(bytes.toString('utf8')), pin)
+  if (retained.profile !== 'native-job' || !retained.full)
+    throw new Error('native comparison requires a full native-job matrix')
+  return {
+    path,
+    sha256: sha256(bytes),
+    compare(fresh: unknown) {
+      assertConformance(fresh, retained, pin)
+    },
+  }
+}
+
+interface NativeProcessIdentity {
+  pid: number
+  start: string
+  state: string
+  uid: number
+  namespace: string
+  cgroup: string
+  comm: string
+  parent: number
+  pgid: number
+  sid: number
+}
+export interface NativeProcessScope {
+  summary: ReturnType<typeof parseProcessBoundary>
+}
+interface NativeScopeBinding {
+  summary: string
+  controller: NativeProcessIdentity
+  pid1: NativeProcessIdentity
+  directoryIdentity: string
+  executableIdentity: string
+  pressureIdentity: string
+}
+const nativeScopes = new WeakMap<NativeProcessScope, NativeScopeBinding>()
+
+interface NativeCleanupBudget {
+  readonly deadline: number
+}
+function checkCleanupBudget(budget?: NativeCleanupBudget): void {
+  if (budget && performance.now() >= budget.deadline)
+    throw new Error('native cleanup budget exhausted')
+}
+function withinCleanupBudget<T>(
+  budget: NativeCleanupBudget | undefined,
+  operation: () => T,
+): T {
+  checkCleanupBudget(budget)
+  const value = operation()
+  checkCleanupBudget(budget)
+  return value
+}
+
+function processCgroup(
+  pid: number | 'self',
+  budget?: NativeCleanupBudget,
+): string {
+  const text = withinCleanupBudget(budget, () =>
+    readFileSync(`/proc/${pid}/cgroup`, 'utf8'),
+  )
+  const match = /^0::([^\n]+)\n$/.exec(text)
+  if (!match?.[1]) throw new Error('not a unified protected cgroup membership')
+  return match[1]
+}
+class NativeIdentityUnavailable extends Error {
+  constructor(
+    readonly pid: number,
+    error: unknown,
+  ) {
+    super(`UNKNOWN partial identity for thread group ${pid}: ${String(error)}`)
+  }
+}
+function nativeProcess(
+  pid: number,
+  budget?: NativeCleanupBudget,
+): NativeProcessIdentity | undefined {
+  try {
+    const text = withinCleanupBudget(budget, () =>
+      readFileSync(`/proc/${pid}/stat`, 'utf8'),
+    )
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
+    const start = string(fields[19], /^\d+$/)
+    const status = nativeJobFixture().parseKernelStatus(
+      withinCleanupBudget(budget, () =>
+        readFileSync(`/proc/${pid}/status`, 'utf8'),
+      ),
+    )
+    const uids = (status.Uid ?? '').split(/\s+/).map(Number)
+    if (uids.length !== 4 || new Set(uids).size !== 1)
+      throw new Error('process has mixed user identities')
+    return {
+      pid,
+      start,
+      state: string(fields[0], /^[A-Z]$/),
+      uid: nonnegativeInteger(uids[0]),
+      namespace: withinCleanupBudget(budget, () =>
+        readlinkSync(`/proc/${pid}/ns/pid`),
+      ),
+      cgroup: processCgroup(pid, budget),
+      comm: text.slice(text.indexOf('(') + 1, text.lastIndexOf(')')),
+      parent: nonnegativeInteger(Number(fields[1])),
+      pgid: nonnegativeInteger(Number(fields[2])),
+      sid: nonnegativeInteger(Number(fields[3])),
+    }
+  } catch (error) {
+    if (
+      ['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      throw new NativeIdentityUnavailable(pid, error)
+    throw error
+  }
+}
+
+function cgroupThreadMembers(
+  summary: ReturnType<typeof parseProcessBoundary>,
+  budget?: NativeCleanupBudget,
+): number[] {
+  const members = withinCleanupBudget(budget, () =>
+    readFileSync(`/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`, 'utf8'),
+  )
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((value) => {
+      checkCleanupBudget(budget)
+      return positiveInteger(Number(value))
+    })
+  if (new Set(members).size !== members.length)
+    throw new Error('UNKNOWN ambiguous cgroup task inventory')
+  return members
+}
+function observedNativeTasks(
+  summary: ReturnType<typeof parseProcessBoundary>,
+  budget?: NativeCleanupBudget,
+): { tid: number; tgid: number; state: string }[] {
+  let members = cgroupThreadMembers(summary, budget)
+  for (;;) {
+    checkCleanupBudget(budget)
+    const observations: { tid: number; tgid: number; state: string }[] = []
+    const missing: number[] = []
+    for (const tid of members) {
+      checkCleanupBudget(budget)
+      try {
+        // Direct TID entries survive main-thread exit. They only discover groups;
+        // signaling still requires a separately revalidated full TGID identity.
+        const status = nativeJobFixture().parseKernelStatus(
+          withinCleanupBudget(budget, () =>
+            readFileSync(`/proc/${tid}/status`, 'utf8'),
+          ),
+        )
+        if (positiveInteger(Number(status.Pid)) !== tid)
+          throw new Error('UNKNOWN cgroup task identity changed')
+        const tgid = positiveInteger(Number(status.Tgid))
+        const stat = withinCleanupBudget(budget, () =>
+          readFileSync(`/proc/${tid}/stat`, 'utf8'),
+        )
+        const state = string(
+          stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0],
+          /^[A-Z]$/,
+        )
+        observations.push({ tid, tgid, state })
+      } catch (error) {
+        if (
+          ['ENOENT', 'ESRCH'].includes(
+            (error as NodeJS.ErrnoException).code ?? '',
+          )
+        ) {
+          missing.push(tid)
+          continue
+        }
+        throw new Error(
+          `UNKNOWN extant or unqualifiable cgroup task ${tid}: ${String(error)}`,
+        )
+      }
+    }
+    const next = cgroupThreadMembers(summary, budget)
+    if (missing.some((tid) => next.includes(tid)))
+      throw new Error('UNKNOWN listed cgroup task has unavailable identity')
+    if (
+      next.length === members.length &&
+      next.every((tid) => members.includes(tid))
+    ) {
+      checkCleanupBudget(budget)
+      return observations
+    }
+    // Every TID in cgroup.threads must have been inspected before absence is safe.
+    // Inspect replacements within the existing cleanup budget. Without a budget,
+    // a changed task list refuses admission rather than starting an unbounded scan.
+    if (!budget)
+      throw new Error('UNKNOWN cgroup task inventory changed during admission')
+    members = next
+  }
+}
+export function threadGroupHasLiveTasks(
+  pid: number,
+  summary: ReturnType<typeof parseProcessBoundary>,
+  budget?: NativeCleanupBudget,
+): boolean {
+  return observedNativeTasks(summary, budget).some(
+    (task) => task.tgid === pid && !['Z', 'X'].includes(task.state),
+  )
+}
+function resolvedNativeProcess(
+  pid: number,
+  summary: ReturnType<typeof parseProcessBoundary>,
+  budget?: NativeCleanupBudget,
+): NativeProcessIdentity | undefined {
+  let identity: NativeProcessIdentity | undefined
+  let unavailable: unknown
+  try {
+    identity = nativeProcess(pid, budget)
+  } catch (error) {
+    if (!(error instanceof NativeIdentityUnavailable)) throw error
+    unavailable = error
+  }
+  if (
+    identity &&
+    (identity.namespace !== summary.namespace.self ||
+      identity.cgroup !== summary.cgroup.self)
+  )
+    throw new Error('UNKNOWN foreign thread group identity')
+  if (identity && !['Z', 'X'].includes(identity.state)) return identity
+  if (threadGroupHasLiveTasks(pid, summary, budget))
+    throw new Error(
+      `UNKNOWN extant thread group ${pid} has a dead or unqualifiable leader${unavailable ? `: ${String(unavailable)}` : ''}`,
+    )
+  try {
+    const stat = withinCleanupBudget(budget, () =>
+      readFileSync(`/proc/${pid}/stat`, 'utf8'),
+    )
+    const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0]
+    if (!['Z', 'X'].includes(state ?? ''))
+      throw new Error(
+        `UNKNOWN extant thread group ${pid} has incomplete identity`,
+      )
+  } catch (error) {
+    if (
+      !['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      throw error
+  }
+  return undefined
+}
+function observedMetadata(
+  path: string,
+  kind: 'file' | 'directory',
+  budget?: NativeCleanupBudget,
+) {
+  const stat = withinCleanupBudget(budget, () => lstatSync(path))
+  if (kind === 'file' ? !stat.isFile() : !stat.isDirectory())
+    throw new Error(`unprotected ${kind}: ${path}`)
+  let jobWritable = true
+  try {
+    withinCleanupBudget(budget, () => accessSync(path, constants.W_OK))
+  } catch (error) {
+    if (
+      !['EACCES', 'EROFS'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      throw error
+    jobWritable = false
+  }
+  return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777, jobWritable }
+}
+function observedProtection(
+  path: string,
+  kind: 'file' | 'directory',
+  budget?: NativeCleanupBudget,
+) {
+  try {
+    return protection(observedMetadata(path, kind, budget))
+  } catch (error) {
+    throw new Error(`unprotected ${kind} ${path}: ${String(error)}`)
+  }
+}
+function cgroupMount(path: string, budget?: NativeCleanupBudget) {
+  const lines = withinCleanupBudget(budget, () =>
+    readFileSync('/proc/self/mountinfo', 'utf8'),
+  )
+    .trim()
+    .split('\n')
+  const decode = (value: unknown) =>
+    string(value).replace(/\\([0-7]{3})/g, (_, octal: string) =>
+      String.fromCharCode(Number.parseInt(octal, 8)),
+    )
+  // Read-only access to /sys/fs/cgroup does not prove that a separately mounted
+  // pressure file is read-only. Use the most specific mount containing the file.
+  const applicable = lines
+    .map((line) => line.split(' - '))
+    .filter((parts) => {
+      checkCleanupBudget(budget)
+      const point = decode(parts[0]?.split(' ')[4])
+      return point === '/' || path === point || path.startsWith(`${point}/`)
+    })
+  const longest = Math.max(
+    ...applicable.map((parts) => {
+      checkCleanupBudget(budget)
+      return decode(parts[0]?.split(' ')[4]).length
+    }),
+  )
+  const matches = applicable.filter((parts) => {
+    checkCleanupBudget(budget)
+    return decode(parts[0]?.split(' ')[4]).length === longest
+  })
+  const entry = matches[0]
+  if (matches.length !== 1 || !entry) throw new Error('ambiguous cgroup mount')
+  const left = entry[0]?.split(' ') ?? []
+  const right = entry[1]?.split(' ') ?? []
+  return {
+    point: decode(left[4]),
+    root: decode(left[3]),
+    type: right[0],
+    source: right[1],
+    options: left[5]?.split(','),
+    superOptions: right[2]?.split(','),
+  }
+}
+function observedProcessBoundary(budget?: NativeCleanupBudget) {
+  checkCleanupBudget(budget)
+  if (
+    process.platform !== 'linux' ||
+    process.arch !== 'x64' ||
+    process.getuid?.() !== 999 ||
+    process.geteuid?.() !== 999
+  )
+    throw new Error(
+      'native cleanup requires the unprivileged Linux x64 MOTOR job',
+    )
+  const controller = nativeProcess(process.pid, budget)
+  const pid1 = nativeProcess(1, budget)
+  if (
+    !controller ||
+    !pid1 ||
+    pid1.uid !== controller.uid ||
+    pid1.uid !== 999 ||
+    pid1.comm !== 'bash' ||
+    controller.pid === 1
+  )
+    throw new Error(
+      `missing protected PID1/controller identities: ${JSON.stringify({ controller, pid1, currentPid: process.pid })}`,
+    )
+  if (
+    !/^\/system\.slice\/motor-job-[0-9a-f-]{36}\.service$/.test(
+      controller.cgroup,
+    )
+  )
+    throw new Error('not a MOTOR job cgroup')
+  const directory = `/sys/fs/cgroup${controller.cgroup}`
+  if (withinCleanupBudget(budget, () => realpathSync(directory)) !== directory)
+    throw new Error('aliased cgroup directory')
+  const inventory = withinCleanupBudget(budget, () =>
+    readdirSync(directory),
+  ).sort()
+  const controls = Object.fromEntries(
+    inventory
+      .filter((name) => name !== 'memory.pressure')
+      .map((name) => [
+        name,
+        observedProtection(join(directory, name), 'file', budget),
+      ]),
+  )
+  const pressurePath = join(directory, 'memory.pressure')
+  if (
+    withinCleanupBudget(budget, () => realpathSync(pressurePath)) !==
+    pressurePath
+  )
+    throw new Error('aliased PSI observation path')
+  const psi = pressureObservation({
+    name: 'memory.pressure',
+    fileType: 'regular',
+    ...observedMetadata(pressurePath, 'file', budget),
+    mount: cgroupMount(pressurePath, budget),
+  })
+  const executable = withinCleanupBudget(budget, () =>
+    readlinkSync('/proc/1/exe'),
+  )
+  if (executable !== '/bin/bash')
+    throw new Error('PID1 is not the protected job wrapper')
+  const canonicalExecutable = withinCleanupBudget(budget, () =>
+    realpathSync(executable),
+  )
+  const executableStat = withinCleanupBudget(budget, () =>
+    statSync('/proc/1/exe', { bigint: true }),
+  )
+  const diskStat = withinCleanupBudget(budget, () =>
+    lstatSync(canonicalExecutable, { bigint: true }),
+  )
+  if (
+    executableStat.dev !== diskStat.dev ||
+    executableStat.ino !== diskStat.ino
+  )
+    throw new Error('PID1 executable differs from protected file')
+  const kernel = nativeJobFixture().parseKernelStatus(
+    withinCleanupBudget(budget, () =>
+      readFileSync('/proc/self/status', 'utf8'),
+    ),
+  )
+  const pid1Kernel = nativeJobFixture().parseKernelStatus(
+    withinCleanupBudget(budget, () => readFileSync('/proc/1/status', 'utf8')),
+  )
+  const kernelFields = (status: Record<string, string>) =>
+    Object.fromEntries(
+      [
+        'NoNewPrivs',
+        'Seccomp',
+        'CapInh',
+        'CapPrm',
+        'CapEff',
+        'CapBnd',
+        'CapAmb',
+      ].map((key) => [key, status[key]]),
+    )
+  const summary = parseProcessBoundary({
+    policy: MOTOR_PROCESS_POLICY,
+    namespace: { self: controller.namespace, pid1: pid1.namespace },
+    cgroup: {
+      self: controller.cgroup,
+      pid1: pid1.cgroup,
+      directory: observedProtection(directory, 'directory', budget),
+      parents: Object.fromEntries(
+        ['/sys/fs/cgroup', '/sys/fs/cgroup/system.slice'].map((path) => [
+          path,
+          observedProtection(path, 'directory', budget),
+        ]),
+      ),
+      controls,
+      pressureObservation: psi,
+    },
+    pid1: {
+      uid: pid1.uid,
+      kernel: kernelFields(pid1Kernel),
+      comm: pid1.comm,
+      argvPrefix: withinCleanupBudget(budget, () =>
+        readFileSync('/proc/1/cmdline'),
+      )
+        .toString()
+        .split('\0')
+        .slice(0, 2),
+      executable,
+      canonicalExecutable,
+      executableSha256: withinCleanupBudget(budget, () =>
+        sha256(readFileSync('/proc/1/exe')),
+      ),
+      digestProvenance: 'observed, not an approved artifact pin',
+      protection: observedProtection(canonicalExecutable, 'file', budget),
+      parents: Object.fromEntries(
+        (canonicalExecutable === '/bin/bash'
+          ? ['/', '/bin']
+          : ['/', '/usr', '/usr/bin']
+        ).map((path) => [path, observedProtection(path, 'directory', budget)]),
+      ),
+    },
+    controller: { uid: controller.uid, kernel: kernelFields(kernel) },
+  })
+  checkCleanupBudget(budget)
+  const stat = withinCleanupBudget(budget, () =>
+    lstatSync(directory, { bigint: true }),
+  )
+  const pressureStat = withinCleanupBudget(budget, () =>
+    lstatSync(pressurePath, { bigint: true }),
+  )
+  return {
+    summary,
+    controller,
+    pid1,
+    directoryIdentity: `${stat.dev}:${stat.ino}`,
+    executableIdentity: `${executableStat.dev}:${executableStat.ino}`,
+    pressureIdentity: `${pressureStat.dev}:${pressureStat.ino}`,
+  }
+}
+export function scopedProcesses(
+  summary: ReturnType<typeof parseProcessBoundary>,
+  binding = false,
+  budget?: NativeCleanupBudget,
+): NativeProcessIdentity[] {
+  const members = withinCleanupBudget(budget, () =>
+    readFileSync(`/sys/fs/cgroup${summary.cgroup.self}/cgroup.procs`, 'utf8'),
+  )
+    .trim()
+    .split('\n')
+    .map((value) => {
+      checkCleanupBudget(budget)
+      return positiveInteger(Number(value))
+    })
+  if (new Set(members).size !== members.length)
+    throw new Error('ambiguous cgroup membership')
+  const visible = withinCleanupBudget(budget, () => readdirSync('/proc'))
+    .filter((value) => {
+      checkCleanupBudget(budget)
+      return /^\d+$/.test(value)
+    })
+    .map(Number)
+  const taskGroups = observedNativeTasks(summary, budget).map(
+    (task) => task.tgid,
+  )
+  const identities = new Map<number, NativeProcessIdentity>()
+  for (const pid of new Set([...members, ...visible, ...taskGroups])) {
+    checkCleanupBudget(budget)
+    const identity = resolvedNativeProcess(pid, summary, budget)
+    if (!identity) continue
+    if (
+      identity.namespace !== summary.namespace.self ||
+      identity.cgroup !== summary.cgroup.self
+    )
+      throw new Error('foreign process in qualified namespace/cgroup')
+    // Initial inventories must agree. During reaping, births/exits can occur
+    // between reads, so every extant member's own kernel membership is checked.
+    if (
+      binding &&
+      (!visible.includes(pid) ||
+        (!members.includes(pid) &&
+          identity.state !== 'Z' &&
+          identity.state !== 'X'))
+    )
+      throw new Error(
+        'visible process and protected cgroup membership disagree',
+      )
+    identities.set(pid, identity)
+  }
+  return [...identities.values()]
+}
+export function qualifyNativeProcessScope(): NativeProcessScope {
+  const observed = observedProcessBoundary()
+  const scope = { summary: observed.summary }
+  scopedProcesses(scope.summary, true)
+  nativeScopes.set(scope, {
+    summary: JSON.stringify(observed.summary),
+    controller: observed.controller,
+    pid1: observed.pid1,
+    directoryIdentity: observed.directoryIdentity,
+    executableIdentity: observed.executableIdentity,
+    pressureIdentity: observed.pressureIdentity,
+  })
+  return scope
+}
+function recheckNativeScope(
+  scope: NativeProcessScope,
+  budget?: NativeCleanupBudget,
+): NativeScopeBinding {
+  checkCleanupBudget(budget)
+  const binding = nativeScopes.get(scope)
+  if (!binding || JSON.stringify(scope.summary) !== binding.summary)
+    throw new Error('unqualified native process scope')
+  const actual = observedProcessBoundary(budget)
+  if (
+    JSON.stringify(actual.summary) !== binding.summary ||
+    actual.controller.pid !== binding.controller.pid ||
+    actual.controller.start !== binding.controller.start ||
+    actual.pid1.start !== binding.pid1.start ||
+    actual.directoryIdentity !== binding.directoryIdentity ||
+    actual.executableIdentity !== binding.executableIdentity ||
+    actual.pressureIdentity !== binding.pressureIdentity
+  )
+    throw new Error('qualified job boundary changed')
+  checkCleanupBudget(budget)
+  return binding
+}
+export interface NativeCommandResult {
+  code: number | null
+  signal: string | null
+  stdout: string
+  stderr: string
+  timedOut: boolean
+  outputCapExceeded: boolean
+  spawnError: string | null
+  cleanup: {
+    outcome: 'clean' | 'failed'
+    signaled: number
+    signals: { identity: NativeProcessIdentity; signal: 'SIGKILL' }[]
+    preexisting: NativeProcessIdentity[]
+    survivors: NativeProcessIdentity[] | null
+    failures: string[]
+  }
+}
+export async function runNativeCommand(
+  scope: NativeProcessScope,
+  binary: string,
+  args: string[],
+  options: {
+    cwd: string
+    env: Record<string, string>
+    timeoutMs: number
+    outputCapBytes?: number
+  },
+): Promise<NativeCommandResult> {
+  recheckNativeScope(scope)
+  absoluteRoot(binary)
+  if (
+    !Number.isInteger(options.timeoutMs) ||
+    options.timeoutMs < 1 ||
+    options.timeoutMs > 120_000
+  )
+    throw new Error('invalid native command deadline')
+  const cap = options.outputCapBytes ?? 8 * 1024 * 1024
+  if (!Number.isInteger(cap) || cap < 1 || cap > 8 * 1024 * 1024)
+    throw new Error('invalid native command output cap')
+  const preexisting = scopedProcesses(scope.summary, true)
+  const protectedBirths = new Map(
+    preexisting.map((identity) => [identity.pid, identity.start]),
+  )
+  const birthFloor = preexisting.reduce(
+    (floor, identity) =>
+      BigInt(identity.start) > floor ? BigInt(identity.start) : floor,
+    0n,
+  )
+  const signals: NativeCommandResult['cleanup']['signals'] = []
+  const failures: string[] = []
+  const sent = new Set<string>()
+  let stdout = ''
+  let stderr = ''
+  let bytes = 0
+  let timedOut = false
+  let outputCapExceeded = false
+  let spawnError: string | null = null
+  let code: number | null = null
+  let signal: string | null = null
+  let child: ChildProcess | undefined
+  let closed = false
+  let completing = false
+  const hardDeadline = performance.now() + options.timeoutMs + 3000
+  return new Promise((resolveResult) => {
+    const complete = async () => {
+      if (completing) return
+      completing = true
+      clearTimeout(timer)
+      let survivors: NativeProcessIdentity[] | null = null
+      const cleanupDeadline = Math.min(hardDeadline, performance.now() + 3000)
+      const budget: NativeCleanupBudget = { deadline: cleanupDeadline }
+      try {
+        while (performance.now() < cleanupDeadline) {
+          recheckNativeScope(scope, budget)
+          // Combine cgroup.procs, /proc leaders and cgroup.threads observations;
+          // parent/session changes do not exclude a group. Unreadable or changing
+          // task lists make cleanup fail with unknown survivors, never known absence.
+          survivors = scopedProcesses(scope.summary, false, budget).filter(
+            (identity) =>
+              identity.pid !== 1 &&
+              identity.pid !== process.pid &&
+              protectedBirths.get(identity.pid) !== identity.start &&
+              !['Z', 'X'].includes(identity.state),
+          )
+          if (!survivors.length && closed) break
+          for (const expected of survivors) {
+            checkCleanupBudget(budget)
+            if (expected.uid !== 999 || BigInt(expected.start) < birthFloor)
+              throw new Error('new process has unqualified ownership/birth')
+            recheckNativeScope(scope, budget)
+            const current = resolvedNativeProcess(
+              expected.pid,
+              scope.summary,
+              budget,
+            )
+            if (!current || ['Z', 'X'].includes(current.state)) continue
+            if (
+              current.start !== expected.start ||
+              current.namespace !== scope.summary.namespace.self ||
+              current.cgroup !== scope.summary.cgroup.self ||
+              current.uid !== 999 ||
+              protectedBirths.get(current.pid) === current.start ||
+              current.pid === 1 ||
+              current.pid === process.pid
+            ) {
+              failures.push(
+                `identity changed before signal: ${expected.pid}:${expected.start}`,
+              )
+              continue
+            }
+            const key = `${current.pid}:${current.start}`
+            if (sent.has(key)) continue
+            // Revalidation is immediately before kill, but is not atomic with it.
+            // Keep the namespace/cgroup exclusive to this job. Processes captured
+            // before this command started are not its children to kill: exclude
+            // their PID/start-time pairs even if a PID is reused between reads.
+            try {
+              checkCleanupBudget(budget)
+              process.kill(current.pid, 'SIGKILL')
+              signals.push({ identity: current, signal: 'SIGKILL' })
+              sent.add(key)
+              checkCleanupBudget(budget)
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+            }
+          }
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+        checkCleanupBudget(budget)
+        recheckNativeScope(scope, budget)
+        survivors = scopedProcesses(scope.summary, false, budget).filter(
+          (identity) =>
+            identity.pid !== 1 &&
+            identity.pid !== process.pid &&
+            protectedBirths.get(identity.pid) !== identity.start &&
+            !['Z', 'X'].includes(identity.state),
+        )
+        if (survivors.length || !closed)
+          failures.push('native command cleanup deadline exceeded')
+      } catch (error) {
+        survivors = null
+        failures.push(String(error))
+      } finally {
+        child?.stdout?.destroy()
+        child?.stderr?.destroy()
+        if (!closed) child?.unref()
+        resolveResult({
+          code,
+          signal,
+          stdout,
+          stderr,
+          timedOut,
+          outputCapExceeded,
+          spawnError,
+          cleanup: {
+            outcome:
+              failures.length || survivors === null || survivors.length
+                ? 'failed'
+                : 'clean',
+            signaled: signals.length,
+            signals,
+            preexisting,
+            survivors,
+            failures,
+          },
+        })
+      }
+    }
+    const retain = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
+      const value = chunk.subarray(0, Math.max(0, cap - bytes)).toString()
+      if (stream === 'stdout') stdout += value
+      else stderr += value
+      bytes += chunk.length
+      if (bytes > cap && !outputCapExceeded) {
+        outputCapExceeded = true
+        void complete()
+      }
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      void complete()
+    }, options.timeoutMs)
+    try {
+      recheckNativeScope(scope)
+      child = spawn(binary, args, {
+        cwd: options.cwd,
+        env: options.env,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      child.stdout?.on('data', (chunk: Buffer) => retain(chunk, 'stdout'))
+      child.stderr?.on('data', (chunk: Buffer) => retain(chunk, 'stderr'))
+      child.once('exit', (exitCode, exitSignal) => {
+        code = exitCode
+        signal = exitSignal
+        void complete()
+      })
+      child.once('error', (error) => {
+        spawnError = String(error)
+        void complete()
+      })
+      child.once('close', (exitCode, exitSignal) => {
+        code = exitCode
+        signal = exitSignal
+        closed = true
+        void complete()
+      })
+    } catch (error) {
+      spawnError = String(error)
+      closed = true
+      void complete()
+    }
+  })
+}
+
+type NativePrepared = {
+  scope: NativeProcessScope
+  native: Omit<ReturnType<typeof assertNativeJob>, 'runtime'> & {
+    runtime: ReturnType<typeof runtime> | null
+  }
+  invoke: typeof invoke
+}
+
+export function observeNativeRunner() {
+  const path = realpathSync(process.execPath)
+  const descriptor = openSync('/proc/self/exe', constants.O_RDONLY)
+  try {
+    const running = fstatSync(descriptor, { bigint: true })
+    const named = statSync(path, { bigint: true })
+    if (
+      !running.isFile() ||
+      running.dev !== named.dev ||
+      running.ino !== named.ino
+    )
+      throw new Error('native runner running executable inode mismatch')
+    // The digest observes the executable actually bound by the kernel, not a
+    // replaceable pathname. It is still an observation, not a new artifact pin.
+    const bytes = readFileSync(descriptor)
+    const current = statSync('/proc/self/exe', { bigint: true })
+    const after = statSync(path, { bigint: true })
+    if (
+      running.dev !== current.dev ||
+      running.ino !== current.ino ||
+      running.dev !== after.dev ||
+      running.ino !== after.ino
+    )
+      throw new Error('native runner running executable inode mismatch')
+    if (
+      bytes.subarray(0, 6).toString('hex') !== '7f454c460201' ||
+      bytes.readUInt16LE(18) !== 62
+    )
+      throw new Error('native runner is not ELF x86-64')
+    const reported = runtime({
+      name: 'Bun',
+      version: Bun.version,
+      revision: Bun.revision,
+    })
+    return {
+      path,
+      sha256: sha256(bytes),
+      bytes: bytes.length,
+      elfMachine: bytes.readUInt16LE(18),
+      version: reported.version,
+      revision: reported.revision,
+      device: running.dev.toString(),
+      inode: running.ino.toString(),
+    }
+  } finally {
+    closeSync(descriptor)
+  }
+}
+export function assertNativeRunnerUnchanged(
+  binding: ReturnType<typeof observeNativeRunner>,
+): void {
+  if (JSON.stringify(observeNativeRunner()) !== JSON.stringify(binding))
+    throw new Error('native running executable changed before dispatch')
+}
+
+async function nativeJobRun(
+  options: ReturnType<typeof parseArgs>,
+): Promise<void> {
+  assertNativeJobAdmission(options)
+  const pin = PinSchema.parse(
+    JSON.parse(readFileSync(join(HERE, 'ga-binary-pin.json'), 'utf8')),
+  )
+  const comparison = snapshotNativeComparison(options, pin)
+  const processScope = qualifyNativeProcessScope()
+  // The offline fixture must match the version, SRI and platform in
+  // ga-binary-pin.json before any host executable can run.
+  const manifest = record(
+    JSON.parse(readFileSync(join(HERE, FIXTURE, 'package.json'), 'utf8')),
+  )
+  const ts: typeof import('typescript') = require('typescript')
+  const lockFile = join(HERE, FIXTURE, 'bun.lock')
+  const parsed = ts.parseConfigFileTextToJson(
+    lockFile,
+    readFileSync(lockFile, 'utf8'),
+  )
+  const lock = record(parsed.config)
+  const cli = record(lock.packages)[pin.package]
+  if (
+    parsed.error ||
+    manifest.private !== true ||
+    manifest.scripts ||
+    manifest.workspaces ||
+    record(manifest.dependencies)[pin.package] !== pin.version ||
+    JSON.stringify(manifest.dependencies) !==
+      JSON.stringify(
+        record(record(record(lock.workspaces)['']).dependencies),
+      ) ||
+    !Array.isArray(cli) ||
+    cli[0] !== `${pin.package}@${pin.version}` ||
+    cli[3] !== pin.sri ||
+    record(cli[2]).os !== 'linux' ||
+    record(cli[2]).cpu !== 'x64'
+  )
+    throw new Error('native fixture differs from approved platform pin')
+  if (!options.tarball) throw new Error('missing native tarball')
+  const archive = readFileSync(options.tarball)
+  const binaryBytes = verifiedBinary(archive, pin)
+  const runner = observeNativeRunner()
+  const { out } = options
+  mkdirSync(out, { mode: 0o700 })
+  jsonFile(join(out, 'process-boundary.json'), {
+    summary: processScope.summary,
+    binding: nativeScopes.get(processScope),
+    preexisting: scopedProcesses(processScope.summary, true),
+  })
+  const inputs = join(out, 'inputs')
+  mkdirSync(inputs, { mode: 0o700 })
+  const sources = sourceDigests('native-job')
+  for (const [name, hash] of Object.entries(sources)) {
+    // Preserve support modules' relative paths so their copied imports resolve.
+    const target = join(inputs, 'sources', name)
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 })
+    const bytes = readFileSync(join(HERE, name))
+    if (sha256(bytes) !== hash) throw new Error(`native input changed: ${name}`)
+    writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 })
+  }
+  const layout = nativeLayout(out)
+  writeFileSync(layout.binary, binaryBytes, { flag: 'wx', mode: 0o700 })
+  writeFileSync(
+    layout.plugin,
+    readFileSync(join(HERE, 'ga-measure-plugin.ts')),
+    { flag: 'wx', mode: 0o600 },
+  )
+  if (sha256(readFileSync(layout.plugin)) !== sources['ga-measure-plugin.ts'])
+    throw new Error('native plugin copy differs')
+  const contractPath = join(inputs, 'ga-loopback-request-contract.ts')
+  writeFileSync(
+    contractPath,
+    readFileSync(join(HERE, 'ga-loopback-request-contract.ts')),
+    { flag: 'wx', mode: 0o600 },
+  )
+  const scratch = join(out, 'boundary')
+  mkdirSync(scratch, { mode: 0o700 })
+  const evidence = join(out, 'native-boundary.json')
+  const probeCleanup: ReturnType<typeof assertNativeJob>['cleanup'] = []
+  recheckNativeScope(processScope)
+  await nativeJobFixture().measureNativeJob(
+    REPO,
+    scratch,
+    nativeHostEnv(scratch, {}),
+    evidence,
+    async (binary, args, commandOptions) => {
+      const result = await runNativeCommand(
+        processScope,
+        binary,
+        args,
+        commandOptions,
+      )
+      probeCleanup.push({
+        id: 'boundary-probe',
+        outcome: result.cleanup.outcome,
+        signaled: result.cleanup.signaled,
+      })
+      return result
+    },
+  )
+  const proof = record(JSON.parse(readFileSync(evidence, 'utf8')))
+  const result = record(proof.result)
+  if (proof.probeSha256 !== sources[`${FIXTURE}/native-boundary.py`])
+    throw new Error('native probe source changed')
+  const identity = assertNativeJob({
+    root: out,
+    executable: {
+      path: layout.binary,
+      sha256: sha256(binaryBytes),
+      bytes: binaryBytes.length,
+      elfMachine: binaryBytes.readUInt16LE(18),
+      reportedVersion: pin.reportedVersion,
+    },
+    runtime: pin.runtime,
+    runner,
+    boundary: JSON.parse(string(result.stdout)),
+    processBoundary: processScope.summary,
+    cleanup: probeCleanup,
+  })
+  // ga-measure-plugin.ts reports Bun's version and revision in its 'setup' event.
+  // Until that event is observed, partial runs report an unknown runtime, not the pin.
+  const native: NativePrepared['native'] = { ...identity, runtime: null }
+  const nativeInvoke: typeof invoke = async (
+    binary,
+    args,
+    root,
+    env,
+    output,
+    timeoutMs,
+  ) => {
+    nativeJobFixture().assertMeasuredNativeJob()
+    assertNativeRunnerUnchanged(runner)
+    const bytes = readFileSync(binary)
+    if (
+      binary !== layout.binary ||
+      sha256(bytes) !== pin.binarySha256 ||
+      bytes.length !== pin.binaryBytes ||
+      bytes.readUInt16LE(18) !== pin.elfMachine ||
+      sha256(readFileSync(layout.plugin)) !== sources['ga-measure-plugin.ts'] ||
+      sha256(readFileSync(contractPath)) !==
+        sources['ga-loopback-request-contract.ts'] ||
+      JSON.stringify(sourceDigests('native-job')) !== JSON.stringify(sources)
+    )
+      throw new Error('native executable/plugin changed before invocation')
+    const id =
+      args.length === 1 && args[0] === '--version'
+        ? 'version'
+        : inventory().find(
+            (spec) =>
+              JSON.stringify(commandForCase(spec.id).slice(1)) ===
+              JSON.stringify(args),
+          )?.id
+    if (!id) throw new Error('unmatched native command cleanup record')
+    jsonFile(join(output, 'command.json'), {
+      binary,
+      args,
+      cwd: root,
+      env,
+      timeoutMs,
+    })
+    const result = await runNativeCommand(processScope, binary, args, {
+      cwd: root,
+      env,
+      timeoutMs,
+    })
+    writeFileSync(join(output, 'stdout.jsonl'), result.stdout, { flag: 'wx' })
+    writeFileSync(join(output, 'stderr.log'), result.stderr, { flag: 'wx' })
+    jsonFile(join(output, 'exit.json'), result)
+    native.cleanup.push({
+      id,
+      outcome: result.cleanup.outcome,
+      signaled: result.cleanup.signaled,
+    })
+    // A CLI leaving a live descendant is still an infrastructure failure,
+    // even after job-local cleanup reaps that descendant.
+    if (
+      result.spawnError ||
+      result.signal ||
+      result.code !== 0 ||
+      result.timedOut ||
+      result.outputCapExceeded ||
+      result.cleanup.outcome !== 'clean' ||
+      result.cleanup.signaled !== 0
+    )
+      throw new Error(`native command failed: ${JSON.stringify(result)}`)
+    return result.stdout
+  }
+  await insideRun(options, {
+    native,
+    invoke: nativeInvoke,
+    scope: processScope,
+  })
+  for (const [name, hash] of Object.entries(sources))
+    if (
+      sha256(readFileSync(join(inputs, 'sources', name))) !== hash ||
+      sha256(readFileSync(join(HERE, name))) !== hash
+    )
+      throw new Error(`native source changed: ${name}`)
+  const matrix = validateMatrix(
+    JSON.parse(readFileSync(join(out, 'matrix.json'), 'utf8')),
+    pin,
+    selectCases(options.cases),
+    options.cases,
+  )
+  jsonFile(join(out, 'provenance.json'), {
+    profile: 'native-job',
+    command: [process.execPath, ...process.argv.slice(1)],
+    sources,
+    native: matrix.native,
+    tarball: { path: options.tarball, sha256: sha256(archive), sri: pin.sri },
+    selection: options.cases ?? 'full',
+    comparison: comparison
+      ? { path: comparison.path, sha256: comparison.sha256 }
+      : null,
+  })
+  comparison?.compare(matrix)
+}
+
+async function insideRun(
+  options: ReturnType<typeof parseArgs>,
+  job?: NativePrepared,
+): Promise<void> {
   const out = options.out
   const selected = selectCases(options.cases)
   const pin = PinSchema.parse(
     JSON.parse(readFileSync(join(HERE, 'ga-binary-pin.json'), 'utf8')),
   )
-  if (
-    process.platform !== 'linux' ||
-    process.arch !== 'x64' ||
-    !existsSync('/.dockerenv')
-  )
-    throw new Error('not native x86_64 Docker container')
-  const outside = object(
-    JSON.parse(readFileSync(join(HERE, 'outside.json'), 'utf8')),
-    [
-      'hostUname',
-      'daemonArchitecture',
-      'image',
-      'command',
-      'rawHostUname',
-      'rawDaemonArchitecture',
-      'imageInspection',
-    ],
-  )
-  const native = assertNative({
-    hostUname: outside.hostUname,
-    daemonArchitecture: outside.daemonArchitecture,
-    image: outside.image,
-    containerUname: checkedCommand('uname', ['-m']),
-    elfMachine: pin.elfMachine,
-    runtime: pin.runtime,
-    network: 'none',
-    interfaces: readdirSync('/sys/class/net').sort(),
-  })
-  const binaryBytes = verifiedBinary(readFileSync(join(HERE, 'host.tgz')), pin)
-  const binary = '/tmp/ga-verified-opencode'
-  writeFileSync(binary, binaryBytes, { flag: 'wx' })
-  chmodSync(binary, 0o700)
+  let native: ReturnType<typeof assertNative> | undefined
+  let binary: string
+  const run = job?.invoke ?? invoke
+  if (job) {
+    binary = job.native.executable.path
+  } else {
+    if (
+      process.platform !== 'linux' ||
+      process.arch !== 'x64' ||
+      !existsSync('/.dockerenv')
+    )
+      throw new Error('not native x86_64 Docker container')
+    const outside = object(
+      JSON.parse(readFileSync(join(HERE, 'outside.json'), 'utf8')),
+      [
+        'hostUname',
+        'daemonArchitecture',
+        'image',
+        'command',
+        'rawHostUname',
+        'rawDaemonArchitecture',
+        'imageInspection',
+      ],
+    )
+    native = assertNative({
+      hostUname: outside.hostUname,
+      daemonArchitecture: outside.daemonArchitecture,
+      image: outside.image,
+      containerUname: checkedCommand('uname', ['-m']),
+      elfMachine: pin.elfMachine,
+      runtime: pin.runtime,
+      network: 'none',
+      interfaces: readdirSync('/sys/class/net').sort(),
+    })
+    const binaryBytes = verifiedBinary(
+      readFileSync(join(HERE, 'host.tgz')),
+      pin,
+    )
+    binary = '/tmp/ga-verified-opencode'
+    writeFileSync(binary, binaryBytes, { flag: 'wx' })
+    chmodSync(binary, 0o700)
+  }
   const versionRoot = join(out, 'version')
   mkdirSync(versionRoot)
-  const versionEnv = isolatedEnv(versionRoot, {})
+  const envForRow = job ? nativeHostEnv : isolatedEnv
+  const versionEnv = envForRow(versionRoot, {})
   for (const path of Object.values(versionEnv).filter((value) =>
     value.startsWith(versionRoot),
   ))
     mkdirSync(path.endsWith('.db') ? dirname(path) : path, { recursive: true })
-  const reported = await invoke(
+  const reported = await run(
     binary,
     ['--version'],
     versionRoot,
@@ -1385,14 +3103,20 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
   )
   if (reported.trim() !== pin.reportedVersion)
     throw new Error('reported host version mismatch')
-  const sources = sourceDigests()
-  const matrix: Matrix = {
+  if (job)
+    job.native.executable.reportedVersion = oneOf(reported.trim(), [
+      pin.reportedVersion,
+    ])
+  const sources = sourceDigests(job ? 'native-job' : 'docker')
+  const matrix = {
     schema: 1,
     full: options.cases === undefined,
     binarySha256: pin.binarySha256,
-    native,
+    ...(job
+      ? { profile: 'native-job' as const, native: job.native }
+      : { profile: 'docker' as const, native: assertNative(native) }),
     sources,
-    rows: [],
+    rows: [] as ReturnType<typeof parseRow>[],
   }
   jsonFile(join(out, 'inventory.json'), {
     all: inventory(),
@@ -1404,9 +3128,12 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
     const root = join(out, `${String(index + 1).padStart(3, '0')}-${spec.id}`)
     mkdirSync(root)
     const command = commandForCase(spec.id)
+    if (job) command[0] = binary
     const nonce = /GA-NONCE-[0-9a-f-]{36}/.exec(command.at(-1) ?? '')?.[0]
     if (!nonce) throw new Error('missing case nonce')
-    const pluginPath = join(HERE, 'ga-measure-plugin.ts')
+    const pluginPath = job
+      ? nativeLayout(out).plugin
+      : join(HERE, 'ga-measure-plugin.ts')
     const variables = materialize(spec.env)
     const row: ReturnType<typeof parseRow> = {
       id: spec.id,
@@ -1437,7 +3164,7 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
         continue
       }
     }
-    const env = isolatedEnv(root, {
+    const env = envForRow(root, {
       ...variables,
       GA_MEASURE_LOG: join(root, 'plugin.jsonl'),
       GA_MOCK_PORT: String(PORTS.mock),
@@ -1455,7 +3182,14 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
     }
     mkdirSync(join(root, 'db'))
     mkdirSync(join(root, 'project'))
-    checkedCommand('git', ['-C', join(root, 'project'), 'init'])
+    if (job) {
+      const git = await prepareNativeGit(root, job.scope)
+      job.native.cleanup.push({
+        id: `git:${spec.id}`,
+        outcome: git.cleanup.outcome,
+        signaled: git.cleanup.signaled,
+      })
+    } else checkedCommand('git', ['-C', join(root, 'project'), 'init'])
     const configDir = join(root, 'config', 'opencode')
     mkdirSync(configDir)
     jsonFile(join(configDir, 'opencode.json'), {
@@ -1476,7 +3210,7 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
     const failures: string[] = []
     const servers = await startServers(wire, failures, root)
     try {
-      const stdout = await invoke(
+      const stdout = await run(
         binary,
         command.slice(1),
         join(root, 'project'),
@@ -1500,6 +3234,14 @@ async function insideRun(options: ReturnType<typeof parseArgs>): Promise<void> {
           'positive control did not observe the title request kind',
         )
       const result = classify(nonce, events, wire, pin)
+      if (job) {
+        const setup = events
+          .map(parsePluginEvent)
+          .find((event) => event.type === 'setup')
+        if (setup?.type !== 'setup')
+          throw new Error('missing measured native runtime')
+        job.native.runtime = setup.runtime
+      }
       assertCliCompletion(stdout)
       if (!existsSync(env.OPENCODE_DB ?? ''))
         throw new Error('explicit isolated OPENCODE_DB was not created')
@@ -1677,7 +3419,11 @@ if (import.meta.main) {
     if ('NODE_TLS_REJECT_UNAUTHORIZED' in process.env)
       throw new Error('TLS bypass variable refuses launch')
     const options = parseArgs(process.argv.slice(2))
-    await (options.inside ? insideRun(options) : outsideRun(options))
+    await (options.profile === 'native-job'
+      ? nativeJobRun(options)
+      : options.inside
+        ? insideRun(options)
+        : outsideRun(options))
     console.log(
       'GA native proxy measurement completed; promotion remains a separate review step',
     )
