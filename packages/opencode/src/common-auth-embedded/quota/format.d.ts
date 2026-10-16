@@ -21,6 +21,26 @@ export interface QuotaTextOptions {
     /** Defaults to `QUOTA_STALE_AFTER_MS`. */
     staleAfterMs?: number;
 }
+export interface QuotaWindowPart {
+    kind: 'window' | 'budget';
+    /** The display name of a quota window, or `credits` for the budget. */
+    name: string;
+    /** The shared figure wording, including `credits` for budget figures. */
+    figure: string;
+    /** The unrounded remaining percentage, clamped to 0–100, when known. */
+    remainingPercent?: number;
+    /** A bare relative reset span such as `4d`, only when the reset is future. */
+    resetIn?: string;
+    checkedAt: number;
+    /** Whether the reset followed this reading and has arrived by `now`. */
+    resetSinceReading: boolean;
+}
+export interface QuotaParts {
+    /** Reported windows in display order, followed by the budget when present. */
+    windows: QuotaWindowPart[];
+    /** The shared checked-age wording, present only when the reading is stale. */
+    age?: string;
+}
 /**
  * The name a window is shown under. A general window (scope `all`) is named
  * by its stored length; a model-scoped window keeps the label the plugin
@@ -29,6 +49,12 @@ export interface QuotaTextOptions {
  * were recorded) falls back to its label.
  */
 export declare function quotaWindowName(limit: Pick<ProjectedLimit, 'scope' | 'label' | 'windowMinutes'>): string;
+/**
+ * Structured quota wording for layouts that need one row per window. The
+ * windows use the same filtering and order as `quotaTextParts`; future resets
+ * and the optional age keep the shared formatter's wording.
+ */
+export declare function quotaWindowParts(quota: ProjectedQuota | undefined, options: QuotaTextOptions): QuotaParts;
 /**
  * The pieces of a quota text, in order: one per reported window
  * (`5h 58% left, resets 2h`), then the credit budget when there is one, then

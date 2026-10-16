@@ -779,6 +779,71 @@ describe('setup plugin callbacks', () => {
     expect(snapshot(p.root)).toEqual(before)
   })
 
+  it.each([
+    ['Escape', '\u001b'],
+    ['Ctrl-C', '\u0003'],
+  ])('cancelling the vault question with %s changes nothing', async (_key, cancel) => {
+    const p = profile()
+    fakeHostCommands(p)
+    Object.assign(process.env, p.env)
+    seedLocal(p)
+    const plugin = await createSetupPlugin(
+      createDefaultCliDependencies(),
+      async () => 0,
+    )
+    writeFileSync(plugin.vault.connectionFile, '{}')
+    const before = snapshot(p.root)
+    plugin.beforeSignIn = mock(async () => {})
+    plugin.signInLocal = mock(async () => {})
+    plugin.beforeRegister = mock(async () => {})
+    plugin.migrate = mock(async () => {})
+    const close = mock(() => {})
+    const enrollPropose = mock(async () => {
+      throw new Error('Cancelled setup must not start enrollment')
+    })
+    const enrollPoll = mock(async () => ({ status: 'pending' as const }))
+    const connect = mock(async () => ({ close, enrollPropose, enrollPoll }))
+    // Continue with both detected hosts, then cancel only the vault question.
+    const keys = ['\u001b[B\u001b[B\r', cancel!]
+    let output = ''
+    const result = await runSetup(plugin, ['--opencode=2'], {
+      env: p.env,
+      connect,
+      terminal: {
+        input: {
+          isTTY: true,
+          setRawMode() {},
+          resume() {},
+          pause() {},
+          on(_event, listener) {
+            const next = keys.shift()
+            if (next === undefined) throw new Error('Unexpected setup prompt')
+            queueMicrotask(() => listener(next))
+          },
+          removeListener() {},
+        },
+        output: {
+          write(value) {
+            output += value
+          },
+        },
+      },
+    })
+    expect(keys).toEqual([])
+    expect(output).toContain('Connect these hosts to the Claustrum vault?')
+    expect(output).toContain('Setup cancelled. Nothing was changed.')
+    expect(result.hosts).toEqual([])
+    expect(plugin.beforeSignIn).not.toHaveBeenCalled()
+    expect(plugin.signInLocal).not.toHaveBeenCalled()
+    expect(plugin.beforeRegister).not.toHaveBeenCalled()
+    expect(plugin.migrate).not.toHaveBeenCalled()
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(enrollPropose).not.toHaveBeenCalled()
+    expect(enrollPoll).not.toHaveBeenCalled()
+    expect(snapshot(p.root)).toEqual(before)
+  })
+
   it('all selected hosts are visible to the first beforeSignIn, before any other callback', async () => {
     const p = profile()
     fakeHostCommands(p)

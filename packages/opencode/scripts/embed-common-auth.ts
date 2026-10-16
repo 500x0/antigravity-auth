@@ -12,13 +12,13 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 
 export const inputPath =
-  'tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz'
-export const producerVersion = '0.17.0'
+  'tools/common-auth-build/inputs/cortexkit-common-auth-0.17.1.tgz'
+export const producerVersion = '0.17.1'
 export const artifactStatus = 'published'
 export const outputPath = 'packages/opencode/src/common-auth-embedded'
 export const productionPin = Object.freeze({
-  sha256: 'd882923f81a1e40e68c8c1ad516964f93c667c0b04761053ecca4b9f10d01eef',
-  sri: 'sha512-B03SHlxC3ZdYZW3IMrqfkJcXQmHxVMwwujtgai+t0GF89RVKFutLErhAJqo6szO6rZ+77897aA6PO5sKf8+DUQ==',
+  sha256: 'c04f18f6ff9dfa4b1161b39994a4d189510d521e8d75491a7ee0f710988cd3bb',
+  sri: 'sha512-F/KvWCyoWK3RRWvp/aeyptzp4kh3s+KpCF16EUiqctl73ZgvBQRSnbTG010cVYpM5OnkWr8R6xa59KpYrUvXlg==',
 })
 export const publicRoots = {
   './rpc': { types: './dist/rpc/index.d.ts', import: './dist/rpc/index.js' },
@@ -533,23 +533,23 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'quota/format.d.ts',
-    2345,
-    '87ec0c819d5ba567bcd106abe0a224d91daa030fe33942b33f931e6ea833cf5b',
+    3538,
+    'b690da79fd26e936bf7d2867f411cacd5f32a8daf254d15cfef3d95417428a4a',
   ],
   [
     'quota/format.js',
-    5819,
-    'a6911f852a33e5305d7ea86bd2fe0c62e12207e17e01b11b23db6e1de7b1aea7',
+    7063,
+    '48b425dd1889480f6a4cd85d3a1ed66b0ccde59dd138663be30ab42d13c6e409',
   ],
   [
     'quota/index.d.ts',
-    985,
-    'da82521ba731ddda760586d73f8334ec1e771874b1b83198c3b720175d93520e',
+    1033,
+    'dc5906c78e391126596a6eea6c999f1cb861a6656386e2be53e1bf00b6b63451',
   ],
   [
     'quota/index.js',
-    479,
-    'd0e7993c7c7bbb6c9e0083bb8bc6397c41154fb30aab1f513717847167be8e8b',
+    497,
+    '50027508fb08fb11903fc2220b30b141f73118424e4ca0a0ecd231519b28985d',
   ],
   [
     'quota/map.d.ts',
@@ -713,8 +713,8 @@ const canonical: readonly (readonly [string, number, string])[] = [
   ],
   [
     'setup/command.js',
-    10030,
-    '608547e05793d275715c3a72e64d16d84c2aaaae108f97d04c9ba514eb00d9f1',
+    10549,
+    '1f9acddbe1ae7f10e50cc2d72206bf4942e56f5bcd843ab0b1155dbd29beefd7',
   ],
   [
     'setup/config-write.js',
@@ -1079,7 +1079,7 @@ export function validatePublication(
   }
   if (
     sha256(entries.get('package/package.json') ?? '') !==
-    'fbd880def3a7020919a63a6109cdc9717887f1f40509e88d05c0d9504b9d3412'
+    '8a5cce718f847b8edd8983a1cc2d6060491332bf33d82c526c5174788b01c82c'
   )
     throw new Error('publication: manifest bytes')
 }
