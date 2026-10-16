@@ -813,6 +813,55 @@ export interface GaHostSession {
   close(): Promise<GaRunResult>
 }
 
+const GA_HOST_STARTUP_BUDGET_MS = 15_000
+
+function gaErrorKind(error: unknown): string {
+  const name =
+    error instanceof Error || error instanceof DOMException ? error.name : ''
+  return ['Error', 'TypeError', 'TimeoutError', 'AbortError'].includes(name)
+    ? name
+    : 'UnknownError'
+}
+
+export async function awaitGaHostReadiness(
+  url: string,
+  assertRunning: () => void,
+): Promise<void> {
+  const started = performance.now()
+  const elapsed = () => Math.round(performance.now() - started)
+  let probe = 0
+  try {
+    await waitForGaObservation(
+      async () => {
+        assertRunning()
+        probe++
+        try {
+          const response = await fetch(url, {
+            signal: AbortSignal.timeout(500),
+          })
+          console.error(
+            `readiness probe=${probe} status=${response.status} elapsedMs=${elapsed()}`,
+          )
+          return true
+        } catch (error) {
+          console.error(
+            `readiness probe=${probe} error=${gaErrorKind(error)} elapsedMs=${elapsed()}`,
+          )
+          return false
+        }
+      },
+      'loopback server readiness',
+      GA_HOST_STARTUP_BUDGET_MS,
+    )
+    console.error(`readiness result=ready elapsedMs=${elapsed()}`)
+  } catch (error) {
+    console.error(
+      `readiness result=give-up elapsedMs=${elapsed()} cause=${gaErrorKind(error)}`,
+    )
+    throw error
+  }
+}
+
 /**
  * Starts the pinned OpenCode binary's `serve` and drives it with the same
  * binary's `run --server`. Nothing here is a host simulated through the SDK.
@@ -840,25 +889,13 @@ export async function startGaHost(
     { ...options, deadlineMs: 60_000 },
   )
   try {
-    await waitForGaObservation(
-      async () => {
-        if (
-          server.process.exitCode !== null ||
-          server.process.signalCode !== null
-        )
-          throw new Error(
-            `Host exited during startup: ${server.output().stderr}`,
-          )
-        try {
-          await fetch(url, { signal: AbortSignal.timeout(500) })
-          return true
-        } catch {
-          return false
-        }
-      },
-      'loopback server readiness',
-      15_000,
-    )
+    await awaitGaHostReadiness(url, () => {
+      if (
+        server.process.exitCode !== null ||
+        server.process.signalCode !== null
+      )
+        throw new Error(`Host exited during startup: ${server.output().stderr}`)
+    })
   } catch (error) {
     server.signal('SIGKILL')
     try {
@@ -2970,6 +3007,37 @@ export function assertGaRawBindingControl(
   )
 }
 
+function gaDiagnosticRoute(path: string): string {
+  // Omit query values and replace identifiers rather than logging credentials
+  // or location paths supplied to the native API.
+  const routes: [RegExp, string][] = [
+    [/^\/api\/(integration|credential|session|plugin)$/, '/api/$1'],
+    [/^\/api\/location\/reload$/, '/api/location/reload'],
+    [/^\/api\/integration\/[^/]+$/, '/api/integration/:id'],
+    [
+      /^\/api\/integration\/[^/]+\/connect\/(key|oauth)$/,
+      '/api/integration/:id/connect/$1',
+    ],
+    [
+      /^\/api\/integration\/[^/]+\/connect\/oauth\/[^/]+$/,
+      '/api/integration/:id/connect/oauth/:id',
+    ],
+    [/^\/api\/credential\/[^/]+(\/activate)?$/, '/api/credential/:id$1'],
+    [
+      /^\/api\/session\/[^/]+(\/(?:prompt|compact|command|interrupt))?$/,
+      '/api/session/:id$1',
+    ],
+    [
+      /^\/api\/experimental\/session\/[^/]+\/wait$/,
+      '/api/experimental/session/:id/wait',
+    ],
+    [/^\/api\/rpc\/[^/]+\/(state|apply)$/, '/api/rpc/:id/$1'],
+  ]
+  for (const [pattern, replacement] of routes)
+    if (pattern.test(path)) return path.replace(pattern, replacement)
+  return '/[redacted]'
+}
+
 /** Calls the pinned host's documented HTTP API; it is not an SDK or fake host. */
 export async function gaNativeRequest(
   url: string,
@@ -2990,16 +3058,28 @@ export async function gaNativeRequest(
     target.origin === origin.origin,
     'Native control path escaped its owned server',
   )
-  const response = await fetch(target, {
-    method,
-    headers: {
-      authorization: `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
-      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal: AbortSignal.timeout(deadlineMs),
-  })
-  const bytes = await response.text()
+  const started = performance.now()
+  let response: Response
+  let bytes: string
+  try {
+    response = await fetch(target, {
+      method,
+      headers: {
+        authorization: `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(deadlineMs),
+    })
+    bytes = await response.text()
+  } catch (cause) {
+    const error = new Error(
+      `Native ${method} ${gaDiagnosticRoute(target.pathname)} deadlineMs=${deadlineMs} elapsedMs=${Math.round(performance.now() - started)} cause=${gaErrorKind(cause)}`,
+      { cause },
+    )
+    console.error(error.message)
+    throw error
+  }
   requireCondition(
     response.status === status,
     `Native ${method} ${path} returned ${response.status}, expected ${status}: ${bytes}`,
@@ -4746,12 +4826,15 @@ async function awaitGaGoogleIntegration(
 ): Promise<void> {
   // The pinned host's list handler awaits plugin activation; its single-get
   // and connect handlers can read the initially empty registry before it settles.
+  // Activation is startup work, so it shares the host readiness budget.
   const response = await gaNativeRequest(
     harness.host.url,
     'GET',
     `/api/integration?${new URLSearchParams({ 'location[directory]': harness.paths.project })}`,
     undefined,
     200,
+    false,
+    GA_HOST_STARTUP_BUDGET_MS,
   )
   const plugin = realpathSync(
     resolve('packages/opencode/node_modules/@opencode/plugin'),
@@ -4801,7 +4884,9 @@ export async function connectGaNativeKey(harness: {
   paths: GaPaths
   host: Pick<GaHostSession, 'url'>
 }): Promise<Record<string, unknown>> {
+  console.error('step=connect.integration-inventory')
   await awaitGaGoogleIntegration(harness, true)
+  console.error('step=connect.key-post')
   await gaNativeRequest(
     harness.host.url,
     'POST',
@@ -4810,6 +4895,7 @@ export async function connectGaNativeKey(harness: {
     204,
     true,
   )
+  console.error('step=connect.credential-inventory')
   const entries = (await gaCredentialEntries(harness.host.url)).filter(
     (entry) =>
       entry.integrationID === 'google' &&
@@ -4821,6 +4907,7 @@ export async function connectGaNativeKey(harness: {
     entries.length === 1 && entry && typeof entry.id === 'string',
     'GA_NATIVE_KEY_MISSING',
   )
+  console.error('step=connect.key-activate')
   await gaNativeRequest(
     harness.host.url,
     'POST',
@@ -4829,6 +4916,7 @@ export async function connectGaNativeKey(harness: {
     204,
     true,
   )
+  console.error('step=connect.active-credential-inventory')
   const active = (await gaCredentialEntries(harness.host.url)).filter(
     (candidate) =>
       candidate.integrationID === 'google' && candidate.active === true,
@@ -5006,24 +5094,32 @@ export async function runGaOwnershipPoolLogin(
   harness: GaHarness,
   accounts: GaAccountRpcJoin,
 ): Promise<void> {
+  console.error('step=pool-login.store-input')
   await accounts.assertCurrentStoreInput(harness.paths, harness.caseId)
   const configPath = join(harness.paths.opencodeConfig, 'opencode.json')
   const configHash = sha256(readFileSync(configPath))
+  console.error('step=pool-login.connect')
   const key = await connectGaNativeKey(harness)
   requireCondition(typeof key.id === 'string', 'GA_NATIVE_KEY_MISSING')
+  console.error('step=pool-login.native-key-before')
   const nativeBefore = await gaNativeKeyBytes(harness, key.id)
+  console.error('step=pool-login.login')
   const placeholder = await loginGaPool(harness)
+  console.error('step=pool-login.capture-placeholder')
   await captureGaPlaceholder(harness, placeholder.id)
+  console.error('step=pool-login.session-create')
   const session = await harness.native.create(
     harness.paths.project,
     publicGaModel(),
     'Pool login fixed title',
   )
+  console.error('step=pool-login.state-rpc')
   const snapshot = await accounts.snapshot(harness, session)
   requireCondition(
     snapshot.rows.length === 1 && snapshot.rows[0]?.enabled,
     'GA_POOL_LOGIN_ACCOUNT_NOT_COMMITTED',
   )
+  console.error('step=pool-login.completion')
   const result = await harness.run(publicGaModel(), undefined, false, session)
   assertGaSuccess(result, harness.nonce)
   const assistant = result.completion?.assistant
@@ -5048,7 +5144,9 @@ export async function runGaOwnershipPoolLogin(
     ),
     'GA_POOL_LOGIN_HOST_CREDENTIAL_EGRESS',
   )
+  console.error('step=pool-login.active-placeholder')
   await assertGaActivePlaceholder(harness.host.url, placeholder)
+  console.error('step=pool-login.native-key-after')
   const nativeAfter = await gaNativeKeyBytes(harness, key.id)
   requireCondition(
     JSON.stringify(nativeBefore) === JSON.stringify(nativeAfter) &&
@@ -6876,6 +6974,7 @@ async function retainGaScenario(
 export async function runGaSmoke(
   out: string,
   inputs: GaHostIntegrationInputs,
+  createHarness = createOpenCodeGaHarness,
 ): Promise<GaScenarioResult[]> {
   requireCondition(
     isAbsolute(out) && existsSync(out) && readdirSync(out).length === 0,
@@ -6883,8 +6982,9 @@ export async function runGaSmoke(
   )
   const results: GaScenarioResult[] = []
   for (const id of GA_SMOKE_CASE_IDS) {
+    console.error(`case=${id}`)
     const started = gaTimestamp()
-    const harness = await createOpenCodeGaHarness(id, out, {
+    const harness = await createHarness(id, out, {
       accounts: inputs.accounts,
       ...(id === 'terminal-frame'
         ? {
@@ -6915,6 +7015,34 @@ export async function runGaSmoke(
         JSON.stringify(result),
         { mode: 0o600, flag: 'wx' },
       )
+    } catch (error) {
+      writeFileSync(
+        join(harness.paths.state, 'wrapper-events.json'),
+        JSON.stringify(harness.readWrapperEvents()),
+        { mode: 0o600 },
+      )
+      writeFileSync(
+        join(harness.paths.state, 'mock-requests.json'),
+        JSON.stringify(harness.mock.requests),
+        { mode: 0o600 },
+      )
+      writeFileSync(
+        join(harness.paths.state, 'failure-observations.json'),
+        JSON.stringify({
+          hostLogPath: join(
+            harness.paths.data,
+            'opencode',
+            'log',
+            'opencode.log',
+          ),
+          mockEvents: harness.mock.events,
+          rawRequests: harness.rawPeer?.requests,
+          rawEvents: harness.rawPeer?.events,
+          proxyRecords: harness.proxyRecorder?.records,
+        }),
+        { mode: 0o600 },
+      )
+      throw error
     } finally {
       await harness.dispose()
     }

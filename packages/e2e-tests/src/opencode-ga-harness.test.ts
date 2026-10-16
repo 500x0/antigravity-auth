@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
@@ -35,13 +35,17 @@ import {
   assertGaPassthroughEvidence,
   assertGaPinnedHostnameMappings,
   assertGaSuccess,
+  awaitGaHostReadiness,
   captureGaPlaceholder,
   collectGaCompletion,
   connectGaNativeKey,
+  createGaProtocolClient,
   GA_CASE_IDS,
   GA_SMOKE_CASE_IDS,
   type GaAccountObservation,
   type GaHarness,
+  type GaHostIntegrationInputs,
+  type GaPortableProtocol,
   type GaRecordedRequest,
   type GaRunResult,
   gaAllowsDirectProvider,
@@ -60,6 +64,7 @@ import {
   refreshGaFixtureCredentials,
   runGaCoreScenario,
   runGaPtyScenario,
+  runGaSmoke,
   runGaTitleScenario,
   seedGaHost,
   verifiedArchiveFiles,
@@ -773,6 +778,201 @@ it('admits Linux x64 artifact preparation without asserting runtime container me
 })
 
 describe('GA ownership harness preparation (source controls, not native proof)', () => {
+  it('labels an inventory timeout and retains observations before failed smoke disposal', async () => {
+    const out = root()
+    const paths = prepareGaRoot(root())
+    writeFileSync(join(paths.opencodeConfig, 'opencode.json'), '{}')
+    const wrapperEvents = [{ event: 'setup' }]
+    const requests = [
+      { kind: 'direct-provider', body: 'synthetic-observation' },
+    ]
+    const timeout = new DOMException('The operation timed out.', 'TimeoutError')
+    const stderr: string[] = []
+    const log = spyOn(console, 'error').mockImplementation((value) => {
+      stderr.push(String(value))
+    })
+    const fetchMock = spyOn(globalThis, 'fetch').mockRejectedValue(timeout)
+    let disposed = 0
+    let persistedBeforeDispose = false
+    const harness = {
+      caseId: 'ga-ownership-pool-login',
+      paths,
+      host: { url: 'http://127.0.0.1:1234' },
+      mock: { requests, events: [] },
+      readWrapperEvents: () => wrapperEvents,
+      async dispose() {
+        disposed++
+        persistedBeforeDispose = existsSync(
+          join(paths.state, 'failure-observations.json'),
+        )
+      },
+    } as unknown as GaHarness
+    const inputs = {
+      accounts: { assertCurrentStoreInput: async () => {} },
+    } as unknown as GaHostIntegrationInputs
+    try {
+      const error = await runGaSmoke(out, inputs, async () => harness).catch(
+        (error: unknown) => error,
+      )
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).cause).toBe(timeout)
+      const diagnostics = stderr.join('\n')
+      expect(diagnostics).toContain('case=ga-ownership-pool-login')
+      expect(diagnostics).toContain('step=connect.integration-inventory')
+      expect(diagnostics).toMatch(
+        /GET \/api\/integration deadlineMs=15000 elapsedMs=\d+ cause=TimeoutError/,
+      )
+      expect(diagnostics).not.toContain('step=connect.key-post')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(disposed).toBe(1)
+      expect(persistedBeforeDispose).toBe(true)
+      expect(
+        JSON.parse(
+          readFileSync(join(paths.state, 'wrapper-events.json'), 'utf8'),
+        ),
+      ).toEqual(wrapperEvents)
+      expect(
+        JSON.parse(
+          readFileSync(join(paths.state, 'mock-requests.json'), 'utf8'),
+        ),
+      ).toEqual(requests)
+      expect(
+        JSON.parse(
+          readFileSync(join(paths.state, 'failure-observations.json'), 'utf8'),
+        ),
+      ).toEqual({
+        hostLogPath: join(paths.data, 'opencode', 'log', 'opencode.log'),
+        mockEvents: [],
+      })
+      expect(existsSync(join(out, 'smoke-results.json'))).toBe(false)
+    } finally {
+      fetchMock.mockRestore()
+      log.mockRestore()
+    }
+  })
+
+  it('uses the startup budget only for integration inventory and keeps the state RPC default', async () => {
+    const paths = prepareGaRoot(root())
+    const deadlines: number[] = []
+    const timeout = spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      deadlines.push(ms)
+      return new AbortController().signal
+    })
+    const fetchMock = spyOn(globalThis, 'fetch').mockRejectedValue(
+      new DOMException('The operation timed out.', 'TimeoutError'),
+    )
+    const log = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await connectGaNativeKey({
+        paths,
+        host: { url: 'http://127.0.0.1:1234' },
+      }).catch(() => {})
+      const client = createGaProtocolClient(
+        {
+          ANTIGRAVITY_RPC_ID: 'antigravity-auth',
+          ANTIGRAVITY_RPC_VERSION: 1,
+        } as GaPortableProtocol,
+        'http://127.0.0.1:1234',
+      )
+      await client
+        .state({ id: 'session', directory: paths.project })
+        .catch(() => {})
+      expect(
+        fetchMock.mock.calls.map(
+          ([url, init]) => `${init?.method} ${new URL(String(url)).pathname}`,
+        ),
+      ).toEqual([
+        'GET /api/integration',
+        'POST /api/rpc/antigravity-auth/state',
+      ])
+      expect(deadlines).toEqual([15000, 5000])
+    } finally {
+      timeout.mockRestore()
+      fetchMock.mockRestore()
+      log.mockRestore()
+    }
+  })
+
+  it('prints a failed readiness probe followed by success and total elapsed time', async () => {
+    const stderr: string[] = []
+    const log = spyOn(console, 'error').mockImplementation((value) => {
+      stderr.push(String(value))
+    })
+    const fetchMock = spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('connection refused'))
+      .mockResolvedValueOnce(new Response('ready', { status: 200 }))
+    try {
+      await awaitGaHostReadiness('http://127.0.0.1:1234', () => {})
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(stderr[0]).toMatch(
+        /readiness probe=1 error=TypeError elapsedMs=\d+/,
+      )
+      expect(stderr[1]).toMatch(/readiness probe=2 status=200 elapsedMs=\d+/)
+      expect(stderr[2]).toMatch(/readiness result=ready elapsedMs=\d+/)
+    } finally {
+      fetchMock.mockRestore()
+      log.mockRestore()
+    }
+  })
+
+  it('prints readiness give-up when the host exits', async () => {
+    const stderr: string[] = []
+    const log = spyOn(console, 'error').mockImplementation((value) => {
+      stderr.push(String(value))
+    })
+    const exit = new Error('Host exited during startup')
+    try {
+      await expect(
+        awaitGaHostReadiness('http://127.0.0.1:1234', () => {
+          throw exit
+        }),
+      ).rejects.toBe(exit)
+      expect(stderr.join('\n')).toMatch(
+        /readiness result=give-up elapsedMs=\d+ cause=Error/,
+      )
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  for (const phase of ['fetch', 'body'] as const) {
+    it(`wraps ${phase} failures with a secret-free route, timing and original cause`, async () => {
+      const cause = new TypeError('private-token key=password-secret')
+      const response = new Response()
+      response.text = async () => {
+        throw cause
+      }
+      const fetchMock = spyOn(globalThis, 'fetch')
+      if (phase === 'fetch') fetchMock.mockRejectedValue(cause)
+      else fetchMock.mockResolvedValue(response)
+      const log = spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const error = await gaNativeRequest(
+          'http://127.0.0.1:1234',
+          'POST',
+          '/api/credential/private-token/activate?key=password-secret',
+          { password: 'body-secret' },
+          204,
+          true,
+        ).catch((error: unknown) => error)
+        expect(error).toBeInstanceOf(Error)
+        expect((error as Error).cause).toBe(cause)
+        expect((error as Error).message).toMatch(
+          /POST \/api\/credential\/:id\/activate deadlineMs=5000 elapsedMs=\d+ cause=TypeError/,
+        )
+        for (const secret of [
+          'private-token',
+          'password-secret',
+          'body-secret',
+        ])
+          expect((error as Error).message).not.toContain(secret)
+      } finally {
+        fetchMock.mockRestore()
+        log.mockRestore()
+      }
+    })
+  }
+
   function activationFixture(fault = '') {
     const paths = prepareGaRoot(root())
     const barrier = Promise.withResolvers<void>()
