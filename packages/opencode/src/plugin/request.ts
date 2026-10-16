@@ -52,6 +52,7 @@ import {
   type GeminiDumpContext,
   noteGeminiDumpResponse,
 } from './gemini-dump'
+import { isCanonicalGoogleOrigin } from './google-origin.ts'
 import { createLogger, type Logger } from './logger'
 import { detectErrorType } from './recovery'
 import {
@@ -1441,7 +1442,7 @@ export function fetchInputToUrl(input: RequestInfo | URL): string {
  * interceptor entirely.
  */
 export function isGenerativeLanguageRequest(input: RequestInfo | URL): boolean {
-  return fetchInputToUrl(input).includes('generativelanguage.googleapis.com')
+  return isCanonicalGoogleOrigin(fetchInputToUrl(input))
 }
 
 /**

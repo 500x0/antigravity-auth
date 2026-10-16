@@ -1307,7 +1307,7 @@ const plugin = createGaAntigravityPlugin(overrides)
     if (event.kind !== 'primary') return
     const original = await event.request.clone().text()
     const body = JSON.parse(original)
-    if (!event.request.url.startsWith(transportMock + '/direct/v1/') || !Array.isArray(body.contents) || body.request !== undefined) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: expected the host-prepared Google body before rewrite')
+    if (!event.request.url.startsWith('https://generativelanguage.googleapis.com/v1beta/') || !Array.isArray(body.contents) || body.request !== undefined) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: expected the host-prepared Google body before rewrite')
     const expected = JSON.parse(readFileSync(${JSON.stringify(input.placeholderFixture ?? '')}, 'utf8'))
     if (typeof expected.value?.access !== 'string' || expected.value.type !== 'oauth' || expected.value.methodID !== 'antigravity-auth-pool-browser' || expected.valueSha256 !== bodyHash(JSON.stringify(expected.value))) throw new Error('GA_PREPARED_CAP_ATTRIBUTION: missing captured placeholder provenance')
     log('native.prepared-output-cap', { sessionID: event.sessionID, kind: event.kind, model: event.model.id, caller: capCaller(body), owned: event.request.headers.get('x-goog-api-key') === expected.value.access, bodySha256: bodyHash(original), maxOutputTokens: body.generationConfig?.maxOutputTokens ?? null })
@@ -2168,7 +2168,9 @@ export function seedGaHost(
         google: {
           settings: {
             apiKey: 'synthetic-ga-key',
-            baseURL: rawSender
+            // Owned jobs retain Google's logical URL; the send override alone
+            // redirects their prepared envelopes to the loopback mock.
+            baseURL: (caseId ? !gaAllowsDirectProvider(caseId) : rawSender)
               ? 'https://generativelanguage.googleapis.com/v1beta'
               : `${mockUrl}/direct/v1`,
           },

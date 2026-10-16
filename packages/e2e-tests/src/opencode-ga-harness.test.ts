@@ -764,6 +764,31 @@ it('keeps the canonical Google request URL for production raw-TLS routing', () =
   ).toBe('http://127.0.0.1:1234/direct/v1')
 })
 
+it('keeps canonical Google URLs for owned mock-sender smoke jobs and mock URLs for native passthrough', () => {
+  for (const [caseId, baseURL] of [
+    [
+      'ga-ownership-pool-login',
+      'https://generativelanguage.googleapis.com/v1beta',
+    ],
+    ['ga-ownership-passthrough', 'http://127.0.0.1:1234/direct/v1'],
+  ] as const) {
+    const paths = prepareGaRoot(root())
+    seedGaHost(
+      paths,
+      '/owned/wrapper',
+      'http://127.0.0.1:1234',
+      0,
+      false,
+      caseId,
+    )
+    expect(
+      JSON.parse(
+        readFileSync(join(paths.opencodeConfig, 'opencode.json'), 'utf8'),
+      ).providers.google.settings.baseURL,
+    ).toBe(baseURL)
+  }
+})
+
 it('admits Linux x64 artifact preparation without asserting runtime container membership', () => {
   expect(() => assertGaImagePreparationPlatform('linux', 'x64')).not.toThrow()
   for (const [platform, arch] of [
@@ -2285,7 +2310,7 @@ export default { async setup(context) { return (await loadGa()).setup(context) }
       },
     })
     const request = new Request(
-      'http://127.0.0.1:1234/direct/v1/models/claude:streamGenerateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/claude:streamGenerateContent',
       {
         method: 'POST',
         headers: { 'x-goog-api-key': value.access },

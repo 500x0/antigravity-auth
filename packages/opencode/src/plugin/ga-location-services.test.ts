@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
 } from 'node:fs'
@@ -1554,6 +1555,110 @@ describe('GA composed request context', () => {
         expect(sends).toHaveLength(1)
         expect(sends.map((send) => send.kind)).toEqual(['primary'])
         expect(sends[0]?.envelope.model).toBe('gemini-3.8-flash-medium')
+      } finally {
+        await location.dispose()
+        ownership.clear()
+      }
+    },
+  )
+
+  ownedIt(
+    'owned seeded default request reaches the composed sender with pool bearer and prepared envelope',
+    async (scope) => {
+      const { prepareGaRoot, seedGaHost } = await import(
+        '../../../e2e-tests/src/opencode-ga-harness.ts'
+      )
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'ga-seeded-default-'))
+      scope.defer(async () =>
+        rmSync(fixtureRoot, { recursive: true, force: true }),
+      )
+      const paths = prepareGaRoot(fixtureRoot)
+      seedGaHost(
+        paths,
+        '/owned/wrapper',
+        'http://127.0.0.1:1234',
+        0,
+        false,
+        'ga-ownership-pool-login',
+      )
+      const config = JSON.parse(
+        readFileSync(join(paths.opencodeConfig, 'opencode.json'), 'utf8'),
+      )
+      const sends: GaSendInput[] = []
+      const reached = Promise.withResolvers<GaSendInput>()
+      const location = await transportLocation(scope, 'local', {
+        send: (input) => {
+          sends.push(input)
+          reached.resolve(input)
+          return new Promise<Response>((_resolve, reject) => {
+            input.signal.addEventListener(
+              'abort',
+              () => reject(input.signal.reason),
+              { once: true },
+            )
+          })
+        },
+      })
+      const modelID = 'antigravity-gemini-3.8-flash'
+      const ownership = new GaRequestOwnership()
+      let capturedJob: GaBridgeJob | undefined
+      const event: GaHttpRequestEvent = {
+        sessionID: 'seeded-default-session',
+        kind: 'primary',
+        model: { id: modelID, providerID: 'google', variant: 'default' },
+        request: new Request(
+          `${config.providers.google.settings.baseURL}/models/${modelID}:streamGenerateContent?alt=sse`,
+          {
+            method: 'POST',
+            headers: { 'x-goog-api-key': placeholderSecret('google') },
+            body: transportJob.body,
+          },
+        ),
+      }
+      try {
+        await rewriteGaHttpRequest(event, {
+          bridge: {
+            rewrite: (original, job) => {
+              capturedJob = job
+              return original
+            },
+          },
+          isRegisteredModel: (id) => id === modelID,
+          env: {},
+          ownership,
+        })
+        if (!capturedJob) throw new Error('the request hook created no GA job')
+        expect(capturedJob.variant).toBeNull()
+        const controller = scope.controller()
+        const signal = controller.signal
+        const pending = location.serving.execute(capturedJob, {
+          signal,
+          send: async () => {
+            throw new Error('legacy sender must not be used')
+          },
+        })
+        const failure = pending.catch((error: unknown) => error)
+        await scope.wait(Promise.race([reached.promise, pending]))
+        expect(sends).toHaveLength(1)
+        expect(sends.map((send) => send.kind)).toEqual(['primary'])
+        expect(sends[0]?.auth).toEqual({ access: 'access-refresh-0' })
+        expect(sends[0]?.envelope.project).toBe('project-0')
+        expect(sends[0]?.envelope.model).toBe('gemini-3.8-flash-medium')
+        const sent = sends[0]
+        const prepared = location.prepared.mock.calls[0]?.[0]
+        if (!sent || !prepared) throw new Error('missing prepared primary send')
+        expect(prepared.body).toBe(JSON.stringify(sent.envelope))
+        expect(new Headers(prepared.headers).get('authorization')).toBe(
+          'Bearer access-refresh-0',
+        )
+        expect(sent.signal.aborted).toBe(false)
+        expect(signal.aborted).toBe(false)
+        const reason = new DOMException('job cancelled', 'AbortError')
+        controller.abort(reason)
+        expect(sent.signal.aborted).toBe(true)
+        expect(sent.signal.reason).toBe(reason)
+        expect(await failure).toBe(reason)
+        expect(networkCalls).toHaveLength(0)
       } finally {
         await location.dispose()
         ownership.clear()
