@@ -906,6 +906,99 @@ describe('notification payloads and apply output', () => {
     ).toEqual(['menu.sections.0.facts.run'])
   })
 
+  it('rejects non-JSON apply outputs at their first invalid value', () => {
+    const output = {
+      version: 1,
+      kind: 'applied',
+      generation: GENERATION,
+      scope: { kind: 'sessionless' },
+      result: RESULT,
+    }
+    const cases = [
+      {
+        name: 'own undefined code',
+        result: { ...RESULT, code: undefined },
+        path: ['result', 'code'],
+        message: 'expected a plain JSON value',
+      },
+      {
+        name: 'Date fact',
+        result: {
+          ...RESULT,
+          menu: {
+            ...MENU,
+            sections: [
+              {
+                ...MENU.sections[0]!,
+                items: [
+                  {
+                    ...MENU.sections[0]!.items[0]!,
+                    facts: { tier: new Date(0) },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        path: ['result', 'menu', 'sections', 0, 'items', 0, 'facts', 'tier'],
+        message: 'expected a plain JSON value without cycles',
+      },
+      {
+        name: 'function fact',
+        result: {
+          ...RESULT,
+          menu: {
+            ...MENU,
+            sections: [
+              {
+                ...MENU.sections[0]!,
+                items: [
+                  {
+                    ...MENU.sections[0]!.items[0]!,
+                    facts: { tier: () => undefined },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        path: ['result', 'menu', 'sections', 0, 'items', 0, 'facts', 'tier'],
+        message: 'expected a plain JSON value',
+      },
+      {
+        name: 'NaN fact',
+        result: {
+          ...RESULT,
+          menu: {
+            ...MENU,
+            sections: [
+              {
+                ...MENU.sections[0]!,
+                items: [
+                  {
+                    ...MENU.sections[0]!.items[0]!,
+                    facts: { tier: Number.NaN },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        path: ['result', 'menu', 'sections', 0, 'items', 0, 'facts', 'tier'],
+        message: 'expected a plain JSON value',
+      },
+    ]
+
+    expect(AntigravityApplyOutputSchema.parse(output).ok).toBe(true)
+    for (const entry of cases) {
+      const issues = issuesOf(
+        AntigravityApplyOutputSchema.parse({ ...output, result: entry.result }),
+      )
+      expect(issues.map((issue) => issue.path)).toEqual([entry.path])
+      expect(issues.map((issue) => issue.message)).toEqual([entry.message])
+    }
+  })
+
   it('accepts the stale-generation and disposed answers with nothing else', () => {
     for (const kind of ['stale-generation', 'disposed'] as const) {
       expect(
