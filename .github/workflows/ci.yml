@@ -10,8 +10,10 @@ on:
   workflow_dispatch:
 
 env:
-  # Pin cortexkit/commons' runner to keep anchor validation and replay behavior stable.
-  CKDEV_MUTATE_REV: 0c99c7e16d8ae22b6e114136b6b7b68be6f1394e
+  # The ckdev-mutate runner that replays mutations.toml (cortexkit/commons,
+  # crate cortexkit-mutate 0.12.1), pinned so a runner change never alters CI
+  # unannounced.
+  CKDEV_MUTATE_REV: 9d6b663dac487bb982c7bfd18a96eee2292164ad
 
 jobs:
   test:
@@ -161,7 +163,7 @@ jobs:
 
       - name: Cache pinned mutation runner
         id: mutate-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/ckdev-mutate
           key: ${{ runner.os }}-${{ runner.arch }}-ckdev-mutate-${{ env.CKDEV_MUTATE_REV }}
@@ -171,10 +173,12 @@ jobs:
         run: cargo install --locked --git https://github.com/cortexkit/commons --rev "$CKDEV_MUTATE_REV" cortexkit-mutate
 
       - name: Check mutation catalogue
-        run: ckdev-mutate check
+        run: ckdev-mutate check --strict
 
       - name: Replay mutation proofs changed by PR
-        run: ckdev-mutate run --diff origin/main --report mutations-report/diff.json
+        run: |
+          mkdir -p mutations-report
+          ckdev-mutate run --diff origin/main --report mutations-report/diff.json
 
       - name: Upload mutation report
         if: always()
@@ -220,7 +224,7 @@ jobs:
 
       - name: Cache pinned mutation runner
         id: mutate-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/ckdev-mutate
           key: ${{ runner.os }}-${{ runner.arch }}-ckdev-mutate-${{ env.CKDEV_MUTATE_REV }}
@@ -230,12 +234,14 @@ jobs:
         run: cargo install --locked --git https://github.com/cortexkit/commons --rev "$CKDEV_MUTATE_REV" cortexkit-mutate
 
       - name: Check mutation catalogue
-        run: ckdev-mutate check
+        run: ckdev-mutate check --strict
 
       - name: Replay full mutation catalogue
         env:
-          BROAD: ${{ github.event_name != 'push' && '1' || '' }}
-        run: ckdev-mutate run --all ${BROAD:+--broad} --report mutations-report/all.json
+          BROAD: ${{ github.event_name != 'push' && 'true' || '' }}
+        run: |
+          mkdir -p mutations-report
+          ckdev-mutate run --all ${BROAD:+--broad} --report mutations-report/all.json
 
       - name: Upload mutation report
         if: always()

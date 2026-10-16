@@ -26,18 +26,7 @@ old = '''    false,
 new = '''    false, // NON-VACUITY BREAK: fall back to the ordinary request budget.
   )'''
 test_file = "packages/e2e-tests/src/opencode-ga-harness.test.ts"
-list_command = [
-  "bash",
-  "-c",
-  '''set -e
-report=$(mktemp)
-trap 'rm -f "$report"' EXIT
-bun run --cwd packages/core build >/dev/null
-bun test --isolate packages/e2e-tests/src/opencode-ga-harness.test.ts -t "$1" --reporter=junit --reporter-outfile="$report" >/dev/null 2>&1
-python3 -c 'import json,sys,xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); print(json.dumps([case.attrib.get("classname", "") + " " + case.attrib.get("name", "") for case in root.iter("testcase")]))' "$report"''',
-  "--",
-  "{test}",
-]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/src/opencode-ga-harness.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/e2e-tests/src/opencode-ga-harness.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -50,6 +39,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "    return omitUndefinedFields({"
 new = "    return ({ // NON-VACUITY BREAK: retain undefined sidebar fields."
 test_file = "packages/opencode/src/ga/server/boundary.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/boundary.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/boundary.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -62,6 +52,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = '  if (!owned) return'
 new = '  if (false) return // NON-VACUITY BREAK'
 test_file = "packages/opencode/src/ga/server/plugin.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/plugin.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/plugin.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -74,6 +65,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "    event.request.headers.get('x-goog-api-key') === placeholderSecret('google')"
 new = "    event.request.headers.get('x-goog-api-key')?.endsWith(placeholderSecret('google')) === true // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/plugin.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/plugin.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/plugin.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -86,6 +78,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "    event.request.headers.get('x-goog-api-key') === placeholderSecret('google')"
 new = "    event.request.headers.get('x-goog-api-key')?.toLowerCase() === placeholderSecret('google').toLowerCase() // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/plugin.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/plugin.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/plugin.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -98,6 +91,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = '  const label = `Account ${entry.index + 1}`'
 new = '  const label = entry.label ?? `Account ${entry.index + 1}` // NON-VACUITY BREAK'
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -114,6 +108,7 @@ new = '''      cachedQuotaAccountId: entry.cachedQuotaAccountId,
     }),
   ).map((row, index) => ({ ...row, email: storage.accounts[index]?.email })) // NON-VACUITY BREAK'''
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -126,6 +121,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "  if (!storage) return []"
 new = "  if (!storage) return []\n  void fetch('https://projection-mutation.invalid') // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -138,6 +134,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "    entry.cachedQuotaAccountId !== quotaAccountIdentity(entry.refreshToken)"
 new = "    entry.cachedQuotaAccountId === quotaAccountIdentity(entry.refreshToken) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -150,6 +147,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "    entry.cachedQuotaAccountId &&"
 new = "    (!entry.cachedQuotaAccountId || entry.cachedQuotaAccountId) && // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -162,6 +160,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "    rawCached as Parameters<typeof normalizeLegacyCachedQuota>[0],"
 new = "    undefined, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -176,6 +175,7 @@ old = '''  const cached = normalizeLegacyCachedQuota(
   )'''
 new = "  const cached = rawCached // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -188,6 +188,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "        ? Math.round(fraction * 100)"
 new = "        ? Math.round(fraction) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -200,6 +201,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "      if (Number.isFinite(parsed)) resetAt = parsed"
 new = "      if (Number.isFinite(parsed)) resetAt = undefined // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -212,6 +214,7 @@ file = "packages/opencode/src/plugin/command-data.ts"
 old = "  for (const key of SUPPORTED_QUOTA_KEYS) {"
 new = "  for (const key of SUPPORTED_QUOTA_KEYS.slice(0, 1)) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/command-data.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/command-data.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/command-data.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -224,6 +227,7 @@ file = "packages/opencode/src/plugin/storage.ts"
 old = "      status: 'migration-required',"
 new = "      status: 'initialization-required', // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/storage.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/storage.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/storage.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -236,6 +240,7 @@ file = "packages/core/src/account-migration.ts"
 old = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = value"
 new = "    if (key === 'activeIndex' || key === 'activeIndexByFamily') raw[key] = key === 'activeIndex' ? 0 : value // NON-VACUITY BREAK"
 test_file = "test/common-auth-010-store/migration-crash.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "test/common-auth-010-store/migration-crash.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate test/common-auth-010-store/migration-crash.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -248,6 +253,7 @@ file = "packages/pi/src/stream.ts"
 old = "        if (options?.apiKey !== placeholderKey)"
 new = "        if (options?.apiKey === placeholderKey) // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/pi/src/stream.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -260,6 +266,7 @@ file = "packages/opencode/src/plugin/gemini-dump.ts"
 old = "  writeFileSync(context.files.request, redactJsonBodyString(input.body), {"
 new = "  writeFileSync(context.files.request, input.body, { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/gemini-dump.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/gemini-dump.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/gemini-dump.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -280,6 +287,7 @@ new = '''    if (false && opening.status === 'migration-required') { // NON-VACU
       return finishLoad(provider)
     }'''
 test_file = "packages/opencode/src/plugin/auth-loader.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/auth-loader.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/auth-loader.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -292,6 +300,7 @@ file = "packages/core/src/model-registry.ts"
 old = "    getAgyNativeModel(route) === undefined"
 new = "    false // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -304,6 +313,7 @@ file = "packages/core/src/model-registry.ts"
 old = "    getAgyNativeModel(route) === undefined"
 new = "    false // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/pi/src/stream.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -316,6 +326,7 @@ file = "packages/core/src/model-registry.ts"
 old = "    getAgyNativeModel(route) === undefined"
 new = "    false // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/pi/src/stream.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -328,6 +339,7 @@ file = "packages/opencode/src/plugin/background-quota-refresh.ts"
 old = "    this.mayRun = options.mayRun"
 new = "    this.mayRun = undefined // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/background-vault-quota-refresh.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -340,6 +352,7 @@ file = "packages/opencode/src/plugin/background-vault-quota-refresh.ts"
 old = "        const at = quota?.cachedQuotaUpdatedAt"
 new = "        const at = now // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/background-vault-quota-refresh.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/background-vault-quota-refresh.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -354,6 +367,7 @@ old = '''      controller.abort(
       )'''
 new = "      void controller // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-quota-deadline.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-quota-deadline.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-quota-deadline.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -368,6 +382,7 @@ old = '''        transport: vaultQuotaTransport,
 new = '''        transport: dependencies.fetchImpl, // NON-VACUITY BREAK
         logger,'''
 test_file = "packages/opencode/src/plugin/vault-quota-deadline.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-quota-deadline.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-quota-deadline.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -381,6 +396,7 @@ file = "packages/core/src/transform/gemini.ts"
 old = "      if (value.every((item) => typeof item === 'string')) {"
 new = "      if (value.length >= 0) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -393,6 +409,7 @@ file = "packages/core/src/transform/gemini.ts"
 old = "    if (!ALLOWED_SCHEMA_FIELDS.has(key)) continue"
 new = "    if (false && !ALLOWED_SCHEMA_FIELDS.has(key)) continue // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -405,6 +422,7 @@ file = "packages/core/src/transform/gemini.ts"
 old = "        const bound = lower ? Math.floor(value) + 1 : Math.ceil(value) - 1"
 new = "        const bound = lower ? Math.floor(value) : Math.ceil(value) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -418,6 +436,7 @@ file = "packages/core/src/transform/gemini.ts"
 old = "  if (unambiguous) {"
 new = "  if (false && unambiguous) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -430,6 +449,7 @@ file = "packages/opencode/src/plugin/request-helpers.ts"
 old = "  return toGeminiSchema(result, { claudeValidated: true })"
 new = "  return toGeminiSchema(result, { claudeValidated: false }) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -449,6 +469,7 @@ new = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinking
       thinkingBudget: -1, // NON-VACUITY BREAK
       includeThoughts: true,'''
 test_file = "packages/core/src/transform/agy-generation.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/transform/agy-generation.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/transform/agy-generation.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -469,6 +490,7 @@ new = '''    // The 1.3.5 native-argon-low fixture observes LOW without thinking
       includeThoughts: true,
       thinkingLevel: 'HIGH', // NON-VACUITY BREAK'''
 test_file = "packages/core/src/transform/agy-generation.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/transform/agy-generation.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/transform/agy-generation.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -481,6 +503,7 @@ file = "packages/opencode/src/plugin/request.ts"
 old = "    isGeminiArgonModel(wireModel) ||"
 new = "    false || // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/request.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/request.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/request.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -493,6 +516,7 @@ file = "packages/pi/src/stream.ts"
 old = "  if (isGeminiArgonModel(wireModel)) {"
 new = "  if (false) { // NON-VACUITY BREAK"
 test_file = "packages/pi/src/stream.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/pi/src/stream.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/stream.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -505,6 +529,7 @@ file = "packages/core/src/model-registry.ts"
 old = '      /^gemini-3\.1-pro(?:-(?:low|high))?$/.test(route) ||'
 new = '      false || // NON-VACUITY BREAK'
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -517,6 +542,7 @@ file = "packages/opencode/src/plugin/request.ts"
 old = "      fingerprintHeaders['User-Agent'] || selectedHeaders['User-Agent'],"
 new = "      'GeminiCLI/retired', // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -529,6 +555,7 @@ file = "packages/opencode/src/plugin/request.ts"
 old = "  headers.delete('X-Goog-Api-Client')"
 new = "  // NON-VACUITY BREAK: retain the incoming API client header."
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -541,6 +568,7 @@ file = "packages/opencode/src/plugin/request.ts"
 old = "  headers.delete('Client-Metadata')"
 new = "  // NON-VACUITY BREAK: retain the incoming client metadata header."
 test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -553,6 +581,7 @@ file = "packages/opencode/src/sidebar-state.ts"
 old = "      if (version !== undefined && version > SIDEBAR_STATE_VERSION) {"
 new = "      if (false) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/sidebar-state.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/sidebar-state.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/sidebar-state.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -570,6 +599,7 @@ file = "packages/core/src/vault-folder-refusal.ts"
 old = "    return client[1]"
 new = "    return undefined // NON-VACUITY BREAK"
 test_file = "packages/core/src/vault-folder-refusal.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/vault-folder-refusal.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun test --isolate packages/core/src/vault-folder-refusal.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -582,6 +612,7 @@ file = "packages/core/src/vault-folder-refusal.ts"
 old = "  if (client?.[1] && client[2] && SHARED_FOLDER_REASON.test(client[2]))"
 new = "  if (client?.[1] && client[2]) // NON-VACUITY BREAK"
 test_file = "packages/core/src/vault-folder-refusal.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/vault-folder-refusal.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun test --isolate packages/core/src/vault-folder-refusal.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -594,6 +625,7 @@ file = "packages/pi/src/vault-setup.ts"
 old = "              return sharedFolderRefusal(error)"
 new = "              throw error // NON-VACUITY BREAK"
 test_file = "packages/pi/src/vault-setup.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/pi/src/vault-setup.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/pi/src/vault-setup.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -606,6 +638,7 @@ file = "packages/opencode/src/plugin/vault-custody.ts"
 old = "                    sharedVaultTokenFolderOutcome(error) ?? {"
 new = "                    undefined ?? { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-custody.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-custody.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-custody.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -618,6 +651,7 @@ file = "packages/opencode/src/plugin/vault-custody.ts"
 old = "                  watching = waitForApproval()"
 new = "                  watching = Promise.resolve(undefined) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-approval.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-approval.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-approval.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -630,6 +664,7 @@ file = "packages/opencode/src/plugin/vault-custody.ts"
 old = "        record: authority === 'vault' ? CUSTODY_MODE : LOCAL_MODE,"
 new = "        record: LOCAL_MODE, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-approval.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-approval.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-approval.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -642,6 +677,7 @@ file = "packages/opencode/src/plugin/vault-custody.ts"
 old = "                  ok: step.state === 'approved' || step.state === 'pending',"
 new = "                  ok: true, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-custody.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-custody.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-custody.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -654,6 +690,7 @@ file = "packages/opencode/src/plugin/vault-custody.ts"
 old = "            if (mode.ok && mode.record.mode === 'custody')"
 new = "            if (false && mode.ok && mode.record.mode === 'custody') // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/plugin/vault-custody.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/vault-custody.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-custody.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -666,6 +703,7 @@ file = "packages/opencode/src/setup.ts"
 old = "    : join(context.piAgentDir, 'auth.json')"
 new = "    : join(process.env.PI_AGENT_DIR!, 'auth.json') // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/setup-native-path.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/setup-native-path.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun scripts/prepare-common-auth-public-consumer.ts bun test --isolate packages/opencode/src/setup-native-path.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -685,6 +723,7 @@ new = '''            await (await import('./plugin/persist-account-pool')).persi
               request.startFresh && request.accounts.length === 0,
             )'''
 test_file = "packages/opencode/src/cli.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/cli.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/cli.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -697,6 +736,7 @@ file = "packages/opencode/src/plugin/ga-location-services.ts"
 old = '  const send = overrides.send'
 new = '  const send = undefined // NON-VACUITY BREAK'
 test_file = "packages/opencode/src/plugin/ga-location-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/ga-location-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -713,6 +753,7 @@ new = '''      {
         kind: undefined, // NON-VACUITY BREAK
         variant: job.variant ?? undefined,'''
 test_file = "packages/opencode/src/plugin/ga-location-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/ga-location-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -725,6 +766,7 @@ file = "packages/opencode/src/plugin/ga-location-services.ts"
 old = '        variant: job.variant ?? undefined,'
 new = '        variant: undefined, // NON-VACUITY BREAK'
 test_file = "packages/opencode/src/plugin/ga-location-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/ga-location-services.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/ga-location-services.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -737,15 +779,9 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "    variant:\n      event.model.variant === GA_HOST_DEFAULT_VARIANT\n        ? null\n        : (event.model.variant ?? null),"
 new = "    variant: event.model.variant ?? null, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/plugin.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/plugin.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/plugin.test.ts -t \"$1\"", "--", "{test}"]
-list_command = [
-  "bash",
-  "-c",
-  '''tmp=$(mktemp) && bun run --cwd packages/core build >/dev/null && bun test --isolate --reporter=junit --reporter-outfile "$tmp" packages/opencode/src/ga/server/plugin.test.ts -t "$1" >/dev/null 2>&1 && python3 -c 'import json,sys,xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]); print(json.dumps([" ".join((case.attrib.get("classname", ""), case.attrib.get("name", ""))).strip() for case in root.iter("testcase") if case.find("skipped") is None]))' "$tmp"; result=$?; rm -f "$tmp"; exit "$result"''',
-  "--",
-  "{test}",
-]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^hook\sbodies\snormalizes\sthe\snative\sdefault\svariant\sbefore\screating\sa\sGA\sbridge\sjob$']
 
@@ -762,6 +798,7 @@ new = '''  } catch (error) {
     throw error
   }'''
 test_file = "packages/opencode/src/plugin/server.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/server.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/server.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -774,6 +811,16 @@ file = "packages/core/src/antigravity/oauth.ts"
 old = "if (e instanceof ExchangeAdmissionError) throw e"
 new = "// NON-VACUITY BREAK: allow project discovery to suppress admission refusal."
 test_file = "packages/core/src/antigravity/oauth.test.ts"
+# Bun's JUnit listing flattens nested describes with spaces, while this selector retains " > ".
+list_command = [
+  "bash",
+  "-c",
+  '''set -o pipefail
+selector="${1//\\s>\\s/\\s}"
+bun scripts/list-bun-tests.mjs --cwd . packages/core/src/antigravity/oauth.test.ts -t "$selector" | python3 -c 'import json,sys; print(json.dumps([name.replace("Antigravity OAuth exchangeAntigravity ", "Antigravity OAuth > exchangeAntigravity > ") for name in json.load(sys.stdin)]))' ''',
+  "--",
+  "{test}",
+]
 runner = "command"
 command = ["bash", "-c", "selector=\"${1//\\\\s/ }\"; selector=\"${selector##* > }\"; selector=\"${selector#^}\"; selector=\"${selector%$}\"; bun run --cwd packages/core build && bun test --isolate packages/core/src/antigravity/oauth.test.ts -t \"$selector\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -786,6 +833,7 @@ file = "packages/opencode/src/plugin/ga-location-services.ts"
 old = "              if (job.kind !== 'title') {"
 new = "              if (false) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/ownership-source.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -798,6 +846,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "      state.claimed = true"
 new = "      state.claimed = true\n      setTimeout(() => release(state), GA_UNCLAIMED_JOB_TTL_MS).unref?.() // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/stream-lifetime.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -810,6 +859,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "          await Promise.allSettled([...reads])"
 new = "          // NON-VACUITY BREAK: skip running reader cleanup"
 test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/stream-lifetime.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -822,6 +872,7 @@ file = "packages/opencode/src/plugin/ga-location-services.ts"
 old = "              if (job.kind !== 'title') {"
 new = "              if (false) { // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/ownership-source.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -834,6 +885,7 @@ file = "packages/opencode/src/ga/server/index.ts"
 old = "            if (state) release(state, !state.claimed)"
 new = "            if (state) release(state) // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/ga/server/stream-lifetime.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/stream-lifetime.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/stream-lifetime.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -846,6 +898,7 @@ file = "packages/opencode/src/quota-presentation.ts"
 old = "    resetSinceReading: part.resetSinceReading,"
 new = "    resetSinceReading: false, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/tui-narrow-frames.test.tsx"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/tui-narrow-frames.test.tsx", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/tui-narrow-frames.test.tsx -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
@@ -863,18 +916,7 @@ new = '''function validateApplyOutput(value: unknown, issues: Issues): void {
   const path: Path = []
   // NON-VACUITY BREAK: skip JSON-safe validation for apply output.'''
 test_file = "packages/opencode/src/ga/rpc/protocol.test.ts"
-list_command = [
-  "bash",
-  "-c",
-  '''set -e
-report=$(mktemp)
-trap 'rm -f "$report"' EXIT
-bun run --cwd packages/core build >/dev/null
-bun test --isolate packages/opencode/src/ga/rpc/protocol.test.ts -t "$1" --reporter=junit --reporter-outfile="$report" >/dev/null 2>&1
-python3 -c 'import json,sys,xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); print(json.dumps([case.attrib.get("classname", "") + " " + case.attrib.get("name", "") for case in root.iter("testcase")]))' "$report"''',
-  "--",
-  "{test}",
-]
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/rpc/protocol.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/rpc/protocol.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
