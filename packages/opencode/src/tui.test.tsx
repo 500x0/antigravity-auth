@@ -283,11 +283,13 @@ describe('SidebarPanel', () => {
     const frame = testSetup.captureCharFrame()
     expect(frame).toContain('Primary')
     expect(frame).toContain('Backup')
-    expect(frame).toContain('health')
-    expect(frame).toContain('cooling')
-    expect(frame).toContain('Gm')
-    expect(frame).toContain('NG')
-    expect(frame).not.toContain('Gemini')
+    // The routing health score is no longer drawn; the cooldown wait moved
+    // onto the account line next to its status word.
+    expect(frame).not.toContain('health')
+    expect(frame).toMatch(/\bcooling \d+m\b/)
+    expect(frame).toContain('Gemini')
+    expect(frame).toContain('Other models')
+    expect(frame).not.toMatch(/\bGm\b|\bNG\b/)
     expect(frame).not.toContain('Non-Gemini')
     expect(frame).toContain('75% left')
     expect(frame).toContain('10% left')
@@ -751,10 +753,13 @@ describe('SidebarPanel collapse/expand + compact row', () => {
     )
     await testSetup.flush()
     const frame = testSetup.captureCharFrame()
-    // Compact row: active account + both quota pools (Gm · NG) + filled dot.
+    // Compact row: active account, the lowest current window with its plain
+    // group name, and the filled dot. The collapsed row now names one
+    // binding figure rather than every group, so it fits a narrow sidebar.
     expect(frame).toContain('Primary')
-    expect(frame).toContain('Gm 30% left')
-    expect(frame).toContain('NG 75% left')
+    expect(frame).toContain('Gemini 30% left')
+    expect(frame).not.toContain('75% left')
+    expect(frame).not.toMatch(/\bGm\b|\bNG\b/)
     expect(frame).toContain('●')
     // Header indicator is the collapsed glyph.
     expect(frame).toContain('▶')
@@ -834,7 +839,7 @@ describe('SidebarPanel collapse/expand + compact row', () => {
     )
     await testSetup.flush()
     const expandedFrame = testSetup.captureCharFrame()
-    expect(expandedFrame).toContain('Gm')
+    expect(expandedFrame).toContain('Gemini')
     expect(expandedFrame).not.toContain('▶')
 
     // External edit flips collapsed -> true. The watcher's debounce + poll
@@ -847,8 +852,8 @@ describe('SidebarPanel collapse/expand + compact row', () => {
     await testSetup.flush()
     const collapsedFrame = testSetup.captureCharFrame()
     expect(collapsedFrame).toContain('▶')
-    expect(collapsedFrame).toContain('Gm 30% left')
-    expect(collapsedFrame).toContain('NG 75% left')
+    expect(collapsedFrame).toContain('Gemini 30% left')
+    expect(collapsedFrame).not.toContain('75% left')
     testSetup.renderer.destroy()
   })
 

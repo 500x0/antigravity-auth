@@ -13,16 +13,18 @@
  * score, and per-session routing decisions), so the fleet components are
  * adapted rather than copied verbatim:
  *
- * - `QuotaRow` reads `remainingPercent + resetAt` from the Antigravity
+ * - `WindowRow` reads `remainingPercent + resetAt` from the Antigravity
  *   `SidebarQuotaEntry` shape and colors via `quotaTone` (remaining
- *   threshold) instead of `usageTone` (used threshold).
+ *   threshold) instead of `usageTone` (used threshold). Each window is one
+ *   line sized from the measured sidebar width.
  * - `AccountBlock` derives its status word (`active` / `idle` /
- *   `cooling` / `off` / `blocked`) from the Antigravity account state and
- *   surfaces health as a muted secondary line rather than a top-level
- *   bar — fleet parity for "Quota first, health second".
- * - `Routing` resolves to a single `Route` `StatRow` carrying the most
- *   recent `activeRouting` entry, since Antigravity does not maintain a
- *   per-session sidebar state alongside the slot-rendered tree.
+ *   `cooling` / `off`) from the Antigravity account state, shows the
+ *   reading age once per account, and groups windows under `Gemini` and
+ *   `Other models` headers. The routing health score is not shown.
+ * - `Routing` shows the mounted session's most recent `activeRouting`
+ *   entry, or `No request yet` before the session's first request, since
+ *   Antigravity does not maintain a per-session sidebar state alongside the
+ *   slot-rendered tree.
  *
  * Hard rules for this file:
  *
@@ -45,12 +47,17 @@ import type {
 } from '@opencode-ai/plugin/tui'
 import { createSlot } from '@opentui/solid'
 import { createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js'
-import { formatQuotaReading, quotaReadingParts } from './quota-presentation'
+import {
+  NO_QUOTA_READING,
+  type QuotaReading,
+  type QuotaWindowText,
+  quotaReadingAge,
+  quotaWindowText,
+} from './quota-presentation'
 import { getRpcDir } from './rpc/rpc-dir'
 import {
   readSidebarState,
   type SidebarAccountState,
-  type SidebarQuotaEntry,
   type SidebarQuotaKey,
   type SidebarStateV1,
 } from './sidebar-state'
@@ -121,17 +128,35 @@ let rpcInFlight = false
 const GLOBAL_NOTIFICATION_CURSOR = '__global__'
 const MAX_NOTIFICATION_CURSORS = 256
 
-const QUOTA_LABELS: Record<SidebarQuotaKey, string> = {
-  gemini: 'Gm',
-  'non-gemini': 'NG',
+// Group headers name each quota pool in plain words.
+const GROUP_NAMES: Record<SidebarQuotaKey, string> = {
+  gemini: 'Gemini',
+  'non-gemini': 'Other models',
+}
+
+// The collapsed row has room for one word before the window name.
+const COLLAPSED_GROUP_NAMES: Record<SidebarQuotaKey, string> = {
+  gemini: 'Gemini',
+  'non-gemini': 'Other',
 }
 
 const QUOTA_ORDER: readonly SidebarQuotaKey[] = ['gemini', 'non-gemini']
 
-const WINDOW_GUTTER: Record<string, string> = {
-  weekly: '7d',
-  '5h': '5h',
-}
+// Shown instead of a stored figure once the window has reset since it was
+// read: the stored figure describes the window before the reset.
+const RESET_SINCE_READING = 'reset since last check'
+
+// Content width (the panel's width inside its padding) used until the first
+// layout pass reports the real one. It fits the narrowest OpenCode sidebar.
+const ASSUMED_CONTENT_WIDTH = 28
+
+// A window row is `<name> <bar> <figure> <reset>`. The bar shrinks to this
+// before the reset column is dropped; below it the bar is dropped too.
+const MIN_BAR_WIDTH = 4
+// The widest figure the formatter writes: `100% left`.
+const FIGURE_WIDTH = 9
+// A window name (`5h`, `7d`) and the space after it.
+const NAME_WIDTH = 3
 
 // --- Theme tokens ----------------------------------------------------------
 //
@@ -238,9 +263,9 @@ interface BarSegment {
 
 function quotaBarSegments(
   remainingPct: number,
+  width: number,
   appearance: AppearancePrefs,
 ): BarSegment[] {
-  const width = appearance.barWidth
   const usedCells = Math.max(
     0,
     Math.min(Math.round((remainingPct / 100) * width), width),
@@ -397,12 +422,6 @@ function getSidebarController(): SidebarController {
 
 // --- Shared helpers (fleet shape, antigravity data) ------------------------
 
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) return min
-  if (value > max) return max
-  return value
-}
-
 // Render a "reset in Nm/Nh/NdNh" string from an epoch-ms reset time.
 // Empty string when no resetAt is cached. The fleet's `formatResetIn`
 // reads ISO strings; Antigravity persists resetAt as a numeric epoch, so
@@ -468,11 +487,9 @@ function StatRow(props: {
   )
 }
 
-// Fleet CollapsedRow: muted label left, caller-supplied value right. Used
-// for the collapsed sidebar view; the Antigravity adapter renders one
-// CollapsedRow per visible account (Claude's sibling collapses to a
-// single primary-quota line, but Antigravity's multi-quota model fits a
-// per-account row better when the sidebar is collapsed).
+// Fleet CollapsedRow: muted label left, caller-supplied value right. The
+// collapsed view renders one for the active account. The caller sizes both
+// sides to the measured width, so neither side may wrap.
 function CollapsedRow(props: {
   theme: () => Theme
   label: string
@@ -480,77 +497,172 @@ function CollapsedRow(props: {
 }): JSX.Element {
   return (
     <box width='100%' flexDirection='row' justifyContent='space-between'>
-      <text fg={props.theme().textMuted}>{props.label}</text>
+      <text flexShrink={0} wrapMode='none' fg={props.theme().textMuted}>
+        {props.label}
+      </text>
       {props.children}
     </box>
   )
 }
 
-// The bar fills with remaining quota. The shared formatter supplies the
-// figure, reset and reading age; the right column aligns reset and age text.
-function QuotaRow(props: {
+// --- Width-fitted quota rows ------------------------------------------------
+//
+// The OpenCode 1 sidebar is about 32 to 48 columns wide. Every quota line is
+// sized from the measured content width so that it fits on one line: text is
+// never left to the renderer's wrapping, which breaks a row mid-word or down
+// to one character per line once the right-hand column runs out of room.
+
+interface AccountWindow {
+  key: SidebarQuotaKey
+  reading: QuotaReading
+  text: QuotaWindowText
+}
+
+// One entry per stored window, in group order. A pool stored before
+// per-window readings existed contributes one window without a name.
+function accountWindows(
+  account: SidebarAccountState,
+  now: number,
+): AccountWindow[] {
+  const result: AccountWindow[] = []
+  for (const key of QUOTA_ORDER) {
+    const entry = account.quota[key]
+    if (!entry) continue
+    const readings: QuotaReading[] =
+      entry.windows && entry.windows.length > 0
+        ? entry.windows.map((window) => ({
+            window: window.window,
+            remainingPercent: window.remainingPercent,
+            resetAt: window.resetAt,
+            checkedAt: window.checkedAt,
+          }))
+        : [
+            {
+              remainingPercent: entry.remainingPercent,
+              resetAt: entry.resetAt,
+              checkedAt: entry.checkedAt,
+            },
+          ]
+    for (const reading of readings)
+      result.push({ key, reading, text: quotaWindowText(reading, now) })
+  }
+  return result
+}
+
+// A window shows its figure only while no reset has happened since it was
+// read and it has a read time at all.
+function showsFigure(window: AccountWindow): boolean {
+  return window.text.remaining != null && !window.text.resetSinceReading
+}
+
+interface WindowRowLayout {
+  bar: number
+  reset: boolean
+}
+
+// Column widths for one `<name> <bar> <figure> <reset>` row within `width`
+// cells. The bar shrinks first, down to MIN_BAR_WIDTH; then the reset column
+// is dropped; then the bar.
+function windowRowLayout(
+  width: number,
+  named: boolean,
+  resetWidth: number,
+  maxBar: number,
+): WindowRowLayout {
+  const room = width - (named ? NAME_WIDTH : 0) - FIGURE_WIDTH
+  if (resetWidth > 0) {
+    const bar = Math.min(maxBar, room - resetWidth - 2)
+    if (bar >= MIN_BAR_WIDTH) return { bar, reset: true }
+  }
+  const bar = Math.min(maxBar, room - 1)
+  return { bar: bar >= MIN_BAR_WIDTH ? bar : 0, reset: false }
+}
+
+// Shorten a label to `max` cells, marking the cut with an ellipsis.
+function fitLabel(label: string, max: number): string {
+  if (label.length <= max) return label
+  if (max <= 0) return ''
+  if (max === 1) return '…'
+  return `${label.slice(0, max - 1)}…`
+}
+
+// One quota window on one line. The bar fills with remaining quota; the
+// figure and reset come from the shared formatter. A window that reset since
+// its reading shows that fact, dim, in place of the stale figure.
+function WindowRow(props: {
   theme: () => Theme
   appearance: AppearancePrefs
-  label: string
-  entry: SidebarQuotaEntry | undefined
-  now: () => number
+  window: AccountWindow
+  layout: WindowRowLayout
 }): JSX.Element {
-  const parts = () => quotaReadingParts(props.label, props.entry, props.now())
-  const remaining = () => parts().remaining
-  const reset = () => parts().detail
+  const text = () => props.window.text
+  const tone = () => quotaTone(100 - (text().remaining ?? 0), props.appearance)
   return (
-    <Show
-      when={remaining() != null}
-      fallback={
-        <box width='100%' flexDirection='row' justifyContent='space-between'>
-          <text fg={props.theme().textMuted}>{props.label.padEnd(5)}</text>
-          <text fg={props.theme().textMuted}>{parts().figure}</text>
-        </box>
-      }
-    >
-      <box width='100%' flexDirection='row' justifyContent='space-between'>
-        <box flexDirection='row'>
-          <text width={5} flexShrink={0} fg={props.theme().textMuted}>
-            {props.label}
+    <box width='100%' flexDirection='row'>
+      <Show when={text().name !== ''}>
+        <text
+          width={NAME_WIDTH}
+          flexShrink={0}
+          wrapMode='none'
+          fg={props.theme().textMuted}
+        >
+          {text().name}
+        </text>
+      </Show>
+      <Show
+        when={showsFigure(props.window)}
+        fallback={
+          <text flexShrink={1} wrapMode='none' fg={props.theme().textMuted}>
+            {text().resetSinceReading ? RESET_SINCE_READING : text().figure}
           </text>
-          <box
-            width={props.appearance.barWidth}
-            flexShrink={0}
-            flexDirection='row'
-          >
-            <For each={quotaBarSegments(remaining() ?? 0, props.appearance)}>
+        }
+      >
+        <Show when={props.layout.bar > 0}>
+          <box width={props.layout.bar + 1} flexShrink={0} flexDirection='row'>
+            <For
+              each={quotaBarSegments(
+                text().remaining ?? 0,
+                props.layout.bar,
+                props.appearance,
+              )}
+            >
               {(segment) => (
-                <text fg={toneColor(props.theme(), segment.tone)}>
+                <text
+                  wrapMode='none'
+                  fg={toneColor(props.theme(), segment.tone)}
+                >
                   {segment.text}
                 </text>
               )}
             </For>
           </box>
-          <text
-            fg={toneColor(
-              props.theme(),
-              quotaTone(100 - (remaining() ?? 0), props.appearance),
-            )}
-          >
-            {` ${parts().figure}`}
-          </text>
-        </box>
-        <Show when={reset()}>
-          <text fg={props.theme().textMuted}>{reset()}</text>
         </Show>
-      </box>
-    </Show>
+        <text
+          flexShrink={0}
+          wrapMode='none'
+          fg={toneColor(props.theme(), tone())}
+        >
+          {text().figure}
+        </text>
+        <box flexGrow={1} />
+        <Show when={props.layout.reset && text().reset !== ''}>
+          <text flexShrink={0} wrapMode='none' fg={props.theme().textMuted}>
+            {text().reset}
+          </text>
+        </Show>
+      </Show>
+    </box>
   )
 }
 
-// Fleet AccountBlock, adapted to Antigravity's per-account data. Header
-// row is account label (left) + status word (right). The body renders one
-// QuotaRow per present quota group in the fleet's stable order, then a
-// muted secondary line with the account's health score and, when
-// relevant, a cooldown countdown. Status word priorities (first match
-// wins):
+// Fleet AccountBlock, adapted to Antigravity's per-account data. The header
+// line is the account label, the reading age when the oldest reading is
+// stale, and the status word right-aligned; the age moves to its own dim
+// line when the three do not fit. Below it each quota group present gets a
+// plain-word header and one WindowRow per window. Status word priorities
+// (first match wins):
 //   - `off` when the account is disabled
-//   - `cooling` when cooldownUntil is still in the future
+//   - `cooling <wait>` when cooldownUntil is still in the future
 //   - `active` when current === true
 //   - `idle` for the fallback (current === false) case
 function AccountBlock(props: {
@@ -558,84 +670,155 @@ function AccountBlock(props: {
   appearance: AppearancePrefs
   account: SidebarAccountState
   now: () => number
+  width: () => number
   active?: boolean
   marginTop?: number
 }): JSX.Element {
   const active = () => props.active ?? props.account.current
-  const statusWord = (): string => {
-    if (!props.account.enabled) return 'off'
-    const cd = props.account.cooldownUntil
-    if (typeof cd === 'number' && cd > props.now()) return 'cooling'
-    return active() ? 'active' : 'idle'
-  }
-  const statusTone = (): Tone => {
-    if (!props.account.enabled) return 'muted'
-    const cd = props.account.cooldownUntil
-    if (typeof cd === 'number' && cd > props.now()) return 'warn'
-    return active() ? 'ok' : 'muted'
-  }
   const cooldownMs = (): number => {
     const cd = props.account.cooldownUntil
     if (typeof cd !== 'number') return 0
     return Math.max(0, cd - props.now())
   }
-  const healthText = () => {
-    const base = `health ${Math.round(clamp(props.account.health, 0, 100))}`
-    return cooldownMs() > 0
-      ? `${base} · cooling ${formatWait(cooldownMs())}`
-      : base
+  const statusWord = (): string => {
+    if (!props.account.enabled) return 'off'
+    if (cooldownMs() > 0) return `cooling ${formatWait(cooldownMs())}`
+    return active() ? 'active' : 'idle'
   }
+  const statusTone = (): Tone => {
+    if (!props.account.enabled) return 'muted'
+    if (cooldownMs() > 0) return 'warn'
+    return active() ? 'ok' : 'muted'
+  }
+  const windows = () => accountWindows(props.account, props.now())
+  const age = () =>
+    quotaReadingAge(
+      windows().map((window) => window.reading),
+      props.now(),
+    )
+  const ageInline = () =>
+    age() !== '' &&
+    props.account.label.length + 3 + age().length + 1 + statusWord().length <=
+      props.width()
+  const label = () =>
+    fitLabel(props.account.label, props.width() - 1 - statusWord().length)
+  // One reset column width per account, so bars line up across its rows.
+  const resetWidth = () =>
+    Math.max(
+      0,
+      ...windows()
+        .filter(showsFigure)
+        .map((window) => window.text.reset.length),
+    )
+  const layoutFor = (window: AccountWindow) =>
+    windowRowLayout(
+      props.width(),
+      window.text.name !== '',
+      resetWidth(),
+      props.appearance.barWidth,
+    )
+  const groups = () =>
+    QUOTA_ORDER.map((key) => ({
+      key,
+      windows: windows().filter((window) => window.key === key),
+    })).filter((group) => group.windows.length > 0)
   return (
     <box width='100%' flexDirection='column' marginTop={props.marginTop ?? 0}>
-      <box width='100%' flexDirection='row' justifyContent='space-between'>
-        <text fg={props.theme().text}>
-          <b>{props.account.label}</b>
+      <box width='100%' flexDirection='row'>
+        <text flexShrink={0} wrapMode='none' fg={props.theme().text}>
+          <b>{label()}</b>
         </text>
-        <text fg={toneColor(props.theme(), statusTone())}>
+        <Show when={ageInline()}>
+          <text flexShrink={0} wrapMode='none' fg={props.theme().textMuted}>
+            {` · ${age()}`}
+          </text>
+        </Show>
+        <box flexGrow={1} />
+        <text
+          flexShrink={0}
+          wrapMode='none'
+          fg={toneColor(props.theme(), statusTone())}
+        >
           <b>{statusWord()}</b>
         </text>
       </box>
-      <For each={QUOTA_ORDER}>
-        {(key) => {
-          const poolEntry = props.account.quota[key]
-          const windows = poolEntry?.windows
-          // Legacy: no windows array — render a single row with the pool label.
-          const hasWindows = windows && windows.length > 0
-          if (!hasWindows) {
-            return (
-              <QuotaRow
-                theme={props.theme}
-                appearance={props.appearance}
-                label={QUOTA_LABELS[key]}
-                entry={poolEntry}
-                now={props.now}
-              />
-            )
-          }
-          return (
+      <Show when={age() !== '' && !ageInline()}>
+        <text wrapMode='none' fg={props.theme().textMuted}>
+          {age()}
+        </text>
+      </Show>
+      <Show
+        when={groups().length > 0}
+        fallback={
+          <text wrapMode='none' fg={props.theme().textMuted}>
+            {NO_QUOTA_READING}
+          </text>
+        }
+      >
+        <For each={groups()}>
+          {(group) => (
             <>
-              {windows.map((w) => (
-                <QuotaRow
-                  theme={props.theme}
-                  appearance={props.appearance}
-                  label={`${QUOTA_LABELS[key]} ${WINDOW_GUTTER[w.window] ?? w.window}`}
-                  entry={{
-                    remainingPercent: w.remainingPercent,
-                    resetAt: w.resetAt,
-                    checkedAt: w.checkedAt,
-                  }}
-                  now={props.now}
-                />
-              ))}
+              <text wrapMode='none' fg={props.theme().textMuted}>
+                {GROUP_NAMES[group.key]}
+              </text>
+              <For each={group.windows}>
+                {(window) => (
+                  <WindowRow
+                    theme={props.theme}
+                    appearance={props.appearance}
+                    window={window}
+                    layout={layoutFor(window)}
+                  />
+                )}
+              </For>
             </>
-          )
-        }}
-      </For>
-      <box width='100%' flexDirection='row'>
-        <text fg={props.theme().textMuted}>{`   ${healthText()}`}</text>
-      </box>
+          )}
+        </For>
+      </Show>
     </box>
   )
+}
+
+interface CollapsedQuota {
+  // The group and window of the figure (`Other 7d `), dropped when narrow.
+  prefix: string
+  text: string
+  remaining: number | null
+}
+
+// The collapsed row's figure: the lowest current window across both groups.
+// A window that reset since its reading is not current and never binds.
+function collapsedQuota(
+  account: SidebarAccountState,
+  now: number,
+): CollapsedQuota {
+  if (account.quota.gemini == null && account.quota['non-gemini'] == null)
+    return { prefix: '', text: '—', remaining: null }
+  const windows = accountWindows(account, now)
+  let lowest: AccountWindow | undefined
+  for (const window of windows) {
+    if (!showsFigure(window)) continue
+    if (
+      lowest === undefined ||
+      (window.text.remaining ?? 100) < (lowest.text.remaining ?? 100)
+    )
+      lowest = window
+  }
+  if (lowest) {
+    const name = lowest.text.name
+    return {
+      prefix: `${COLLAPSED_GROUP_NAMES[lowest.key]}${name ? ` ${name}` : ''} `,
+      text: lowest.text.figure,
+      remaining: lowest.text.remaining,
+    }
+  }
+  return {
+    prefix: '',
+    text: windows.some((window) => window.text.resetSinceReading)
+      ? RESET_SINCE_READING
+      : NO_QUOTA_READING,
+    remaining: null,
+  }
 }
 
 function formatWait(ms: number): string {
@@ -723,6 +906,36 @@ export function SidebarPanel(props: SidebarPanelProps): JSX.Element {
     }
   }
 
+  // The route on one `Route <value>` line when it fits, else one line per
+  // part with the strategy last.
+  const routeValue = (route: {
+    strategy?: string
+    family: string
+    style: string
+  }): string =>
+    `${route.strategy ? `${route.strategy} · ` : ''}${route.family}: ${route.style}`
+  const routeLines = (route: {
+    strategy?: string
+    family: string
+    style: string
+  }): string[] =>
+    [`${route.family}: ${route.style}`, route.strategy ?? ''].filter(
+      (line) => line !== '',
+    )
+
+  // The width available to content: the header row spans the panel inside
+  // its border and padding. Layout reports it during a render pass, so the
+  // signal is updated afterwards rather than rebuilding rows mid-pass.
+  const [contentWidth, setContentWidth] = createSignal(ASSUMED_CONTENT_WIDTH)
+  let headerRow: { width: number } | undefined
+  const measureContentWidth = (): void => {
+    const width = headerRow?.width
+    if (typeof width !== 'number' || width <= 0) return
+    queueMicrotask(() => {
+      if (width !== contentWidth()) setContentWidth(width)
+    })
+  }
+
   // Header badge: ▼/▶ {label}. The fleet shows the version string on the
   // right when no degraded state is present; the antigravity adapter keeps
   // that right-alignment and surfaces `degraded` as a "LIMITED" badge
@@ -745,6 +958,10 @@ export function SidebarPanel(props: SidebarPanelProps): JSX.Element {
     >
       {/* biome-ignore lint/a11y/noStaticElementInteractions: opentui renders to a terminal, not the DOM — ARIA roles do not apply */}
       <box
+        ref={(element) => {
+          headerRow = element
+        }}
+        onSizeChange={measureContentWidth}
         width='100%'
         flexDirection='row'
         justifyContent='space-between'
@@ -781,48 +998,12 @@ export function SidebarPanel(props: SidebarPanelProps): JSX.Element {
         </Show>
       </box>
 
-      {/* Collapsed: the active account's primary quota and fleet status dot. */}
+      {/* Collapsed: the active account's lowest current figure and fleet status dot. */}
       <Show when={collapsed() && hasData()}>
         {(() => {
           const account = () =>
             visibleAccounts().find((entry) => entry.current) ??
             visibleAccounts()[0]
-          const remaining = () => {
-            const q = account()?.quota
-            // The lowest remaining percentage among dated readings determines the warning tone.
-            const gemini = quotaReadingParts('Gm', q?.gemini, now()).remaining
-            const nonGemini = quotaReadingParts(
-              'NG',
-              q?.['non-gemini'],
-              now(),
-            ).remaining
-            if (gemini === null && nonGemini === null) return null
-            return Math.min(gemini ?? 100, nonGemini ?? 100)
-          }
-          const poolText = (key: 'gemini' | 'non-gemini') => {
-            const entry = account()?.quota[key]
-            if (!entry)
-              return `${QUOTA_LABELS[key]}: ${formatQuotaReading(QUOTA_LABELS[key], undefined, now())}`
-            // Show binding window when available, else just pool label.
-            const bindingWindow = entry.windows?.reduce<
-              (typeof entry.windows)[0] | null
-            >(
-              (best, w) =>
-                best === null || w.remainingPercent < best.remainingPercent
-                  ? w
-                  : best,
-              null,
-            )
-            const gutter = bindingWindow
-              ? ` ${WINDOW_GUTTER[bindingWindow.window] ?? bindingWindow.window}`
-              : ''
-            const text = formatQuotaReading(
-              `${QUOTA_LABELS[key]}${gutter}`,
-              bindingWindow ?? entry,
-              now(),
-            )
-            return bindingWindow ? `${QUOTA_LABELS[key]} ${text}` : text
-          }
           const unavailable = () => {
             const selected = account()
             return (
@@ -834,45 +1015,50 @@ export function SidebarPanel(props: SidebarPanelProps): JSX.Element {
           }
           return (
             <Show when={account()}>
-              {(selected) => (
-                <CollapsedRow theme={theme} label={selected().label}>
-                  <box flexDirection='row'>
-                    <text
-                      fg={toneColor(
-                        theme(),
-                        remaining() == null
-                          ? 'muted'
-                          : quotaTone(
-                              100 - (remaining() ?? 100),
-                              prefs().appearance,
-                            ),
-                      )}
-                    >
-                      <b>
-                        {account()?.quota.gemini == null &&
-                        account()?.quota['non-gemini'] == null
-                          ? '—'
-                          : `${poolText('gemini')} · ${poolText('non-gemini')}`}
-                      </b>
-                    </text>
-                    <text
-                      fg={toneColor(
-                        theme(),
-                        unavailable()
-                          ? 'err'
-                          : remaining() == null
-                            ? 'muted'
-                            : quotaTone(
-                                100 - (remaining() ?? 100),
-                                prefs().appearance,
-                              ),
-                      )}
-                    >
-                      {unavailable() ? ' ⊘' : ' ●'}
-                    </text>
-                  </box>
-                </CollapsedRow>
-              )}
+              {(selected) => {
+                const quota = () => collapsedQuota(selected(), now())
+                const tone = (): Tone => {
+                  const remaining = quota().remaining
+                  return remaining == null
+                    ? 'muted'
+                    : quotaTone(100 - remaining, prefs().appearance)
+                }
+                // Label, one space, the figure and the two-cell dot. The
+                // group prefix goes first when narrow; then the label is cut.
+                const figure = () => {
+                  const { prefix, text } = quota()
+                  const full = `${prefix}${text}`
+                  return selected().label.length + 1 + full.length + 2 <=
+                    contentWidth()
+                    ? full
+                    : text
+                }
+                const label = () =>
+                  fitLabel(
+                    selected().label,
+                    contentWidth() - 1 - figure().length - 2,
+                  )
+                return (
+                  <CollapsedRow theme={theme} label={label()}>
+                    <box flexDirection='row' flexShrink={0}>
+                      <text
+                        flexShrink={0}
+                        wrapMode='none'
+                        fg={toneColor(theme(), tone())}
+                      >
+                        <b>{figure()}</b>
+                      </text>
+                      <text
+                        flexShrink={0}
+                        wrapMode='none'
+                        fg={toneColor(theme(), unavailable() ? 'err' : tone())}
+                      >
+                        {unavailable() ? ' ⊘' : ' ●'}
+                      </text>
+                    </box>
+                  </CollapsedRow>
+                )
+              }}
             </Show>
           )
         })()}
@@ -899,28 +1085,47 @@ export function SidebarPanel(props: SidebarPanelProps): JSX.Element {
                   appearance={prefs().appearance}
                   account={account}
                   now={now}
+                  width={contentWidth}
                   marginTop={index() === 0 ? 0 : 1}
                 />
               )}
             </For>
           </Show>
 
-          {/* Routing */}
+          {/* Routing: the session's route, or one dim line before its first request. */}
           <Show when={prefs().sections.routing}>
             <SectionHeader theme={theme} title='Routing' />
             <Show
               when={currentRoute()}
               fallback={
-                <StatRow theme={theme} label='Route' value='—' tone='muted' />
+                <text wrapMode='none' fg={theme().textMuted}>
+                  {'No request yet'}
+                </text>
               }
             >
               {(route) => (
-                <StatRow
-                  theme={theme}
-                  label='Route'
-                  value={`${route().strategy ? `${route().strategy} · ` : ''}${route().family}: ${route().style}`}
-                  tone='accent'
-                />
+                <Show
+                  when={
+                    'Route'.length + 1 + routeValue(route()).length <=
+                    contentWidth()
+                  }
+                  fallback={
+                    <For each={routeLines(route())}>
+                      {(line) => (
+                        <text wrapMode='none' fg={toneColor(theme(), 'accent')}>
+                          <b>{line}</b>
+                        </text>
+                      )}
+                    </For>
+                  }
+                >
+                  <StatRow
+                    theme={theme}
+                    label='Route'
+                    value={routeValue(route())}
+                    tone='accent'
+                  />
+                </Show>
               )}
             </Show>
           </Show>

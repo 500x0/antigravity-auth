@@ -181,20 +181,22 @@ describe('windows rework — reviewer frames', () => {
     const frame = testSetup.captureCharFrame()
     console.log(`\n${dumpFrame('(a) Pro Account frame', frame)}`)
     expect(frame).toContain('Pro Account')
-    expect(frame).toContain('Gm')
-    expect(frame).toContain('NG')
-    expect(frame).toContain('7d')
-    expect(frame).toContain('5h')
-    expect(frame).toContain('Gm 7d')
-    expect(frame).toContain('Gm 5h')
-    expect(frame).toContain('NG 7d')
-    expect(frame).toContain('NG 5h')
+    // Windows sit under plain-word group headers, named by length; the
+    // former `Gm 7d` / `NG 5h` row labels are gone.
+    expect(frame).not.toMatch(/\bGm\b|\bNG\b/)
+    const lines = frame.split('\n').map((line) => line.trim())
+    const gemini = lines.indexOf('Gemini')
+    const other = lines.indexOf('Other models')
+    expect(gemini).toBeGreaterThan(-1)
+    expect(other).toBeGreaterThan(gemini)
     // Window order: aggregator now sorts shortest-first so 5h must
     // render before 7d. The fixture carries windows in [5h, weekly]
     // order (matching aggregateQuotaSummary output) and the renderer
     // preserves input order, so the assertion is deterministic.
-    expect(frame.indexOf('Gm 5h')).toBeLessThan(frame.indexOf('Gm 7d'))
-    expect(frame.indexOf('NG 5h')).toBeLessThan(frame.indexOf('NG 7d'))
+    expect(lines[gemini + 1]).toMatch(/^5h .*99% left/)
+    expect(lines[gemini + 2]).toMatch(/^7d .*92% left/)
+    expect(lines[other + 1]).toMatch(/^5h .*96% left/)
+    expect(lines[other + 2]).toMatch(/^7d .*99% left/)
     testSetup.renderer.destroy()
   })
 
@@ -249,13 +251,15 @@ describe('windows rework — reviewer frames', () => {
     const frame = testSetup.captureCharFrame()
     console.log(`\n${dumpFrame('(b) Free Account frame', frame)}`)
     expect(frame).toContain('Free Account')
-    expect(frame).toContain('Gm')
-    expect(frame).toContain('NG')
-    expect(frame).toContain('Gm 7d')
-    expect(frame).toContain('NG 7d')
+    expect(frame).not.toMatch(/\bGm\b|\bNG\b/)
+    const lines = frame.split('\n').map((line) => line.trim())
+    const gemini = lines.indexOf('Gemini')
+    const other = lines.indexOf('Other models')
+    expect(gemini).toBeGreaterThan(-1)
+    expect(other).toBeGreaterThan(gemini)
+    expect(lines[gemini + 1]).toMatch(/^7d .*89% left/)
+    expect(lines[other + 1]).toMatch(/^7d .*100% left/)
     expect(frame).not.toContain('5h')
-    expect(frame).not.toContain('Gm 5h')
-    expect(frame).not.toContain('NG 5h')
     testSetup.renderer.destroy()
   })
 
@@ -335,12 +339,12 @@ describe('windows rework — reviewer frames', () => {
     await testSetup.flush()
     const frame = testSetup.captureCharFrame()
     console.log(`\n${dumpFrame('(c) Collapsed row frame', frame)}`)
-    // Each pool shows its binding window and the reported percentage left.
-    expect(frame).toContain('Gm 7d 92% left')
-    expect(frame).toContain('NG')
+    // The collapsed row shows the lowest current window across both groups,
+    // with its plain group name and window, rather than one figure per group.
+    expect(frame).toContain('Gemini 7d 92% left')
+    expect(frame).not.toMatch(/\bGm\b|\bNG\b/)
+    expect(frame).not.toContain('96% left')
     expect(frame).toContain('●')
-    expect(frame).toContain('92% left')
-    expect(frame).toContain('96% left')
     testSetup.renderer.destroy()
   })
 })

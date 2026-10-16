@@ -56,6 +56,88 @@ export function formatQuotaReading(
   return formatQuota(projectReading(label, reading), { now })
 }
 
+/**
+ * One window's pieces for a sidebar row that must fit on a single line: the
+ * window name (`5h`, `7d`; empty for a pool stored without a window length),
+ * the figure (`95% left`) and the bare reset span (`2h`). All three are cut
+ * from the shared formatter's text, so the wording stays the formatter's.
+ */
+export interface QuotaWindowText {
+  readonly name: string
+  /** `95% left`, or `NO_QUOTA_READING` when the reading has no read time. */
+  readonly figure: string
+  /** Time until the next reset; empty when none is stored or it already passed. */
+  readonly reset: string
+  readonly remaining: number | null
+  /**
+   * The window reset after this reading was taken. The stored figure then
+   * describes the window before that reset, not the quota now. A reset stored
+   * at or before the read time already lay behind the reading and does not
+   * count.
+   */
+  readonly resetSinceReading: boolean
+}
+
+export function quotaWindowText(
+  reading: QuotaReading | undefined,
+  now: number,
+): QuotaWindowText {
+  const projected = projectReading('', reading)
+  const limit = projected?.limits[0]
+  if (!projected || !limit || !reading)
+    return {
+      name: '',
+      figure: NO_QUOTA_READING,
+      reset: '',
+      remaining: null,
+      resetSinceReading: false,
+    }
+  // The reading age is shown once per account, so leave it out of each window.
+  const options = { now, staleAfterMs: Number.POSITIVE_INFINITY }
+  const compact = quotaTextParts(projected, { ...options, form: 'compact' })[0]
+  const full = quotaTextParts(projected, options)[0]
+  const name = reading.window ? quotaWindowName(limit) : ''
+  const first = compact ?? ''
+  const prefix = `${quotaWindowName(limit)} `
+  return {
+    name,
+    figure: first.startsWith(prefix) ? first.slice(prefix.length) : first,
+    reset: (full ?? '').slice(first.length).replace(/^, resets /, ''),
+    remaining: limit.remainingPercent ?? null,
+    resetSinceReading:
+      typeof reading.resetAt === 'number' &&
+      Number.isFinite(reading.resetAt) &&
+      reading.resetAt <= now &&
+      reading.resetAt > limit.checkedAt,
+  }
+}
+
+/**
+ * The shared formatter's `checked 2d ago` for the oldest of several readings,
+ * or empty while the oldest is younger than the formatter's stale threshold.
+ * Undated readings carry no age and are ignored.
+ */
+export function quotaReadingAge(
+  readings: readonly (QuotaReading | undefined)[],
+  now: number,
+): string {
+  const limits = readings.flatMap(
+    (reading, index) =>
+      projectReading(`reading ${index}`, reading)?.limits ?? [],
+  )
+  if (limits.length === 0) return ''
+  const parts = quotaTextParts(
+    {
+      scope: 'all',
+      limits,
+      checkedAt: Math.min(...limits.map((limit) => limit.checkedAt)),
+    },
+    { now, form: 'compact' },
+  )
+  const last = parts.at(-1) ?? ''
+  return last.startsWith('checked ') ? last : ''
+}
+
 /** Use common-auth's formatQuota text for a bar row without separately formatting figures, resets or ages. */
 export function quotaReadingParts(
   label: string,
