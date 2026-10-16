@@ -815,23 +815,21 @@ describe('openAccountStore', () => {
 // ---------------------------------------------------------------------------
 // Genuine public store
 //
-// These run the adapters against common-auth's genuine public `./store` and
-// `./fs` entries in disposable directories. They migrate real account files,
-// check that the completed migration owns those paths, and retire that
-// migration during rollback. The entries are the pinned candidate's
-// common-auth copy embedded in the core package, loaded through its typed
-// `loadCommonAuthStoreModules`. Before loading, the embedding receipt
-// (`source-output.json`) must name the pinned candidate archive at
-// `tools/common-auth-build/inputs/cortexkit-common-auth-0.17.0.tgz`, and every
-// store and fs file must match the size and SHA-256 it records, with no
-// unrecorded file; anything else fails these tests instead of skipping them.
+// These tests exercise the store and filesystem modules copied verbatim from
+// the pinned published common-auth archive into the core package. They run in
+// disposable directories, migrate real account files, verify the completed
+// migration owns those paths, and retire that migration during rollback.
+// Before loading the modules, the receipt must name that exact archive and
+// every embedded store/fs file must match its recorded size and SHA-256. This
+// verifies the embedded copy against the publication and fails on missing,
+// changed, or extra files.
 // ---------------------------------------------------------------------------
 
 const RELEASED_COMMON_AUTH = {
   package: '@cortexkit/common-auth',
   version: '0.17.0',
   tarballSha256:
-    '05b68fc2ad684d9a46bdda435c85d877febe7c41d4dce4f196e6a95ea7ad999b',
+    'd882923f81a1e40e68c8c1ad516964f93c667c0b04761053ecca4b9f10d01eef',
 } as const
 
 async function embeddedFilesBelow(
@@ -872,12 +870,12 @@ function genuineModules(): Promise<CommonAuthStoreModules> {
     if (
       receipt.package !== RELEASED_COMMON_AUTH.package ||
       receipt.version !== RELEASED_COMMON_AUTH.version ||
-      receipt.artifactStatus !== 'candidate' ||
+      receipt.artifactStatus !== 'published' ||
       receipt.tarballSha256 !== RELEASED_COMMON_AUTH.tarballSha256 ||
       !Array.isArray(receipt.files)
     ) {
       throw new Error(
-        `the embedded common-auth receipt is not the pinned candidate ${RELEASED_COMMON_AUTH.version}`,
+        `the embedded common-auth receipt is not the pinned published ${RELEASED_COMMON_AUTH.version}`,
       )
     }
     const recorded = receipt.files.filter((file) =>
