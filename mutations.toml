@@ -784,9 +784,9 @@ expect_red = ['^does\snot\sturn\sa\spaused\sclaimed\sfailure\sinto\sclean\sEOF\s
 [[control]]
 id = "opencode1-sidebar-passed-reset-not-current"
 guards = "A quota window that reset after its reading is shown as reset, never with its stored figure as the quota now."
-file = "packages/opencode/src/tui.tsx"
-old = "  return window.text.remaining != null && !window.text.resetSinceReading"
-new = "  return window.text.remaining != null // NON-VACUITY BREAK"
+file = "packages/opencode/src/quota-presentation.ts"
+old = "    resetSinceReading: part.resetSinceReading,"
+new = "    resetSinceReading: false, // NON-VACUITY BREAK"
 test_file = "packages/opencode/src/tui-narrow-frames.test.tsx"
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/tui-narrow-frames.test.tsx -t \"$1\"", "--", "{test}"]

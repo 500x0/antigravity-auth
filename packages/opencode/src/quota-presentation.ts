@@ -3,8 +3,7 @@ import {
   NO_QUOTA_READING,
   type ProjectedLimit,
   type ProjectedQuota,
-  quotaTextParts,
-  quotaWindowName,
+  quotaWindowParts,
 } from './common-auth-embedded/quota/index.js'
 
 export { NO_QUOTA_READING }
@@ -59,8 +58,8 @@ export function formatQuotaReading(
 /**
  * One window's pieces for a sidebar row that must fit on a single line: the
  * window name (`5h`, `7d`; empty for a pool stored without a window length),
- * the figure (`95% left`) and the bare reset span (`2h`). All three are cut
- * from the shared formatter's text, so the wording stays the formatter's.
+ * the figure (`95% left`) and the bare reset span (`2h`). All three come
+ * from `quotaWindowParts`, keeping common-auth's wording intact.
  */
 export interface QuotaWindowText {
   readonly name: string
@@ -82,9 +81,13 @@ export function quotaWindowText(
   reading: QuotaReading | undefined,
   now: number,
 ): QuotaWindowText {
-  const projected = projectReading('', reading)
-  const limit = projected?.limits[0]
-  if (!projected || !limit || !reading)
+  // The reading age is shown once per account, so leave it out of each window.
+  const part = quotaWindowParts(projectReading('', reading), {
+    now,
+    form: 'full',
+    staleAfterMs: Number.POSITIVE_INFINITY,
+  }).windows[0]
+  if (!part)
     return {
       name: '',
       figure: NO_QUOTA_READING,
@@ -92,23 +95,12 @@ export function quotaWindowText(
       remaining: null,
       resetSinceReading: false,
     }
-  // The reading age is shown once per account, so leave it out of each window.
-  const options = { now, staleAfterMs: Number.POSITIVE_INFINITY }
-  const compact = quotaTextParts(projected, { ...options, form: 'compact' })[0]
-  const full = quotaTextParts(projected, options)[0]
-  const name = reading.window ? quotaWindowName(limit) : ''
-  const first = compact ?? ''
-  const prefix = `${quotaWindowName(limit)} `
   return {
-    name,
-    figure: first.startsWith(prefix) ? first.slice(prefix.length) : first,
-    reset: (full ?? '').slice(first.length).replace(/^, resets /, ''),
-    remaining: limit.remainingPercent ?? null,
-    resetSinceReading:
-      typeof reading.resetAt === 'number' &&
-      Number.isFinite(reading.resetAt) &&
-      reading.resetAt <= now &&
-      reading.resetAt > limit.checkedAt,
+    name: part.name,
+    figure: part.figure,
+    reset: part.resetIn ?? '',
+    remaining: part.remainingPercent ?? null,
+    resetSinceReading: part.resetSinceReading,
   }
 }
 
@@ -126,19 +118,19 @@ export function quotaReadingAge(
       projectReading(`reading ${index}`, reading)?.limits ?? [],
   )
   if (limits.length === 0) return ''
-  const parts = quotaTextParts(
-    {
-      scope: 'all',
-      limits,
-      checkedAt: Math.min(...limits.map((limit) => limit.checkedAt)),
-    },
-    { now, form: 'compact' },
+  return (
+    quotaWindowParts(
+      {
+        scope: 'all',
+        limits,
+        checkedAt: Math.min(...limits.map((limit) => limit.checkedAt)),
+      },
+      { now, form: 'compact' },
+    ).age ?? ''
   )
-  const last = parts.at(-1) ?? ''
-  return last.startsWith('checked ') ? last : ''
 }
 
-/** Use common-auth's formatQuota text for a bar row without separately formatting figures, resets or ages. */
+/** Use `quotaWindowParts` for a bar row without separately formatting figures, resets or ages. */
 export function quotaReadingParts(
   label: string,
   reading: QuotaReading | undefined,
@@ -149,27 +141,24 @@ export function quotaReadingParts(
   detail: string
   remaining: number | null
 } {
-  const projected = projectReading(label, reading)
-  const limit = projected?.limits[0]
-  if (!limit)
+  const parts = quotaWindowParts(projectReading(label, reading), {
+    now,
+    form: 'full',
+  })
+  const part = parts.windows[0]
+  if (!part)
     return {
       name: label,
       figure: NO_QUOTA_READING,
       detail: '',
       remaining: null,
     }
-  const full = quotaTextParts(projected, { now })
-  const compact = quotaTextParts(projected, { now, form: 'compact' })
-  const name = quotaWindowName(limit)
-  const first = compact[0] ?? ''
-  const figure = first.startsWith(`${name} `)
-    ? first.slice(name.length + 1)
-    : first
-  const reset = (full[0] ?? '').slice(first.length).replace(/^, /, '')
   return {
-    name,
-    figure,
-    detail: [reset, ...full.slice(1)].filter(Boolean).join(' · '),
-    remaining: limit.remainingPercent ?? null,
+    name: part.name,
+    figure: part.figure,
+    detail: [part.resetIn ? `resets ${part.resetIn}` : '', parts.age]
+      .filter(Boolean)
+      .join(' · '),
+    remaining: part.remainingPercent ?? null,
   }
 }
