@@ -61,7 +61,7 @@ describe('projectAccount', () => {
         remaining: 72,
         figure: '72% left',
         tone: 'ok',
-        reset: 'resets 2h',
+        reset: 'resets 1h30m',
       },
       {
         label: 'NG 5h',
