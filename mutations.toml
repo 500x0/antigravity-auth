@@ -306,6 +306,34 @@ command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolat
 test_count_pattern = "Ran {count} test"
 expect_red = ['^vault\spoller\sfences\sand\slifecycle\sfrequent\ssidebar\spublications\sdo\snot\spostpone\sold\sdurable\sreadings$']
 
+[[control]]
+id = "vault-quota-tick-deadline"
+guards = "A stalled response body in the V1 composition aborts at the tick deadline, releases the fence and schedules another tick without recording quota."
+file = "packages/opencode/src/plugin/background-vault-quota-refresh.ts"
+old = '''      controller.abort(
+        new DOMException('Vault quota tick deadline', 'TimeoutError'),
+      )'''
+new = "      void controller // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/plugin/vault-quota-deadline.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-quota-deadline.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^V1\sbody\sstall\ssettles\sat\sthe\stick\sdeadline\sand\sreleases\sits\sfence$']
+
+[[control]]
+id = "vault-quota-transport-deadline"
+guards = "The V1 background transport enforces the builder header timeout on the injected native-fetch-shaped dependency."
+file = "packages/opencode/src/plugin/index.ts"
+old = '''        transport: vaultQuotaTransport,
+        logger,'''
+new = '''        transport: dependencies.fetchImpl, // NON-VACUITY BREAK
+        logger,'''
+test_file = "packages/opencode/src/plugin/vault-quota-deadline.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/vault-quota-deadline.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^V1\sinjected\sfetch\sapplies\sthe\sbuilder\sheader\stimeout\sbefore\sthe\stick\sdeadline$']
+
 
 [[control]]
 id = "tool-schema-string-only-enum"

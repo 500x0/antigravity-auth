@@ -577,24 +577,30 @@ export interface CommitVaultProviderStateInput {
    */
   verify: (attribution: VaultStateAttribution) => Promise<void>
   update: AntigravityVaultStateUpdate
+  signal?: AbortSignal
 }
 
 export async function commitVaultProviderState(
   input: CommitVaultProviderStateInput,
 ): Promise<VaultProviderStateCommitResult> {
   const { claustrum, fs, statePath } = input
+  input.signal?.throwIfAborted()
   const attribution = pinAttribution(input.attribution)
   const identity = attribution.accountIdentity
   return claustrum.mutateVaultRoster(
     input.rosterPath,
     async (roster, rosterLock) => {
+      input.signal?.throwIfAborted()
       assertRosterBinding(roster, attribution, claustrum)
       const result = await fs.withLock(
         statePath,
         VAULT_PROVIDER_STATE_LOCK,
         async (stateLock): Promise<VaultProviderStateCommitResult> => {
+          input.signal?.throwIfAborted()
           await input.verify(attribution)
+          input.signal?.throwIfAborted()
           const file = await readVaultProviderState(statePath)
+          input.signal?.throwIfAborted()
           const current = vaultAccountState(file, identity)
           const requested: unknown = input.update(current)
           if (
@@ -633,6 +639,7 @@ export async function commitVaultProviderState(
               beforeRename: async () => {
                 await rosterLock.assertOwned()
                 await stateLock.assertOwned()
+                input.signal?.throwIfAborted()
               },
             })
           } catch (error) {

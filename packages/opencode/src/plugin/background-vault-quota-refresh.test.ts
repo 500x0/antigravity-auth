@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -37,6 +37,7 @@ function fixture() {
   let issued = 0
   let writes = 0
   let publishes = 0
+  const outcomes: unknown[] = []
   const entered = deferred()
   let wait: Promise<void> | undefined
   const accounts: Record<string, VaultAccountState> = {}
@@ -67,6 +68,12 @@ function fixture() {
     }),
   }
   let refused = false
+  let commitFailure:
+    | 'write-uncertain'
+    | 'binding-stale'
+    | 'version-changed'
+    | 'state-lock'
+    | undefined
   const pool = createVaultAccountPool({
     source: {
       refresh: async () => undefined,
@@ -80,6 +87,29 @@ function fixture() {
       source: {
         attribution: source.attribution,
         commitState: async (by, update) => {
+          if (commitFailure === 'write-uncertain')
+            return {
+              status: 'uncertain',
+              error: new Error(
+                'served-secret vault-project known@example.test',
+              ),
+            }
+          if (commitFailure === 'binding-stale')
+            throw {
+              kind: 'binding-stale',
+              message: 'route-0 credential-0 identity-0',
+            }
+          if (commitFailure === 'version-changed')
+            throw {
+              kind: 'state-unavailable',
+              reason: 'version-changed',
+              message: 'served-secret',
+            }
+          if (commitFailure === 'state-lock')
+            throw {
+              name: 'LockContentionError',
+              details: { target: 'secret-path' },
+            }
           if (refused) return { status: 'unchanged' }
           const next = update(stored.accounts[by.accountIdentity])
           const state = {
@@ -149,6 +179,9 @@ function fixture() {
     readProviderState: async () => stored,
     transport,
     logger: { debug: () => {} },
+    onOutcome: (_level: string, summary: unknown) => {
+      outcomes.push(summary)
+    },
     now: () => now,
     random: () => 0,
     publishSidebar: async () => {
@@ -169,6 +202,10 @@ function fixture() {
     stateFile,
     stored,
     accounts,
+    outcomes,
+    clearRoutes: () => {
+      routes.length = 0
+    },
     get physical() {
       return physical
     },
@@ -214,6 +251,9 @@ function fixture() {
     refuse: () => {
       refused = true
     },
+    failCommit: (failure: NonNullable<typeof commitFailure>) => {
+      commitFailure = failure
+    },
     badAnswer: () => {
       badAnswer = true
     },
@@ -225,6 +265,59 @@ function fixture() {
 }
 
 describe('BackgroundVaultQuotaRefresh', () => {
+  for (const mode of [
+    'recorded',
+    'fresh',
+    'no-rows',
+    'fetch-failed',
+    'commit-unchanged',
+    'write-uncertain',
+    'binding-stale',
+    'version-changed',
+    'state-lock',
+  ] as const) {
+    it(`summarizes ${mode} exactly once without credential data`, async () => {
+      const f = fixture()
+      try {
+        if (mode === 'fresh') f.seedReadings(f.now)
+        if (mode === 'no-rows') {
+          f.clearRoutes()
+        }
+        if (mode === 'fetch-failed') f.badAnswer()
+        if (mode === 'commit-unchanged') f.refuse()
+        if (
+          mode === 'write-uncertain' ||
+          mode === 'binding-stale' ||
+          mode === 'version-changed' ||
+          mode === 'state-lock'
+        )
+          f.failCommit(mode)
+        await f.poller.tick()
+        expect(f.outcomes).toHaveLength(1)
+        expect(f.outcomes[0]).toMatchObject({ reason: mode })
+        if (mode !== 'recorded' && mode !== 'fresh' && mode !== 'no-rows') {
+          expect(f.writes).toBe(0)
+          expect(f.outcomes[0]).toMatchObject({
+            checked: 0,
+            notChecked: 2,
+            reasons: { [mode]: 2 },
+          })
+        }
+        for (const secret of [
+          'served-',
+          'vault-project',
+          'known@example.test',
+          'route-0',
+          'credential-0',
+          'identity-0',
+        ])
+          expect(JSON.stringify(f.outcomes)).not.toContain(secret)
+      } finally {
+        await f.cleanup()
+      }
+    })
+  }
+
   it('tick records a reading at the fetch time and republishes the sidebar', async () => {
     const f = fixture()
     try {
@@ -254,6 +347,41 @@ describe('BackgroundVaultQuotaRefresh', () => {
 })
 
 describe('vault poller fences and lifecycle', () => {
+  it('retains the fence until a started commit acknowledges cancellation', async () => {
+    const f = fixture()
+    const entered = deferred()
+    const resume = deferred()
+    let commitSignal: AbortSignal | undefined
+    if (!f.pool.state) throw new Error('missing durable pool')
+    f.pool.state.recordQuota = async (_attribution, _quota, signal) => {
+      commitSignal = signal
+      entered.resolve()
+      await resume.promise
+      signal?.throwIfAborted()
+      throw new Error('commit must receive the tick signal')
+    }
+    try {
+      let settled = false
+      const tick = f.poller.tick().then(() => {
+        settled = true
+      })
+      await entered.promise
+      f.poller.abortTick()
+      expect(commitSignal?.aborted).toBe(true)
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      expect(existsSync(`${f.stateFile}.bg-vault-quota-poll.lock`)).toBe(true)
+      resume.resolve()
+      await tick
+      expect(existsSync(`${f.stateFile}.bg-vault-quota-poll.lock`)).toBe(false)
+      expect(f.writes).toBe(0)
+      expect(f.publishes).toBe(0)
+    } finally {
+      resume.resolve()
+      await f.cleanup()
+    }
+  })
+
   for (const mode of ['local', 'unreadable'] as const) {
     it(`${mode} authority performs zero vault and zero local fetches`, async () => {
       const f = fixture()

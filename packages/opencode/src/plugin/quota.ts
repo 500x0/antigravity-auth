@@ -637,6 +637,7 @@ export interface VaultQuotaCheckOptions {
   logger: Pick<Logger, 'debug'>
   /** Physical request transport; defaults to `fetchWithActiveTimeout`. */
   transport?: QuotaFetch
+  onFailure?: (error: unknown, refused: boolean) => void
 }
 
 /** Stops an outbound quota request after cancellation or a vault authorization refusal. */
@@ -728,7 +729,20 @@ async function vaultQuotaAttempt<T>(
           })
           // The builder reads a clone; `send` gets the original Response,
           // whose status it needs for 401 reporting.
-          return served.clone()
+          const copy = served.clone()
+          if (!copy.body) return copy
+          // Explicitly cancel body consumption too: injected transports can return
+          // streams that do not themselves observe the fetch signal.
+          return new Response(
+            copy.body.pipeThrough(new TransformStream(), {
+              signal: options.signal,
+            }),
+            {
+              status: copy.status,
+              statusText: copy.statusText,
+              headers: copy.headers,
+            },
+          )
         }
         attempt = {}
         try {
@@ -786,6 +800,8 @@ export async function fetchVaultAccountQuota(
       return { error: new VaultQuotaCheckStoppedError(), refused: true }
     }
     const result = await vaultQuotaAttempt(options, isStopped, build)
+    if (result.error !== undefined || result.refused)
+      options.onFailure?.(result.error, result.refused === true)
     if (result.refused || options.signal.aborted) stopped.value = true
     return result
   }

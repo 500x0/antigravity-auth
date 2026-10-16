@@ -95,6 +95,22 @@ export interface VaultClaustrumPort
 // Source contract
 // ---------------------------------------------------------------------------
 
+/** Stop waiting for a receipt on cancellation; a late receipt can never dispatch or verify a write. */
+function untilAborted<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return pending
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    pending
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+
 export type AntigravityVaultSourceFailureKind =
   | 'closed'
   | 'not-active'
@@ -114,7 +130,11 @@ export type AntigravityVaultSourceFailureKind =
 export class AntigravityVaultSourceError extends Error {
   readonly kind: AntigravityVaultSourceFailureKind
 
-  constructor(kind: AntigravityVaultSourceFailureKind, message: string) {
+  constructor(
+    kind: AntigravityVaultSourceFailureKind,
+    message: string,
+    readonly reason?: 'version-changed',
+  ) {
     super(message)
     this.name = 'AntigravityVaultSourceError'
     this.kind = kind
@@ -242,6 +262,7 @@ export interface AntigravityVaultAccountSource {
   commitState(
     attribution: VaultStateAttribution,
     update: AntigravityVaultStateUpdate,
+    signal?: AbortSignal,
   ): Promise<VaultProviderStateCommitResult>
   decline(ref: VaultRouteRef): Promise<void>
   accept(ref: VaultRouteRef): Promise<void>
@@ -421,7 +442,9 @@ export function createAntigravityVaultAccountSource(
   /** Require approved vault access before obtaining credentials for an operation. */
   const assertServing = async (signal?: AbortSignal) => {
     assertOpen(signal)
-    if (!(await options.isCustodyActive()))
+    if (
+      !(await untilAborted(Promise.resolve(options.isCustodyActive()), signal))
+    )
       throw new AntigravityVaultSourceError(
         'not-active',
         'Antigravity vault custody is not active for this host',
@@ -452,7 +475,10 @@ export function createAntigravityVaultAccountSource(
   ): Promise<VaultSendAdmission> => {
     await assertServing(signal)
     assertCurrentRoute(ref)
-    const receipt = await consumer.authorize(ref.routeId, signal)
+    const receipt = await untilAborted(
+      consumer.authorize(ref.routeId, signal),
+      signal,
+    )
     assertOpen(signal)
     const admission = admissionFromReceipt(ref, receipt)
     issued.set(admission, { receipt, reported: false })
@@ -491,8 +517,11 @@ export function createAntigravityVaultAccountSource(
    * are still what the vault serves. The proving receipt's token and project
    * are dropped here; they never reach a send.
    */
-  const verifyAttribution = async (attribution: VaultStateAttribution) => {
-    await assertServing()
+  const verifyAttribution = async (
+    attribution: VaultStateAttribution,
+    signal?: AbortSignal,
+  ) => {
+    await assertServing(signal)
     // Authorizing without a committed roster would make the consumer discover
     // and commit one, which takes the roster lock the caller already holds.
     if (!consumer.snapshot())
@@ -508,12 +537,17 @@ export function createAntigravityVaultAccountSource(
     }
     const proof = admissionFromReceipt(
       ref,
-      await consumer.authorize(attribution.routeId),
+      await untilAborted(
+        consumer.authorize(attribution.routeId, signal),
+        signal,
+      ),
     )
+    assertOpen(signal)
     if (proof.recordVersion !== attribution.recordVersion)
       throw new AntigravityVaultSourceError(
         'state-unavailable',
         'The vault now serves another record version for this account',
+        'version-changed',
       )
   }
 
@@ -552,16 +586,19 @@ export function createAntigravityVaultAccountSource(
             options.logger,
           )
         ) {
-          await response.body?.cancel().catch(() => {})
+          await untilAborted(
+            response.body?.cancel() ?? Promise.resolve(),
+            signal,
+          ).catch(() => {})
+          assertOpen(signal)
           admission = current
           response = await dispatch(current, signal)
         }
       }
       if (response.status === 401)
-        await reportServedStatus(
-          admission,
-          401,
-          sendOptions.reporterSource,
+        await untilAborted(
+          reportServedStatus(admission, 401, sendOptions.reporterSource),
+          signal,
         ).catch((error: unknown) => options.onError?.(error))
       return response
     },
@@ -575,8 +612,8 @@ export function createAntigravityVaultAccountSource(
         recordVersion: admission.recordVersion,
       })
     },
-    commitState: async (attribution, update) => {
-      assertOpen()
+    commitState: async (attribution, update, signal) => {
+      assertOpen(signal)
       if (!options.state)
         throw new AntigravityVaultSourceError(
           'state-unavailable',
@@ -588,7 +625,8 @@ export function createAntigravityVaultAccountSource(
         rosterPath: options.rosterPath,
         statePath: options.state.path,
         attribution,
-        verify: verifyAttribution,
+        verify: (by) => verifyAttribution(by, signal),
+        signal,
         update,
       })
     },

@@ -4,6 +4,7 @@ import {
   type AccountRepository,
   type AntigravityQuotaCheckReport,
   type CommonAuthCommandsModule,
+  fetchWithActiveTimeout,
   loadCommonAuthCommands,
   type RowRef,
   VAULT_ACCOUNT_REMEDY,
@@ -67,7 +68,13 @@ import {
 import { isGeminiDumpEnabled, setGeminiDumpEnabled } from './gemini-dump'
 import { createGoogleSearchTool } from './google-search-tool'
 import { createPluginLifecycle, type PluginLifecycle } from './lifecycle'
-import { createLogger, initLogger, setRuntimeLogLevel } from './logger'
+import {
+  createAppLogSink,
+  createLocationLogger,
+  createLogger,
+  initLogger,
+  setRuntimeLogLevel,
+} from './logger'
 import { createOAuthMethods, openBrowserWithSystem } from './oauth-methods'
 import {
   createOperatorSettingsController,
@@ -85,6 +92,7 @@ import {
   makeTierLoader,
   type QuotaManager,
   type StoreQuotaService,
+  type VaultQuotaCheckOptions,
 } from './quota'
 import { createSessionRecoveryHook } from './recovery'
 import {
@@ -171,6 +179,22 @@ export const createAntigravityPlugin =
     initRuntimeConfig(config)
     initializeDebug(config)
     initLogger(client)
+    // Quota completion warnings must reach the host even when debug_tui is off.
+    const quotaOutcomeLogger = createLocationLogger({
+      sink: createAppLogSink(client),
+      sinkEnabled: () => true,
+    }).createLogger('vault-quota')
+    const vaultQuotaTransport: NonNullable<
+      VaultQuotaCheckOptions['transport']
+    > = (url, init, extra) =>
+      fetchWithActiveTimeout(
+        url,
+        { ...init, signal: extra.signal ?? init.signal },
+        {
+          timeoutMs: extra.timeoutMs,
+          fetchImpl: dependencies.fetchImpl as typeof fetch,
+        },
+      )
     await initAntigravityVersion()
 
     if (config.health_score) {
@@ -451,8 +475,10 @@ export const createAntigravityPlugin =
         currentVaultPool,
         readProviderState: () => vaultCustody.readState(),
         publishSidebar: () => sidebarPublisher.publish(),
-        transport: dependencies.fetchImpl,
+        transport: vaultQuotaTransport,
         logger,
+        onOutcome: (level, outcome) =>
+          quotaOutcomeLogger[level]('vault-quota-tick', { ...outcome }),
         now: dependencies.clock.now,
         random: dependencies.clock.random,
       })
@@ -631,7 +657,7 @@ export const createAntigravityPlugin =
                           ref,
                           signal: check,
                           logger,
-                          transport: dependencies.fetchImpl,
+                          transport: vaultQuotaTransport,
                         }),
                     },
                     () => sidebarPublisher.publish(),

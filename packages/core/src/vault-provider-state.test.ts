@@ -151,6 +151,32 @@ async function stored(): Promise<string | undefined> {
 }
 
 describe('vault provider-state commit fencing', () => {
+  it('cancellation before rename keeps the old reading and reports uncertainty', async () => {
+    await commit(() => ({
+      quota: { schemaVersion: 1, cachedQuota: {}, cachedQuotaUpdatedAt: 1 },
+    }))
+    const before = await stored()
+    const controller = new AbortController()
+    const result = await commit(
+      () => ({
+        quota: { schemaVersion: 1, cachedQuota: {}, cachedQuotaUpdatedAt: 2 },
+      }),
+      {
+        signal: controller.signal,
+        fs: {
+          ...fs,
+          writeJsonAtomic: async (path, value, options) => {
+            controller.abort()
+            await fs.writeJsonAtomic(path, value, options)
+          },
+        },
+      },
+    )
+    expect(result.status).toBe('uncertain')
+    expect(await stored()).toBe(before)
+    expect(events.filter((event) => event === 'rename')).toHaveLength(1)
+  })
+
   it('guards with the roster lock, then its own lock and a fresh check, asserting both before rename', async () => {
     const result = await commit(() => ({
       metadata: { addedAt: 1, lastUsed: 2, label: 'Work' },

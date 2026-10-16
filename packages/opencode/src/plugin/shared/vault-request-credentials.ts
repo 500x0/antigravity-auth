@@ -32,6 +32,7 @@ import {
   type VaultStateAttribution,
 } from '@cortexkit/antigravity-auth-core'
 
+import type { VaultQuotaReason } from '../vault-quota-outcome'
 import type {
   RequestSendAdmission,
   VaultRequestCredentials,
@@ -372,6 +373,7 @@ export interface VaultSelectionState {
   recordQuota(
     attribution: VaultStateAttribution,
     quota: QuotaState,
+    signal?: AbortSignal,
   ): Promise<VaultProviderStateCommitResult>
 }
 
@@ -461,16 +463,20 @@ export function createVaultSelectionState(
       }
     },
     flush,
-    recordQuota(attribution, quota) {
-      return options.source.commitState(attribution, (current) => ({
-        ...(current?.metadata !== undefined
-          ? { metadata: current.metadata }
-          : {}),
-        quota,
-        ...(current?.extensions !== undefined
-          ? { extensions: current.extensions }
-          : {}),
-      }))
+    recordQuota(attribution, quota, signal) {
+      return options.source.commitState(
+        attribution,
+        (current) => ({
+          ...(current?.metadata !== undefined
+            ? { metadata: current.metadata }
+            : {}),
+          quota,
+          ...(current?.extensions !== undefined
+            ? { extensions: current.extensions }
+            : {}),
+        }),
+        signal,
+      )
     },
   }
 }
@@ -675,22 +681,44 @@ export async function checkVaultQuota(input: {
   readonly signal: AbortSignal
   readonly now?: () => number
   readonly onError?: (error: unknown) => void
+  readonly onOutcome?: (reason: VaultQuotaReason, error?: unknown) => void
+  readonly onStage?: (stage: 'fetch' | 'commit') => void
 }): Promise<AntigravityQuotaCheckReport> {
   const state = input.pool.state
   const rows = [...input.pool.selector.rows]
   const now = input.now ?? (() => Date.now())
   let checked = 0
+  if (state === undefined) input.onOutcome?.('state-invalid')
   for (const row of rows) {
     if (input.signal.aborted || state === undefined) break
     try {
+      input.onStage?.('fetch')
       const answer = await input.fetchReading(row.route, input.signal)
+      input.signal.throwIfAborted()
       const attribution = answer.quotaAttribution
-      if (attribution === undefined || answer.quota.error !== undefined)
+      if (answer.quota.error !== undefined) {
+        input.onOutcome?.('fetch-failed')
         continue
+      }
+      if (attribution === undefined) {
+        input.onOutcome?.('unattributed')
+        continue
+      }
       const reading = vaultQuotaState(answer.quota, now())
-      const result = await state.recordQuota(attribution, reading)
-      if (result.status !== 'written') continue
+      input.onStage?.('commit')
+      input.signal.throwIfAborted()
+      const result = await state.recordQuota(attribution, reading, input.signal)
+      if (result.status !== 'written') {
+        input.onOutcome?.(
+          result.status === 'uncertain'
+            ? 'write-uncertain'
+            : 'commit-unchanged',
+          result.status === 'uncertain' ? result.error : undefined,
+        )
+        continue
+      }
       checked += 1
+      input.onOutcome?.('recorded')
       const live = input.pool.selector.rows.find(
         (candidate) =>
           candidate.route.routeId === attribution.routeId &&

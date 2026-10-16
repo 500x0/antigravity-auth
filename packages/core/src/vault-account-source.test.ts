@@ -95,6 +95,7 @@ interface Harness {
   closed: number
   rosterGuardCalls: number
   signals: (AbortSignal | undefined)[]
+  authorizeWait?: () => Promise<VaultScopedReceipt>
 }
 
 function harness(): Harness {
@@ -126,6 +127,7 @@ function harness(): Harness {
     async authorize(routeId: string, signal?: AbortSignal) {
       h.authorized.push(routeId)
       h.signals.push(signal)
+      if (h.authorizeWait) return h.authorizeWait()
       const next = h.receipts.shift()
       if (!next) throw new Error('no receipt queued')
       return next
@@ -560,7 +562,10 @@ describe('provider-state commits through the source', () => {
         updates++
         return { metadata: { addedAt: 1, lastUsed: 2 } }
       }),
-    ).rejects.toMatchObject({ kind: 'state-unavailable' })
+    ).rejects.toMatchObject({
+      kind: 'state-unavailable',
+      reason: 'version-changed',
+    })
     expect(updates).toBe(0)
     await expect(readFile(join(dir, 'state.json'), 'utf8')).rejects.toThrow()
   })
@@ -602,6 +607,58 @@ describe('provider-state commits through the source', () => {
 })
 
 describe('cancellation', () => {
+  for (const phase of ['admission', 'verification'] as const) {
+    it(`aborts a pending vault ${phase} and ignores a late receipt`, async () => {
+      const h = harness()
+      const src = source(h)
+      const ref = only(src.routes())
+      h.receipts.push(receipt(5))
+      const admission = await src.admit(ref)
+      const entered = Promise.withResolvers<void>()
+      const pendingReceipt = Promise.withResolvers<VaultScopedReceipt>()
+      h.authorizeWait = () => {
+        entered.resolve()
+        return pendingReceipt.promise
+      }
+      const controller = new AbortController()
+      let dispatched = 0
+      let updated = 0
+      const pending =
+        phase === 'admission'
+          ? src.send(
+              ref,
+              async () => {
+                dispatched++
+                return response(200)
+              },
+              { site: 'quota', signal: controller.signal },
+            )
+          : src.commitState(
+              src.attribution(admission),
+              () => {
+                updated++
+                return {
+                  quota: {
+                    schemaVersion: 1,
+                    cachedQuota: {},
+                    cachedQuotaUpdatedAt: 99,
+                  },
+                }
+              },
+              controller.signal,
+            )
+      await entered.promise
+      controller.abort(new DOMException('canceled', 'AbortError'))
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      expect(h.signals.at(-1)).toBe(controller.signal)
+      pendingReceipt.resolve(receipt(5))
+      await Promise.resolve()
+      expect(dispatched).toBe(0)
+      expect(updated).toBe(0)
+      await expect(readFile(join(dir, 'state.json'), 'utf8')).rejects.toThrow()
+    })
+  }
+
   it('cancels the 401 body before retrying and passes the caller signal to the vault', async () => {
     const h = harness()
     const src = source(h)
