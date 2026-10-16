@@ -30,13 +30,16 @@ import {
   sameRowRef,
 } from '@cortexkit/antigravity-auth-core'
 
+import { placeholderSecret } from '../common-auth-embedded/opencode2/index.js'
 import type {
   GaBridgeJob,
+  GaHttpRequestEvent,
   GaLocationServices,
   GaPluginOverrides,
   GaSendInput,
   HarnessAccountsObservation,
 } from '../ga/server/index.ts'
+import { GaRequestOwnership, rewriteGaHttpRequest } from '../ga/server/index.ts'
 import type { LocationDebug } from './debug.ts'
 import {
   createOperatorSettingsRegistry,
@@ -1497,6 +1500,63 @@ describe('GA composed request context', () => {
         expect(body.request).not.toHaveProperty('providerOptions')
       } finally {
         await location.dispose()
+      }
+    },
+  )
+
+  ownedIt(
+    'native default variant reaches the base model transport instead of returning 412',
+    async (scope) => {
+      const sends: GaSendInput[] = []
+      const location = await transportLocation(scope, 'local', {
+        send: async (input) => {
+          sends.push(input)
+          return terminalResponse()
+        },
+      })
+      const modelID = 'antigravity-gemini-3.8-flash'
+      const ownership = new GaRequestOwnership()
+      let capturedJob: GaBridgeJob | undefined
+      const event: GaHttpRequestEvent = {
+        sessionID: 'native-default-session',
+        kind: 'primary',
+        model: { id: modelID, providerID: 'google', variant: 'default' },
+        request: new Request(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelID}:streamGenerateContent?alt=sse`,
+          {
+            method: 'POST',
+            headers: { 'x-goog-api-key': placeholderSecret('google') },
+            body: transportJob.body,
+          },
+        ),
+      }
+      try {
+        await rewriteGaHttpRequest(event, {
+          bridge: {
+            rewrite: (original, job) => {
+              capturedJob = job
+              return original
+            },
+          },
+          isRegisteredModel: (id) => id === modelID,
+          env: {},
+          ownership,
+        })
+        if (!capturedJob) throw new Error('the request hook created no GA job')
+        const response = await location.serving.execute(capturedJob, {
+          signal: scope.controller().signal,
+          send: async () => {
+            throw new Error('legacy sender must not be used')
+          },
+        })
+        expect(response.status).toBe(200)
+        expect(await response.text()).toContain('transport reached')
+        expect(sends).toHaveLength(1)
+        expect(sends.map((send) => send.kind)).toEqual(['primary'])
+        expect(sends[0]?.envelope.model).toBe('gemini-3.8-flash-medium')
+      } finally {
+        await location.dispose()
+        ownership.clear()
       }
     },
   )

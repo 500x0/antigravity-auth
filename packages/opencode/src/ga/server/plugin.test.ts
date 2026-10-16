@@ -497,11 +497,16 @@ describe('hook bodies', () => {
       headers: { 'x-goog-api-key': placeholderSecret('google') },
       body: JOB.body,
     }),
+    variant?: string,
   ): GaHttpRequestEvent {
     return {
       sessionID: 'ses_child',
       kind,
-      model: { id: modelID, providerID: 'google' },
+      model: {
+        id: modelID,
+        providerID: 'google',
+        ...(variant === undefined ? {} : { variant }),
+      },
       request,
     }
   }
@@ -712,6 +717,27 @@ describe('hook bodies', () => {
     await (await fetch(parented.request)).text()
     expect(jobs[2]?.parentSessionID).toBe('ses_parent')
     expect(jobs[2]?.sessionID).toBe('ses_child')
+  })
+
+  it('normalizes the native default variant before creating a GA bridge job', async () => {
+    const jobs: GaBridgeJob[] = []
+    const active = await startBridge(async (job) => {
+      jobs.push(job)
+      return new Response('{}')
+    })
+    const modelID = 'antigravity-gemini-3.8-flash'
+    for (const variant of ['default', 'low', undefined] as const) {
+      const event = requestEvent('primary', modelID, undefined, variant)
+      await server.rewriteGaHttpRequest(event, {
+        bridge: active,
+        ownership,
+        isRegisteredModel: (id) => id === modelID,
+        env: NO_PROXY_ENV,
+      })
+      await (await fetch(event.request)).text()
+    }
+    expect(jobs.map((job) => job.variant)).toEqual([null, 'low', null])
+    expect(jobs.every((job) => job.modelID === modelID)).toBe(true)
   })
 
   it('throws on a proxy refusal without replacing or consuming the request', async () => {
