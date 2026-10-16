@@ -392,7 +392,7 @@ describe('OpenCode 1 sidebar in a narrow sidebar', () => {
       // The one window whose reset is still ahead keeps its figure and reset.
       expect(lineWith(frame, /^7d .*\b9% left\s+5d$/)).toBeDefined()
       // The reading age appears once for the account, never per row.
-      expect(frame.split('checked 2d ago')).toHaveLength(2)
+      expect(frame.split('checked 1d17h ago')).toHaveLength(2)
       expect(frame).not.toContain('health')
     })
 
@@ -457,6 +457,52 @@ describe('OpenCode 1 sidebar in a narrow sidebar', () => {
       expect(frame).not.toContain('Route ')
       expect(frame).not.toContain('—')
       expect(frame).toContain('No request yet')
+    })
+  }
+
+  for (const width of [20, 26, 32, 38, 48]) {
+    it(`fits two-unit resets and reading age at ${width} columns`, async () => {
+      const checkedAt = NOW - 41 * HOUR
+      const account = freshAccount()
+      account.quota = {
+        gemini: {
+          remainingPercent: 62,
+          checkedAt,
+          windows: [
+            {
+              window: '5h',
+              remainingPercent: 95,
+              resetAt: NOW + 23 * HOUR + 59 * MINUTE,
+              checkedAt,
+            },
+            {
+              window: 'weekly',
+              remainingPercent: 62,
+              resetAt: NOW + 3 * DAY + 23 * HOUR,
+              checkedAt,
+            },
+          ],
+        },
+      }
+      const frame = await capture(
+        fixture,
+        state({ accounts: [account] }),
+        width,
+      )
+      show('two-unit resets and age', width, frame)
+      expectNoWrappedFragments(frame)
+      expect(frame.split('checked 1d17h ago')).toHaveLength(2)
+      for (const line of frame.split('\n'))
+        expect(line.length).toBeLessThanOrEqual(width)
+      for (const [figure, reset] of [
+        ['95% left', '23h59m'],
+        ['62% left', '3d23h'],
+      ] as const) {
+        const row = lineWith(frame, new RegExp(`\\b${figure}\\b`))
+        expect(row).toBeDefined()
+        if (width === 20) expect(row).not.toContain(reset)
+        else expect(row).toMatch(new RegExp(`\\s${reset}$`))
+      }
     })
   }
 

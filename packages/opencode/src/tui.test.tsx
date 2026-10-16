@@ -2221,6 +2221,47 @@ describe('GA TUI setup', () => {
     expect(fake.calls.length).toBe(before)
   })
 
+  it('keeps the shared two-unit reset span intact in the GA sidebar', async () => {
+    const { setupGaTui } = await import('./ga/tui/host-ga')
+    const now = Date.UTC(2026, 0, 10, 12)
+    const fake = fakeContext([
+      gaSnapshot({
+        accounts: [
+          gaAccount({
+            quota: {
+              gemini: {
+                remainingPercent: 55,
+                checkedAt: now,
+                resetAt: now + (23 * 60 + 59) * 60_000,
+              },
+            },
+          }),
+        ],
+      }),
+    ])
+    const cleanup = setupGaTui(fake.context as never, {
+      now: () => now,
+      schedule: () => () => undefined,
+    })
+    await settle0()
+    const view = await testRender(() => renderClaim(fake.claim(), 'ses_a'), {
+      width: 32,
+      height: 12,
+    })
+    try {
+      await settle()
+      expect(
+        view
+          .captureCharFrame()
+          .split('\n')
+          .map((line) => line.trim()),
+      ).toContain('Gm    55% left     resets 23h59m')
+    } finally {
+      view.renderer.destroy()
+      await cleanup()
+    }
+  })
+
   it('applies a choice, then redraws from a fresh state read rather than the apply answer', async () => {
     const { setupGaTui } = await import('./ga/tui/host-ga')
     const fresh = gaSnapshot({

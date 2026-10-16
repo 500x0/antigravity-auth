@@ -166,7 +166,7 @@ describe('sidebar window text', () => {
         ],
         now,
       ),
-    ).toBe('checked 2d ago')
+    ).toBe('checked 1d17h ago')
     expect(
       quotaReadingAge(
         [{ remainingPercent: 50, checkedAt: now - 5 * 60_000 }],
