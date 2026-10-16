@@ -1391,6 +1391,9 @@ export const GA_PLUGIN_ID = 'cortexkit.antigravity-auth'
 /** The host provider whose requests the hooks handle. */
 export const GA_PROVIDER_ID = 'google'
 
+// OpenCode 2 uses `default` to mean that no explicit thinking variant is selected.
+const GA_HOST_DEFAULT_VARIANT = 'default'
+
 // Compile-time guard: the SDK-free kind union must equal the host's.
 type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const REQUEST_KIND_MATCHES_HOST: SameType<GaRequestKind, SessionRequestKind> =
@@ -1571,7 +1574,10 @@ export async function rewriteGaHttpRequest(
     parentSessionID: headerValue(original, PARENT_SESSION_HEADERS),
     kind: event.kind,
     modelID: event.model.id,
-    variant: event.model.variant ?? null,
+    variant:
+      event.model.variant === GA_HOST_DEFAULT_VARIANT
+        ? null
+        : (event.model.variant ?? null),
     url: original.url,
     body: await original.clone().text(),
   }

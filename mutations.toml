@@ -704,6 +704,25 @@ test_count_pattern = "Ran {count} test"
 expect_red = ['^GA\scomposed\srequest\scontext\sapplies\sthe\sselected\sregistered\svariant\sto\sthe\swire\smodel\sand\sthinking$']
 
 [[control]]
+id = "ga-native-default-variant-normalization"
+guards = "OpenCode 2's native default variant stays unset while explicit thinking levels remain selected."
+file = "packages/opencode/src/ga/server/index.ts"
+old = "    variant:\n      event.model.variant === GA_HOST_DEFAULT_VARIANT\n        ? null\n        : (event.model.variant ?? null),"
+new = "    variant: event.model.variant ?? null, // NON-VACUITY BREAK"
+test_file = "packages/opencode/src/ga/server/plugin.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/plugin.test.ts -t \"$1\"", "--", "{test}"]
+list_command = [
+  "bash",
+  "-c",
+  '''tmp=$(mktemp) && bun run --cwd packages/core build >/dev/null && bun test --isolate --reporter=junit --reporter-outfile "$tmp" packages/opencode/src/ga/server/plugin.test.ts -t "$1" >/dev/null 2>&1 && python3 -c 'import json,sys,xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]); print(json.dumps([" ".join((case.attrib.get("classname", ""), case.attrib.get("name", ""))).strip() for case in root.iter("testcase") if case.find("skipped") is None]))' "$tmp"; result=$?; rm -f "$tmp"; exit "$result"''',
+  "--",
+  "{test}",
+]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^hook\sbodies\snormalizes\sthe\snative\sdefault\svariant\sbefore\screating\sa\sGA\sbridge\sjob$']
+
+[[control]]
 id = "oauth-listener-startup-failure-timer-cleanup"
 guards = "A failed OAuth listener startup clears its callback timeout before returning the original bind error."
 file = "packages/opencode/src/plugin/server.ts"
