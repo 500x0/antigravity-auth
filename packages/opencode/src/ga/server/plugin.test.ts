@@ -567,6 +567,130 @@ describe('hook bodies', () => {
     }
   })
 
+  it('refuses owned custom Google origins locally before credentials or bridge jobs', async () => {
+    const execute = mock(async () => new Response('{}'))
+    const active = await startBridge(execute)
+    const rewrite = spyOn(active, 'rewrite')
+    const modelLookup = mock(registered)
+    for (const baseURL of [
+      'http://127.0.0.1:1234/direct/v1',
+      'https://generativelanguage.googleapis.com.example.invalid/v1beta',
+      'http://generativelanguage.googleapis.com/v1beta',
+      'https://generativelanguage.googleapis.com:444/v1beta',
+    ]) {
+      for (const kind of [
+        'primary',
+        'compaction',
+        'title',
+        'generate',
+      ] as const) {
+        const original = new Request(
+          `${baseURL}/models/antigravity-gemini-3.5-flash:streamGenerateContent`,
+          {
+            method: 'POST',
+            headers: { 'x-goog-api-key': placeholderSecret('google') },
+            body: JOB.body,
+          },
+        )
+        const clone = spyOn(original, 'clone')
+        const event = requestEvent(
+          kind,
+          'antigravity-gemini-3.5-flash',
+          original,
+        )
+        await expect(
+          server.rewriteGaHttpRequest(event, {
+            bridge: active,
+            ownership,
+            isRegisteredModel: modelLookup,
+            env: NO_PROXY_ENV,
+          }),
+        ).rejects.toEqual(
+          new Error(
+            'Antigravity pool requests need the default Google base URL. Remove the custom baseURL from the Google provider settings.',
+          ),
+        )
+        expect(event.request).toBe(original)
+        expect(original.bodyUsed).toBe(false)
+        expect(clone).not.toHaveBeenCalled()
+        expect(ownership.get(event.sessionID)).toBe(true)
+        expect(retryFor(event.sessionID).decision).toEqual({ retry: false })
+        expect(active.pendingJobs()).toBe(0)
+      }
+    }
+    expect(modelLookup).not.toHaveBeenCalled()
+    expect(rewrite).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    expect(senderCalls).toHaveLength(0)
+  })
+
+  it('leaves unowned custom Google origins byte-for-byte unchanged', async () => {
+    const execute = mock(async () => new Response('{}'))
+    const active = await startBridge(execute)
+    const rewrite = spyOn(active, 'rewrite')
+    const nativeHeaders: Record<string, string>[] = [
+      { 'x-goog-api-key': 'native-key' },
+      { 'x-goog-api-key': `${placeholderSecret('google')}-not-exact` },
+      { authorization: 'Bearer native-oauth' },
+    ]
+    for (const headers of nativeHeaders) {
+      const original = new Request(
+        'http://127.0.0.1:1234/direct/v1/models/native-model:streamGenerateContent?alt=sse',
+        {
+          method: 'POST',
+          headers: { ...headers, 'x-native-header': 'preserve' },
+          body: '{ "native" : "bytes é" }',
+        },
+      )
+      const url = original.url
+      const beforeHeaders = [...original.headers]
+      const clone = spyOn(original, 'clone')
+      const event = requestEvent('primary', 'native-model', original)
+      await server.rewriteGaHttpRequest(event, {
+        bridge: active,
+        ownership,
+        isRegisteredModel: () => {
+          throw new Error('unowned model inspected')
+        },
+        env: NO_PROXY_ENV,
+      })
+      expect(event.request).toBe(original)
+      expect(original.url).toBe(url)
+      expect([...original.headers]).toEqual(beforeHeaders)
+      expect(original.bodyUsed).toBe(false)
+      expect(clone).not.toHaveBeenCalled()
+      expect(await original.text()).toBe('{ "native" : "bytes é" }')
+      expect(active.pendingJobs()).toBe(0)
+    }
+    expect(rewrite).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    expect(senderCalls).toHaveLength(0)
+  })
+
+  it('bridges owned canonical Google origins normally', async () => {
+    const execute = mock(async (_job: GaBridgeJob) => new Response('{}'))
+    const active = await startBridge(execute)
+    const event = requestEvent('primary', 'antigravity-gemini-3.5-flash')
+    const original = event.request
+    await server.rewriteGaHttpRequest(event, {
+      bridge: active,
+      ownership,
+      isRegisteredModel: registered,
+      env: NO_PROXY_ENV,
+    })
+    expect(event.request).not.toBe(original)
+    expect(event.request.url.startsWith(`${active.origin}/agy/`)).toBe(true)
+    expect(active.pendingJobs()).toBe(1)
+    await (await fetch(event.request)).text()
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute.mock.calls[0]?.[0]).toMatchObject({
+      url: original.url,
+      body: JOB.body,
+      kind: 'primary',
+    })
+    expect(active.pendingJobs()).toBe(0)
+  })
+
   it('bridges registered kinds, retired IDs and every title', async () => {
     const active = await startBridge()
     const cases: Array<[GaHttpRequestEvent['kind'], string, boolean]> = [

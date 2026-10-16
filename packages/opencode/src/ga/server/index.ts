@@ -42,6 +42,7 @@ import type {
 } from '@opencode/plugin/promise/session'
 import { placeholderSecret } from '../../common-auth-embedded/opencode2/index.js'
 import { createGaLocationServices } from '../../plugin/ga-location-services.ts'
+import { isCanonicalGoogleOrigin } from '../../plugin/google-origin.ts'
 import type { persistAccountPool } from '../../plugin/persist-account-pool.ts'
 import {
   createLocationRuntime,
@@ -1506,6 +1507,8 @@ export function isGaOwnedRequest(
 export const GA_RETRY_OWNERSHIP_LIMIT = 512
 export const GA_UNSUPPORTED_REQUEST_MESSAGE =
   'This request cannot use Antigravity. Choose a supported Antigravity model.'
+export const GA_CUSTOM_GOOGLE_ORIGIN_MESSAGE =
+  'Antigravity pool requests need the default Google base URL. Remove the custom baseURL from the Google provider settings.'
 
 /**
  * The retry API has no attempt identity, so only the latest Google transport
@@ -1560,6 +1563,9 @@ export async function rewriteGaHttpRequest(
   const original = event.request
   if (!isGaGoogleContentRequest(original)) {
     throw new Error(GA_UNSUPPORTED_REQUEST_MESSAGE)
+  }
+  if (!isCanonicalGoogleOrigin(original.url)) {
+    throw new Error(GA_CUSTOM_GOOGLE_ORIGIN_MESSAGE)
   }
   // Titles must reach the engine's title router even for retired or foreign IDs.
   if (

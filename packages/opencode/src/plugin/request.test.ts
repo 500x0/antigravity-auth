@@ -115,6 +115,24 @@ describe('request.ts', () => {
       ).toBe(false)
     })
 
+    it('requires the canonical HTTPS origin rather than a hostname substring', () => {
+      for (const url of [
+        'http://generativelanguage.googleapis.com/v1beta/models',
+        'https://generativelanguage.googleapis.com:444/v1beta/models',
+        'https://generativelanguage.googleapis.com.example.invalid/v1beta/models',
+        'https://example.invalid/generativelanguage.googleapis.com/models',
+        'https://example.invalid/?host=generativelanguage.googleapis.com',
+        'not a URL generativelanguage.googleapis.com',
+      ]) {
+        expect(isGenerativeLanguageRequest(url)).toBe(false)
+      }
+      expect(
+        isGenerativeLanguageRequest(
+          'https://GENERATIVELANGUAGE.GOOGLEAPIS.COM:443/v1beta/models',
+        ),
+      ).toBe(true)
+    })
+
     it('detects URL and Request inputs (not only strings)', () => {
       // Matching on string-only would let fetch(new Request(...)) / fetch(new URL(...))
       // bypass the interceptor entirely.

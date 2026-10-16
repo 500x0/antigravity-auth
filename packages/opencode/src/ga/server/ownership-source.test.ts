@@ -44,6 +44,8 @@ it('selects pool then approved vault under the same prepared placeholder through
   let mode: 'local' | 'custody' = 'local'
   let localCalls = 0
   let vaultAdmissions = 0
+  let storeLoads = 0
+  let tokenRefreshes = 0
   const sends: GaSendInput[] = []
   const accounts: Parameters<
     typeof createGaLocalRequestPipeline
@@ -57,7 +59,10 @@ it('selects pool then approved vault under the same prepared placeholder through
     label: 'Vault account',
   }
   const factory = createGaLocationServicesFactory({
-    loadStoreModules: loadCommonAuthStoreModules,
+    loadStoreModules: () => {
+      storeLoads++
+      return loadCommonAuthStoreModules()
+    },
     resolveAccountFile: () => legacyPath,
     now: Date.now,
     runtime: (input) =>
@@ -150,11 +155,14 @@ it('selects pool then approved vault under the same prepared placeholder through
     services = await factory({
       directory,
       overrides: {
-        refreshAccessToken: async (refresh) => ({
-          access: 'pool-access',
-          refresh,
-          expires: Date.now() + 3_600_000,
-        }),
+        refreshAccessToken: async (refresh) => {
+          tokenRefreshes++
+          return {
+            access: 'pool-access',
+            refresh,
+            expires: Date.now() + 3_600_000,
+          }
+        },
         send: async (input) => {
           sends.push(input)
           return new Response(
@@ -210,15 +218,57 @@ it('selects pool then approved vault under the same prepared placeholder through
       expect(event.request.headers.has('x-goog-api-key')).toBe(false)
       return fetch(event.request)
     }
+    const refuseCustomOrigin = async () => {
+      if (!bridge) throw new Error('bridge unavailable')
+      const before = { storeLoads, tokenRefreshes, localCalls, vaultAdmissions }
+      const sendCount = sends.length
+      const original = new Request(
+        'http://127.0.0.1:1234/direct/v1/models/antigravity-gemini-3.5-flash:streamGenerateContent',
+        {
+          method: 'POST',
+          headers: { 'x-goog-api-key': placeholderSecret('google') },
+          body: JSON.stringify({ contents: [] }),
+        },
+      )
+      const event: GaHttpRequestEvent = {
+        sessionID: 'ses_custom_origin',
+        kind: 'primary',
+        model: { id: 'antigravity-gemini-3.5-flash', providerID: 'google' },
+        request: original,
+      }
+      await expect(
+        rewriteGaHttpRequest(event, {
+          bridge,
+          ownership,
+          isRegisteredModel: (id) => catalog.has(id),
+          env: {},
+        }),
+      ).rejects.toThrow(
+        'Antigravity pool requests need the default Google base URL. Remove the custom baseURL from the Google provider settings.',
+      )
+      expect({
+        storeLoads,
+        tokenRefreshes,
+        localCalls,
+        vaultAdmissions,
+      }).toEqual(before)
+      expect(sends).toHaveLength(sendCount)
+      expect(bridge.pendingJobs()).toBe(0)
+      expect(event.request).toBe(original)
+    }
+    await refuseCustomOrigin()
     const pool = await dispatch('primary', 'antigravity-gemini-3.5-flash')
     expect(pool.status).toBe(200)
     await pool.text()
     expect(localCalls).toBe(1)
+    expect(storeLoads).toBeGreaterThan(0)
+    expect(tokenRefreshes).toBe(1)
     expect(vaultAdmissions).toBe(0)
     expect(sends[0]?.auth.access).toBe('pool-access')
     expect(sends[0]?.envelope.project).toBe('pool-project')
     await accounts.current?.flushSaveToDisk()
     mode = 'custody'
+    await refuseCustomOrigin()
     const vault = await dispatch('primary', 'antigravity-gemini-3.5-flash')
     expect(vault.status).toBe(200)
     expect(await vault.text()).toContain('vault reply')
