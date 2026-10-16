@@ -166,6 +166,7 @@ async function withUnmigratedComposition(
   run: (
     send: FetchImpl,
     upstream: ReturnType<typeof mock<FetchImpl>>,
+    hostAuthReads: { value: number },
   ) => Promise<void>,
 ) {
   const owned = realpathSync(mkdtempSync('/tmp/agy-unmigrated-composition-'))
@@ -200,6 +201,16 @@ async function withUnmigratedComposition(
   const globalFetch = spyOn(globalThis, 'fetch').mockRejectedValue(
     new Error('global passthrough must not run'),
   )
+  const hostAuthReads = { value: 0 }
+  const getAuth = async () => {
+    hostAuthReads.value += 1
+    return {
+      type: 'oauth' as const,
+      access: 'synthetic-composition-access',
+      refresh: 'synthetic-composition-refresh',
+      expires: Date.now() + 3600000,
+    }
+  }
   let plugin:
     | Awaited<ReturnType<ReturnType<typeof createAntigravityPlugin>>>
     | undefined
@@ -215,18 +226,10 @@ async function withUnmigratedComposition(
       options: {},
       models: {},
     }
-    const loaded = await plugin.auth.loader(
-      async () => ({
-        type: 'oauth',
-        access: 'synthetic-composition-access',
-        refresh: 'synthetic-composition-refresh',
-        expires: Date.now() + 3600000,
-      }),
-      provider,
-    )
+    const loaded = await plugin.auth.loader(getAuth, provider)
     if (typeof loaded.fetch !== 'function')
       throw new Error('Production composition supplied no delegating fetch')
-    await run(loaded.fetch, upstream)
+    await run(loaded.fetch, upstream, hostAuthReads)
   } finally {
     await plugin?.dispose?.()
     globalFetch.mockRestore()
@@ -237,6 +240,51 @@ async function withUnmigratedComposition(
     rmSync(owned, { recursive: true, force: true })
   }
 }
+
+it('V1 still intercepts the default Google URL', async () => {
+  await withUnmigratedComposition(async (send, upstream) => {
+    const response = await send(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse',
+      { method: 'POST', body: '{"contents":[]}' },
+    )
+
+    expect(response.status).toBe(412)
+    expect((await response.json()).error.message).toContain('offline migration')
+    expect(upstream).not.toHaveBeenCalled()
+  })
+})
+
+it('V1 passes a lookalike proxy URL through unchanged', async () => {
+  await withUnmigratedComposition(async (send, upstream, hostAuthReads) => {
+    const url =
+      'https://proxy.example.invalid/generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse'
+    const body = '{"contents":[{"role":"user","parts":[{"text":"proxy"}]}]}'
+    const bodyBytes = Array.from(new TextEncoder().encode(body))
+    const headers = new Headers({
+      'content-type': 'application/json',
+      'x-proxy-test': 'unchanged',
+    })
+    const headerEntries = [...headers.entries()]
+    const init: RequestInit = { method: 'POST', headers, body }
+    const authReadsBeforeRequest = hostAuthReads.value
+
+    const response = await send(url, init)
+
+    expect(await response.text()).toBe('configured-upstream')
+    expect(upstream).toHaveBeenCalledTimes(1)
+    const [forwardedUrl, forwardedInit] = upstream.mock.calls[0] ?? []
+    expect(forwardedUrl).toBe(url)
+    expect(forwardedInit).toBe(init)
+    expect(forwardedInit?.method).toBe('POST')
+    expect(forwardedInit?.headers).toBe(headers)
+    expect([...headers.entries()]).toEqual(headerEntries)
+    expect(headers.has('authorization')).toBe(false)
+    expect(
+      Array.from(new TextEncoder().encode(String(forwardedInit?.body))),
+    ).toEqual(bodyBytes)
+    expect(hostAuthReads.value).toBe(authReadsBeforeRequest)
+  })
+})
 
 it('unmigrated production composition preserves configured non-generative passthrough when global fetch refuses', async () => {
   await withUnmigratedComposition(async (send, upstream) => {
