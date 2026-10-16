@@ -879,6 +879,105 @@ describe('shared bounded archive and owned command controls', () => {
   })
 })
 
+it('waits for authenticated GET /api/info when the UI root returns 200', async () => {
+  const authorization = `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`
+  const observedAuthorization: (string | null)[] = []
+  let rootRequests = 0
+  let infoRequests = 0
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname
+      if (path === '/') {
+        rootRequests++
+        return new Response('UI assets', { status: 200 })
+      }
+      if (path === '/api/info') {
+        infoRequests++
+        observedAuthorization.push(request.headers.get('authorization'))
+        if (request.headers.get('authorization') !== authorization)
+          return Response.json({ code: 'wrong_auth' }, { status: 401 })
+        if (infoRequests <= 3)
+          return Response.json({ code: 'service_starting' }, { status: 503 })
+        return Response.json({ ready: true }, { status: 200 })
+      }
+      return new Response('Not found', { status: 404 })
+    },
+  })
+  const log = spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await awaitGaHostReadiness(`http://127.0.0.1:${server.port}`, () => {})
+    expect(rootRequests).toBe(0)
+    expect(infoRequests).toBe(4)
+    expect(observedAuthorization).toEqual(Array(4).fill(authorization))
+    const diagnostics = log.mock.calls.map(([message]) => String(message))
+    expect(diagnostics).toContainEqual(
+      expect.stringMatching(
+        /readiness probe=1 path=\/api\/info status=503 elapsedMs=\d+/,
+      ),
+    )
+    expect(diagnostics).toContainEqual(
+      expect.stringMatching(
+        /readiness probe=4 path=\/api\/info status=200 elapsedMs=\d+/,
+      ),
+    )
+  } finally {
+    log.mockRestore()
+    await server.stop(true)
+  }
+})
+
+it('fails readiness closed with the last API status and body code after the startup budget', async () => {
+  let infoRequests = 0
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === '/api/info') {
+        infoRequests++
+        return Response.json({ code: 'service_starting' }, { status: 503 })
+      }
+      return new Response('UI assets', { status: 200 })
+    },
+  })
+  const log = spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await expect(
+      awaitGaHostReadiness(`http://127.0.0.1:${server.port}`, () => {}),
+    ).rejects.toThrow(/last status=503 body code=service_starting/)
+    expect(infoRequests).toBeGreaterThan(1)
+  } finally {
+    log.mockRestore()
+    await server.stop(true)
+  }
+}, 20_000)
+
+it('treats an unauthorized API info response as a hard readiness failure', async () => {
+  let infoRequests = 0
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === '/api/info') {
+        infoRequests++
+        return Response.json({ code: 'wrong_auth' }, { status: 401 })
+      }
+      return new Response('UI assets', { status: 200 })
+    },
+  })
+  const log = spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await expect(
+      awaitGaHostReadiness(`http://127.0.0.1:${server.port}`, () => {}),
+    ).rejects.toThrow(/GET \/api\/info returned 401.*body code=wrong_auth/)
+    expect(infoRequests).toBe(1)
+  } finally {
+    log.mockRestore()
+    await server.stop(true)
+  }
+})
+
 it('authenticates native controls only to their owned loopback origin', async () => {
   const seen: { authorization: string | null; body: string }[] = []
   const server = Bun.serve({
@@ -1108,9 +1207,11 @@ describe('GA ownership harness preparation (source controls, not native proof)',
       await awaitGaHostReadiness('http://127.0.0.1:1234', () => {})
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(stderr[0]).toMatch(
-        /readiness probe=1 error=TypeError elapsedMs=\d+/,
+        /readiness probe=1 path=\/api\/info error=TypeError elapsedMs=\d+/,
       )
-      expect(stderr[1]).toMatch(/readiness probe=2 status=200 elapsedMs=\d+/)
+      expect(stderr[1]).toMatch(
+        /readiness probe=2 path=\/api\/info status=200 elapsedMs=\d+/,
+      )
       expect(stderr[2]).toMatch(/readiness result=ready elapsedMs=\d+/)
     } finally {
       fetchMock.mockRestore()

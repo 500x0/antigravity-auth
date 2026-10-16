@@ -93,6 +93,7 @@ export const GA_HOSTNAMES = [
   'daily-cloudcode-pa.googleapis.com',
   'cloudcode-pa.googleapis.com',
 ] as const
+const GA_SERVER_PASSWORD = 'synthetic-ga-server-password'
 
 function requireCondition(
   condition: unknown,
@@ -220,8 +221,8 @@ export function gaChildEnvironment(
     if (path !== paths.root) ownedPath(paths.root, path)
   }
   const environment: NodeJS.ProcessEnv = {
-    OPENCODE_SERVER_PASSWORD: 'synthetic-ga-server-password',
-    OPENCODE_PASSWORD: 'synthetic-ga-server-password',
+    OPENCODE_SERVER_PASSWORD: GA_SERVER_PASSWORD,
+    OPENCODE_PASSWORD: GA_SERVER_PASSWORD,
     PATH: '/usr/local/bin:/usr/bin:/bin',
     HOME: paths.home,
     USERPROFILE: paths.home,
@@ -830,25 +831,53 @@ export async function awaitGaHostReadiness(
   const started = performance.now()
   const elapsed = () => Math.round(performance.now() - started)
   let probe = 0
+  let lastStatus: number | undefined
+  let lastBodyCode: string | undefined
   try {
     await waitForGaObservation(
       async () => {
         assertRunning()
         probe++
+        lastStatus = undefined
+        lastBodyCode = undefined
+        let response: Response
         try {
-          const response = await fetch(url, {
+          const target = new URL('/api/info', url)
+          response = await fetch(target, {
+            headers: {
+              authorization: `Basic ${Buffer.from(`opencode:${GA_SERVER_PASSWORD}`).toString('base64')}`,
+            },
             signal: AbortSignal.timeout(500),
           })
-          console.error(
-            `readiness probe=${probe} status=${response.status} elapsedMs=${elapsed()}`,
-          )
-          return true
         } catch (error) {
           console.error(
-            `readiness probe=${probe} error=${gaErrorKind(error)} elapsedMs=${elapsed()}`,
+            `readiness probe=${probe} path=/api/info error=${gaErrorKind(error)} elapsedMs=${elapsed()}`,
           )
           return false
         }
+        lastStatus = response.status
+        if (response.status !== 200) {
+          try {
+            const body: unknown = await response.json()
+            if (
+              body !== null &&
+              typeof body === 'object' &&
+              'code' in body &&
+              typeof body.code === 'string'
+            )
+              lastBodyCode = body.code
+          } catch {
+            // A missing or malformed error body does not make a 503 ready.
+          }
+        }
+        console.error(
+          `readiness probe=${probe} path=/api/info status=${response.status} elapsedMs=${elapsed()}`,
+        )
+        if (response.status === 200) return true
+        if (response.status === 503) return false
+        throw new Error(
+          `GET /api/info returned ${response.status}; body code=${lastBodyCode ?? 'none'}; expected HTTP 200 or 503 during startup`,
+        )
       },
       'loopback server readiness',
       GA_HOST_STARTUP_BUDGET_MS,
@@ -858,6 +887,15 @@ export async function awaitGaHostReadiness(
     console.error(
       `readiness result=give-up elapsedMs=${elapsed()} cause=${gaErrorKind(error)}`,
     )
+    if (
+      error instanceof Error &&
+      error.message ===
+        'Missing actual scenario observation: loopback server readiness'
+    )
+      throw new Error(
+        `GA host readiness budget exhausted: last status=${lastStatus ?? 'none'} body code=${lastBodyCode ?? 'none'}`,
+        { cause: error },
+      )
     throw error
   }
 }
@@ -3067,7 +3105,7 @@ export async function gaNativeRequest(
     response = await fetch(target, {
       method,
       headers: {
-        authorization: `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
+        authorization: `Basic ${Buffer.from(`opencode:${GA_SERVER_PASSWORD}`).toString('base64')}`,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),

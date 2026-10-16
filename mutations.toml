@@ -955,3 +955,16 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin-entry.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^V1\spasses\sa\slookalike\sproxy\sURL\sthrough\sunchanged$']
+
+[[control]]
+id = "ga-readiness-api-info-only"
+guards = "The GA host is not declared ready by the bundled UI root before its authenticated API reports readiness."
+file = "packages/e2e-tests/src/opencode-ga-harness.ts"
+old = "const target = new URL('/api/info', url)"
+new = "const target = new URL('/', url) // NON-VACUITY BREAK: probe the UI root instead of API readiness."
+test_file = "packages/e2e-tests/src/opencode-ga-harness.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/src/opencode-ga-harness.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/e2e-tests/src/opencode-ga-harness.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^waits\sfor\sauthenticated\sGET\s/api/info\swhen\sthe\sUI\sroot\sreturns\s200$']
