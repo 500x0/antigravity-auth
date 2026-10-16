@@ -375,7 +375,6 @@
     "setup/command-runner.js": ["node:child_process"],
     "setup/command.d.ts": ["./types.js"],
     "setup/command.js": [
-      "../auth-menu/confirm.js",
       "../auth-menu/select.js",
       "../auth-menu/terminal.js",
       "../claustrum/enrollment.js",

@@ -1,7 +1,7 @@
 // The one quota wording every surface shows: the command menu's dialogs on
 // OpenCode and Pi, the terminal auth menu, and the plugins' sidebars. Each of
-// them calls `formatQuota` (or `quotaTextParts` for one line per window), so
-// the wording cannot drift between plugins or between a dialog and a sidebar.
+// them calls `formatQuota`, `quotaTextParts`, or `quotaWindowParts`, so the
+// wording cannot drift between plugins or between a dialog and a sidebar.
 //
 // The rules: a window is named by its length (`5h`, `7d`), or, for a window
 // that binds only one model family, by the label the plugin stored it under.
@@ -55,17 +55,20 @@ export function quotaWindowName(limit) {
         return limit.label;
     return lengthName(limit.windowMinutes);
 }
-function percentLeft(remaining) {
-    return `${Math.round(Math.min(100, Math.max(0, remaining)))}% left`;
+function clampPercent(remaining) {
+    return Math.min(100, Math.max(0, remaining));
 }
-function resetText(resetsAt, now) {
-    if (resetsAt === undefined)
-        return '';
-    const at = Date.parse(resetsAt);
-    // A reset already passed says nothing about the future; leave it out.
-    if (!Number.isFinite(at) || at <= now)
-        return '';
-    return `, resets ${shortSpan(at - now)}`;
+function percentLeft(remaining) {
+    return `${Math.round(clampPercent(remaining))}% left`;
+}
+function resetDetails(resetsAt, checkedAt, now) {
+    const at = resetsAt === undefined ? Number.NaN : Date.parse(resetsAt);
+    return {
+        ...(Number.isFinite(at) && at > now
+            ? { resetIn: shortSpan(at - now) }
+            : {}),
+        resetSinceReading: Number.isFinite(at) && at > checkedAt && at <= now,
+    };
 }
 /** Shortest window first, so `5h` reads before `7d`; unknown lengths last. */
 function displayOrder(left, right) {
@@ -85,6 +88,56 @@ function displayOrder(left, right) {
     return left.label < right.label ? -1 : left.label > right.label ? 1 : 0;
 }
 /**
+ * Structured quota wording for layouts that need one row per window. The
+ * windows use the same filtering and order as `quotaTextParts`; future resets
+ * and the optional age keep the shared formatter's wording.
+ */
+export function quotaWindowParts(quota, options) {
+    if (!quota)
+        return { windows: [] };
+    const { now } = options;
+    const readings = quota.limits
+        .filter((limit) => limit.kind === 'reading' && limit.remainingPercent !== undefined)
+        .sort(displayOrder);
+    const windows = readings.map((limit) => {
+        const remainingPercent = clampPercent(limit.remainingPercent ?? 0);
+        return {
+            kind: 'window',
+            name: quotaWindowName(limit),
+            figure: percentLeft(limit.remainingPercent ?? 0),
+            remainingPercent,
+            checkedAt: limit.checkedAt,
+            ...resetDetails(limit.resetsAt, limit.checkedAt, now),
+        };
+    });
+    const budget = quota.budget;
+    if (budget) {
+        const remainingPercent = budget.remainingPercent;
+        const figure = budget.reached
+            ? 'credits spent'
+            : remainingPercent !== undefined
+                ? `credits ${percentLeft(remainingPercent)}`
+                : 'credits available';
+        windows.push({
+            kind: 'budget',
+            name: 'credits',
+            figure,
+            ...(remainingPercent === undefined
+                ? {}
+                : { remainingPercent: clampPercent(remainingPercent) }),
+            checkedAt: budget.checkedAt,
+            ...resetDetails(budget.resetsAt, budget.checkedAt, now),
+        });
+    }
+    if (windows.length > 0) {
+        const age = now - Math.min(...windows.map((part) => part.checkedAt));
+        if (age > (options.staleAfterMs ?? QUOTA_STALE_AFTER_MS)) {
+            return { windows, age: `checked ${shortSpan(age)} ago` };
+        }
+    }
+    return { windows };
+}
+/**
  * The pieces of a quota text, in order: one per reported window
  * (`5h 58% left, resets 2h`), then the credit budget when there is one, then
  * `checked 3h ago` when the oldest piece shown is stale. Empty when nothing
@@ -92,35 +145,13 @@ function displayOrder(left, right) {
  * one line per window (the terminal auth menu) uses these directly.
  */
 export function quotaTextParts(quota, options) {
-    if (!quota)
-        return [];
-    const { now } = options;
+    const parts = quotaWindowParts(quota, options);
     const full = (options.form ?? 'full') === 'full';
-    const parts = [];
-    const times = [];
-    const readings = quota.limits
-        .filter((limit) => limit.kind === 'reading' && limit.remainingPercent !== undefined)
-        .sort(displayOrder);
-    for (const limit of readings) {
-        times.push(limit.checkedAt);
-        parts.push(`${quotaWindowName(limit)} ${percentLeft(limit.remainingPercent ?? 0)}${full ? resetText(limit.resetsAt, now) : ''}`);
-    }
-    const budget = quota.budget;
-    if (budget) {
-        times.push(budget.checkedAt);
-        const figure = budget.reached
-            ? 'credits spent'
-            : budget.remainingPercent !== undefined
-                ? `credits ${percentLeft(budget.remainingPercent)}`
-                : 'credits available';
-        parts.push(`${figure}${full ? resetText(budget.resetsAt, now) : ''}`);
-    }
-    if (times.length > 0) {
-        const age = now - Math.min(...times);
-        if (age > (options.staleAfterMs ?? QUOTA_STALE_AFTER_MS))
-            parts.push(`checked ${shortSpan(age)} ago`);
-    }
-    return parts;
+    const text = parts.windows.map((part) => {
+        const reset = full && part.resetIn ? `, resets ${part.resetIn}` : '';
+        return `${part.kind === 'budget' ? '' : `${part.name} `}${part.figure}${reset}`;
+    });
+    return parts.age === undefined ? text : [...text, parts.age];
 }
 /**
  * A row's quota as one line: `5h 58% left · 7d 90% left` in the compact
