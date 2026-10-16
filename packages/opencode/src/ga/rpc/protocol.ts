@@ -1705,6 +1705,7 @@ function checkSettings(value: unknown, path: Path, issues: Issues): void {
 
 function validateApplyOutput(value: unknown, issues: Issues): void {
   const path: Path = []
+  if (!checkJsonValue(value, path, issues)) return
   if (!isPlainRecord(value)) {
     issues.add(path, 'expected a plain object')
     return
