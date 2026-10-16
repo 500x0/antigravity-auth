@@ -773,6 +773,241 @@ it('admits Linux x64 artifact preparation without asserting runtime container me
 })
 
 describe('GA ownership harness preparation (source controls, not native proof)', () => {
+  function activationFixture(fault = '') {
+    const paths = prepareGaRoot(root())
+    const barrier = Promise.withResolvers<void>()
+    const firstRequest = Promise.withResolvers<string>()
+    const calls: string[] = []
+    const premature: string[] = []
+    const entries: Record<string, unknown>[] = []
+    let ready = false
+    const google = {
+      id: 'google',
+      name: 'Google',
+      methods: fault === 'missing-key' ? [] : [{ type: 'key' }],
+      connections: [],
+    }
+    let inventory: unknown = [google]
+    if (fault === 'missing-google') inventory = []
+    if (fault === 'duplicate-google') inventory = [google, google]
+    if (fault === 'not-array') inventory = { google }
+    if (fault === 'missing-name')
+      inventory = [{ id: 'google', methods: [], connections: [] }]
+    if (fault === 'bad-method')
+      inventory = [{ ...google, methods: [{ type: 'invented' }] }]
+    if (fault === 'bad-connection')
+      inventory = [{ ...google, connections: [{}] }]
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        const call = `${request.method} ${url.pathname}`
+        calls.push(call)
+        firstRequest.resolve(call)
+        if (url.pathname.startsWith('/api/integration')) {
+          expect(url.searchParams.get('location[directory]')).toBe(
+            paths.project,
+          )
+          expect(request.headers.get('authorization')).toBe(
+            `Basic ${Buffer.from('opencode:synthetic-ga-server-password').toString('base64')}`,
+          )
+        }
+        if (call === 'GET /api/integration') {
+          await barrier.promise
+          ready = true
+          calls.push('activation settled')
+          return Response.json({
+            location: {
+              directory:
+                fault === 'wrong-location'
+                  ? '/different-project'
+                  : paths.project,
+            },
+            data: inventory,
+          })
+        }
+        if (!ready && url.pathname.startsWith('/api/integration')) {
+          premature.push(call)
+          return Response.json(
+            {
+              _tag: 'IntegrationNotFoundError',
+              integrationID: 'google',
+              message: 'Integration not found: google',
+            },
+            { status: 404 },
+          )
+        }
+        if (call === 'POST /api/integration/google/connect/key') {
+          expect(await request.json()).toEqual({
+            key: 'synthetic-ga-key',
+            label: 'native-control',
+          })
+          entries.push({
+            id: 'native-id',
+            integrationID: 'google',
+            label: 'native-control',
+            active: false,
+            value: { type: 'key', key: 'synthetic-ga-key' },
+          })
+          return new Response(null, { status: 204 })
+        }
+        if (call === 'POST /api/credential/native-id/activate') {
+          entries[0]!.active = true
+          return new Response(null, { status: 204 })
+        }
+        if (call === 'GET /api/credential')
+          return Response.json({ data: entries })
+        if (call === 'GET /api/integration/google')
+          return Response.json({ data: google })
+        throw new Error(`Unexpected integration action: ${call}`)
+      },
+    })
+    const harness = {
+      paths,
+      host: { url: `http://127.0.0.1:${server.port}` },
+      mock: { url: `http://127.0.0.1:${server.port}` },
+    }
+    return { paths, harness, barrier, firstRequest, calls, premature, server }
+  }
+
+  it('awaits completed list activation before native key creation', async () => {
+    const f = activationFixture()
+    const pending = connectGaNativeKey(f.harness).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    )
+    try {
+      expect(await f.firstRequest.promise).toBe('GET /api/integration')
+      expect(f.calls).toEqual(['GET /api/integration'])
+      f.barrier.resolve()
+      const result = await pending
+      if ('error' in result) throw result.error
+      expect(result.value.id).toBe('native-id')
+      expect(f.calls.slice(0, 3)).toEqual([
+        'GET /api/integration',
+        'activation settled',
+        'POST /api/integration/google/connect/key',
+      ])
+      expect(f.premature).toEqual([])
+    } finally {
+      f.barrier.resolve()
+      await pending
+      await f.server.stop(true)
+    }
+  })
+
+  it('awaits completed list activation before pool browser method lookup', async () => {
+    const f = activationFixture()
+    const pending = loginGaPool(f.harness).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    )
+    try {
+      expect(await f.firstRequest.promise).toBe('GET /api/integration')
+      expect(f.calls).toEqual(['GET /api/integration'])
+      f.barrier.resolve()
+      const result = await pending
+      // Stop at the missing browser method so this control measures lookup
+      // ordering without starting an OAuth attempt; the full login has its own test.
+      expect('error' in result && String(result.error)).toContain(
+        'GA_POOL_BROWSER_METHOD_MISSING',
+      )
+      expect(f.calls).toEqual([
+        'GET /api/integration',
+        'activation settled',
+        'GET /api/integration/google',
+      ])
+      expect(f.premature).toEqual([])
+    } finally {
+      f.barrier.resolve()
+      await pending
+      await f.server.stop(true)
+    }
+  })
+
+  it('exposes the original structured 404 for calls that bypass activation', async () => {
+    const f = activationFixture()
+    try {
+      for (const [method, suffix, body, status] of [
+        [
+          'POST',
+          '/connect/key',
+          { key: 'synthetic-ga-key', label: 'native-control' },
+          204,
+        ],
+        ['GET', '', undefined, 200],
+      ] as const) {
+        await expect(
+          gaNativeRequest(
+            f.harness.host.url,
+            method,
+            `/api/integration/google${suffix}?${new URLSearchParams({ 'location[directory]': f.paths.project })}`,
+            body,
+            status,
+          ),
+        ).rejects.toThrow(
+          `returned 404, expected ${status}: {"_tag":"IntegrationNotFoundError"`,
+        )
+      }
+      expect(f.premature).toEqual([
+        'POST /api/integration/google/connect/key',
+        'GET /api/integration/google',
+      ])
+    } finally {
+      f.barrier.resolve()
+      await f.server.stop(true)
+    }
+  })
+
+  for (const entry of ['key', 'pool'] as const) {
+    for (const fault of [
+      'missing-google',
+      'duplicate-google',
+      'not-array',
+      'missing-name',
+      'bad-method',
+      'bad-connection',
+      'wrong-location',
+    ]) {
+      it(`refuses ${fault} after ${entry} activation without a key or OAuth action`, async () => {
+        const f = activationFixture(fault)
+        f.barrier.resolve()
+        try {
+          await expect(
+            entry === 'key'
+              ? connectGaNativeKey(f.harness)
+              : loginGaPool(f.harness),
+          ).rejects.toThrow(
+            fault === 'missing-google' || fault === 'duplicate-google'
+              ? 'GA_GOOGLE_INTEGRATION_MISSING_AFTER_ACTIVATION'
+              : 'GA_INTEGRATION_INVENTORY_MALFORMED',
+          )
+          expect(f.calls).toEqual([
+            'GET /api/integration',
+            'activation settled',
+          ])
+          expect(f.premature).toEqual([])
+        } finally {
+          await f.server.stop(true)
+        }
+      })
+    }
+  }
+
+  it('requires the native key method after activation before key creation', async () => {
+    const f = activationFixture('missing-key')
+    f.barrier.resolve()
+    try {
+      await expect(connectGaNativeKey(f.harness)).rejects.toThrow(
+        'GA_NATIVE_KEY_METHOD_MISSING_AFTER_ACTIVATION',
+      )
+      expect(f.calls).toEqual(['GET /api/integration', 'activation settled'])
+    } finally {
+      await f.server.stop(true)
+    }
+  })
+
   it('dispatches the three ownership cases separately and retains the four-case smoke order', () => {
     expect(GA_SMOKE_CASE_IDS).toEqual([
       'ga-ownership-pool-login',
@@ -841,11 +1076,34 @@ describe('GA ownership harness preparation (source controls, not native proof)',
       async fetch(request): Promise<Response> {
         const url = new URL(request.url)
         calls.push(`${request.method} ${url.pathname}`)
-        if (url.pathname.startsWith('/api/integration/'))
+        if (
+          url.pathname === '/api/integration' ||
+          url.pathname.startsWith('/api/integration/')
+        )
           expect(url.searchParams.get('location[directory]')).toBe(
             paths.project,
           )
         else expect(url.search).toBe('')
+        if (url.pathname === '/api/integration') {
+          return Response.json({
+            location: { directory: paths.project },
+            data: [
+              {
+                id: 'google',
+                name: 'Google',
+                methods: [
+                  { type: 'key' },
+                  {
+                    type: 'oauth',
+                    id: 'antigravity-auth-pool-browser',
+                    label: 'Google (antigravity-auth pool, browser)',
+                  },
+                ],
+                connections: [],
+              },
+            ],
+          })
+        }
         if (url.pathname.endsWith('/connect/key')) {
           expect(await request.json()).toEqual({
             key: 'synthetic-ga-key',
