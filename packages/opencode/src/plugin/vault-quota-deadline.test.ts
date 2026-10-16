@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AntigravityVaultAccountSource,
+  VaultAccountState,
   VaultProviderStateFile,
 } from '@cortexkit/antigravity-auth-core'
 import type { BackgroundVaultQuotaRefresh } from './background-vault-quota-refresh'
@@ -32,7 +33,9 @@ async function settles(pending: Promise<unknown>): Promise<boolean> {
   }
 }
 
-async function fixture(mode: 'headers' | 'body' | 'failure') {
+async function fixture(
+  mode: 'headers' | 'body' | 'failure' | 'fresh' | 'recorded',
+) {
   const root = mkdtempSync(join(tmpdir(), 'vault-deadline-'))
   const stateFile = join(root, 'sidebar.json')
   const savedEnvironment = {
@@ -55,19 +58,21 @@ async function fixture(mode: 'headers' | 'body' | 'failure') {
       debug_tui: false,
     }),
   )
-  const stored: VaultProviderStateFile = {
-    schemaVersion: 1,
-    accounts: {
-      'secret-account': {
-        observed: {
-          routeId: 'secret-route',
-          credentialId: 'secret-credential',
-          recordVersion: 1,
-        },
-        quota: { schemaVersion: 1, cachedQuota: {}, cachedQuotaUpdatedAt: 123 },
+  const accounts: Record<string, VaultAccountState> = {
+    'secret-account': {
+      observed: {
+        routeId: 'secret-route',
+        credentialId: 'secret-credential',
+        recordVersion: 1,
+      },
+      quota: {
+        schemaVersion: 1,
+        cachedQuota: {},
+        cachedQuotaUpdatedAt: mode === 'fresh' ? Date.now() : 123,
       },
     },
   }
+  const stored: VaultProviderStateFile = { schemaVersion: 1, accounts }
   const ref = {
     routeId: 'secret-route',
     credentialId: 'secret-credential',
@@ -98,8 +103,22 @@ async function fixture(mode: 'headers' | 'body' | 'failure') {
         },
         options.signal,
       ),
-    commitState: async () => {
-      throw new Error('must not commit a stalled reading')
+    commitState: async (by, update, signal) => {
+      if (mode !== 'recorded')
+        throw new Error('must not commit a stalled reading')
+      signal?.throwIfAborted()
+      const next = update(stored.accounts[by.accountIdentity])
+      if (!next) throw new Error('missing quota update')
+      const state = {
+        observed: {
+          routeId: by.routeId,
+          credentialId: by.credentialId,
+          recordVersion: by.recordVersion,
+        },
+        ...next,
+      }
+      accounts[by.accountIdentity] = state
+      return { status: 'written', state }
     },
   }
   const createCustody = custodyModule.createOpenCodeVaultCustody
@@ -138,12 +157,31 @@ async function fixture(mode: 'headers' | 'body' | 'failure') {
     },
   )
   let aborted = 0
+  let fetched = 0
   let bodyCanceled = 0
   const onAbort = Promise.withResolvers<void>()
   const entered = Promise.withResolvers<void>()
   const fetchImpl = (async (_url, init) => {
+    fetched++
     entered.resolve()
     const signal = init?.signal
+    if (mode === 'recorded')
+      return Response.json({
+        groups: [
+          {
+            displayName: 'Gemini Models',
+            buckets: [
+              {
+                bucketId: 'gemini-weekly',
+                displayName: 'Weekly',
+                window: 'weekly',
+                remainingFraction: 0.5,
+              },
+            ],
+          },
+        ],
+      })
+    if (mode === 'fresh') throw new Error('fresh quota must not fetch')
     if (mode === 'failure')
       return new Response(
         'secret-token secret-project secret@example.test secret-route secret-credential secret-account',
@@ -212,6 +250,9 @@ async function fixture(mode: 'headers' | 'body' | 'failure') {
     get aborted() {
       return aborted
     },
+    get fetched() {
+      return fetched
+    },
     get bodyCanceled() {
       return bodyCanceled
     },
@@ -230,6 +271,32 @@ async function fixture(mode: 'headers' | 'body' | 'failure') {
       rmSync(root, { recursive: true, force: true })
     },
   }
+}
+
+for (const mode of ['fresh', 'recorded'] as const) {
+  it(`V1 ${mode} outcome does not reach app.log with debug disabled`, async () => {
+    const f = await fixture(mode)
+    try {
+      const before =
+        f.stored.accounts['secret-account']?.quota?.cachedQuotaUpdatedAt
+      await f.poller.tick()
+      if (mode === 'fresh') {
+        expect(f.fetched).toBe(0)
+        expect(
+          f.stored.accounts['secret-account']?.quota?.cachedQuotaUpdatedAt,
+        ).toBe(before)
+      } else {
+        expect(f.fetched).toBe(1)
+        expect(
+          f.stored.accounts['secret-account']?.quota?.cachedQuotaUpdatedAt,
+        ).toBeGreaterThan(123)
+      }
+      expect(f.records).toEqual([])
+      expect(JSON.stringify(f.records)).not.toContain('secret-')
+    } finally {
+      await f.close()
+    }
+  })
 }
 
 for (const mode of ['headers', 'body'] as const) {

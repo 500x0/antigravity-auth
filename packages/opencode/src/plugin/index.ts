@@ -478,7 +478,10 @@ export const createAntigravityPlugin =
         transport: vaultQuotaTransport,
         logger,
         onOutcome: (level, outcome) =>
-          quotaOutcomeLogger[level]('vault-quota-tick', { ...outcome }),
+          (level === 'warn' ? quotaOutcomeLogger : logger)[level](
+            'vault-quota-tick',
+            { ...outcome },
+          ),
         now: dependencies.clock.now,
         random: dependencies.clock.random,
       })
