@@ -3131,15 +3131,43 @@ export function gaNativeControl(url: string) {
   const sdk = () => (client ??= loadClient())
   return {
     async messages(session: GaSessionRef): Promise<GaSessionMessage[]> {
-      const response = await (await sdk()).message.list(
-        { sessionID: session.id, limit: 100, order: 'asc' },
-        { signal: AbortSignal.timeout(5000) },
+      const messages: GaSessionMessage[] = []
+      const messageIDs = new Set<string>()
+      const seenCursors = new Set<string>()
+      let cursor: string | undefined
+      for (let pageIndex = 0; pageIndex < 10; pageIndex++) {
+        const request =
+          cursor === undefined
+            ? { sessionID: session.id, limit: 100, order: 'asc' as const }
+            : { sessionID: session.id, limit: 100, cursor }
+        const response = await (await sdk()).message.list(request, {
+          signal: AbortSignal.timeout(5000),
+        })
+        if (response.data.length === 0) return messages
+
+        const next = response.cursor.next
+        requireCondition(
+          typeof next === 'string' && next.length > 0,
+          'Non-empty completion message page has no next cursor; refusing an incomplete freshness boundary',
+        )
+        requireCondition(
+          next !== cursor && !seenCursors.has(next),
+          'Completion message inventory cursor repeated or failed to advance',
+        )
+        for (const message of response.data) {
+          requireCondition(
+            !messageIDs.has(message.id),
+            `Completion message inventory contains duplicate ID ${message.id}`,
+          )
+          messageIDs.add(message.id)
+        }
+        messages.push(...response.data)
+        seenCursors.add(next)
+        cursor = next
+      }
+      throw new Error(
+        'Completion message inventory did not reach an empty page within 10 pages',
       )
-      requireCondition(
-        response.cursor.next == null && response.cursor.previous == null,
-        'Completion message inventory is paginated; refusing an incomplete freshness boundary',
-      )
-      return response.data
     },
     async message(
       session: GaSessionRef,

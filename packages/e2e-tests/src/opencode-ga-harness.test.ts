@@ -109,17 +109,20 @@ function completedRun() {
     stderr: '',
     timedOut: false,
     outputCapExceeded: false,
-    stdout: JSON.stringify({
-      type: 'text',
-      sessionID: 'ses-exercised',
-      part: {
+    stdout: [
+      JSON.stringify({ type: 'step_start', sessionID: 'ses-exercised' }),
+      JSON.stringify({
         type: 'text',
         sessionID: 'ses-exercised',
-        messageID: assistant.id,
-        text: 'GA_OK_fixture',
-        time: { start: 3, end: 4 },
-      },
-    }),
+        part: {
+          type: 'text',
+          sessionID: 'ses-exercised',
+          messageID: assistant.id,
+          text: 'GA_OK_fixture',
+          time: { start: 3, end: 4 },
+        },
+      }),
+    ].join('\n'),
     completion: {
       sessionID: 'ses-exercised',
       prompt: 'Reply with GA_OK_fixture. Primary nonce fixture',
@@ -131,11 +134,180 @@ function completedRun() {
   }
 }
 
+function nativeMessageServer(
+  pages: Array<{
+    data: unknown[]
+    cursor: { next?: string; previous?: string }
+  }>,
+  assistant: unknown,
+) {
+  const calls: Array<{
+    order: string | null
+    cursor: string | null
+    limit: string | null
+  }> = []
+  let pageIndex = 0
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname.endsWith('/wait'))
+        return new Response(null, { status: 204 })
+      if (url.pathname.endsWith('/message')) {
+        calls.push({
+          order: url.searchParams.get('order'),
+          cursor: url.searchParams.get('cursor'),
+          limit: url.searchParams.get('limit'),
+        })
+        const page = pages[pageIndex++]
+        return Response.json(page ?? { data: [], cursor: {} })
+      }
+      return Response.json({ data: assistant })
+    },
+  })
+  return { server, calls }
+}
+
 describe('GA pinned CLI assistant and persisted terminal completion oracle', () => {
   it('accepts attributed text plus a fresh completed assistant and succeeded idle, without inventing a terminal stdout event', () => {
+    const run = completedRun()
+    expect(run.stdout.split('\n').map((line) => JSON.parse(line).type)).toEqual(
+      ['step_start', 'text'],
+    )
     expect(() =>
-      assertGaSuccess(completedRun() as unknown as GaRunResult, 'fixture'),
+      assertGaSuccess(run as unknown as GaRunResult, 'fixture'),
     ).not.toThrow()
+  })
+  it('GA native completion collects cursor pages and trusts host finish without CLI step_finish', async () => {
+    const run = completedRun()
+    const earlierAssistant = {
+      ...run.completion.assistant,
+      id: 'msg-earlier-fresh',
+      time: { created: 1, completed: 2 },
+      content: [{ type: 'text' as const, text: 'earlier assistant' }],
+    }
+    const messages = [earlierAssistant, ...run.completion.messages]
+    const { server, calls } = nativeMessageServer(
+      [
+        { data: [], cursor: {} },
+        {
+          data: messages,
+          cursor: { previous: 'cursor-before', next: 'cursor-after' },
+        },
+        { data: [], cursor: {} },
+      ],
+      run.completion.assistant,
+    )
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      const session = { id: 'ses-exercised', directory: '/owned/project' }
+      const before = await native.messages(session)
+      const completion = await collectGaCompletion(
+        native,
+        session,
+        run.completion.prompt,
+        before,
+        run.stdout,
+      )
+
+      expect(before).toEqual([])
+      expect(completion.messages).toEqual(messages)
+      expect(() =>
+        assertGaSuccess(
+          { ...run, completion } as unknown as GaRunResult,
+          'fixture',
+        ),
+      ).not.toThrow()
+      expect(calls).toEqual([
+        { order: 'asc', cursor: null, limit: '100' },
+        { order: 'asc', cursor: null, limit: '100' },
+        { order: null, cursor: 'cursor-after', limit: '100' },
+      ])
+    } finally {
+      await server.stop(true)
+    }
+  })
+  it('rejects a non-empty message page without a next cursor', async () => {
+    const run = completedRun()
+    const { server } = nativeMessageServer(
+      [
+        {
+          data: [run.completion.assistant],
+          cursor: { previous: 'cursor-before' },
+        },
+      ],
+      run.completion.assistant,
+    )
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      await expect(
+        native.messages({ id: 'ses-exercised', directory: '/owned/project' }),
+      ).rejects.toThrow('has no next cursor')
+    } finally {
+      await server.stop(true)
+    }
+  })
+  it('rejects a message inventory cursor that repeats instead of advancing', async () => {
+    const run = completedRun()
+    const { server } = nativeMessageServer(
+      [
+        { data: [run.completion.assistant], cursor: { next: 'cursor-repeat' } },
+        { data: [run.completion.assistant], cursor: { next: 'cursor-repeat' } },
+      ],
+      run.completion.assistant,
+    )
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      await expect(
+        native.messages({ id: 'ses-exercised', directory: '/owned/project' }),
+      ).rejects.toThrow('cursor repeated or failed to advance')
+    } finally {
+      await server.stop(true)
+    }
+  })
+  it('rejects duplicate message IDs across inventory pages', async () => {
+    const run = completedRun()
+    const { server } = nativeMessageServer(
+      [
+        { data: [run.completion.assistant], cursor: { next: 'cursor-one' } },
+        { data: [run.completion.assistant], cursor: { next: 'cursor-two' } },
+      ],
+      run.completion.assistant,
+    )
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      await expect(
+        native.messages({ id: 'ses-exercised', directory: '/owned/project' }),
+      ).rejects.toThrow('duplicate ID msg-fresh')
+    } finally {
+      await server.stop(true)
+    }
+  })
+  it('rejects an inventory that does not exhaust within the page budget', async () => {
+    const run = completedRun()
+    const pages = Array.from({ length: 10 }, (_, index) => ({
+      data: [
+        {
+          ...run.completion.assistant,
+          id: `msg-page-${index}`,
+        },
+      ],
+      cursor: { next: `cursor-page-${index}` },
+    }))
+    const { server, calls } = nativeMessageServer(
+      pages,
+      run.completion.assistant,
+    )
+    try {
+      const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
+      await expect(
+        native.messages({ id: 'ses-exercised', directory: '/owned/project' }),
+      ).rejects.toThrow('did not reach an empty page within 10 pages')
+      expect(calls).toHaveLength(10)
+    } finally {
+      await server.stop(true)
+    }
   })
   const faults: Record<string, (run: ReturnType<typeof completedRun>) => void> =
     {
@@ -218,7 +390,7 @@ describe('GA pinned CLI assistant and persisted terminal completion oracle', () 
   it('uses the pinned singular message.list and session.message.get shapes for the requested session', async () => {
     const run = completedRun()
     const paths: string[] = []
-    let prompted = false
+    let messagePage = 0
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
@@ -231,12 +403,18 @@ describe('GA pinned CLI assistant and persisted terminal completion oracle', () 
         if (url.pathname.endsWith('/wait'))
           return new Response(null, { status: 204 })
         if (url.pathname.endsWith('/message')) {
-          expect(url.searchParams.get('order')).toBe('asc')
           expect(url.searchParams.get('limit')).toBe('100')
-          return Response.json({
-            data: prompted ? run.completion.messages : [],
-            cursor: {},
-          })
+          const cursor = url.searchParams.get('cursor')
+          if (cursor === null) expect(url.searchParams.get('order')).toBe('asc')
+          else expect(url.searchParams.get('order')).toBeNull()
+          const page = messagePage++
+          if (page === 0) return Response.json({ data: [], cursor: {} })
+          if (page === 1)
+            return Response.json({
+              data: run.completion.messages,
+              cursor: { previous: 'cursor-before', next: 'cursor-after' },
+            })
+          return Response.json({ data: [], cursor: {} })
         }
         return Response.json({ data: run.completion.assistant })
       },
@@ -245,7 +423,6 @@ describe('GA pinned CLI assistant and persisted terminal completion oracle', () 
       const native = gaNativeControl(`http://127.0.0.1:${server.port}`)
       const session = { id: 'ses-exercised', directory: '/owned/project' }
       const before = await native.messages(session)
-      prompted = true
       const completion = await collectGaCompletion(
         native,
         session,
@@ -260,6 +437,7 @@ describe('GA pinned CLI assistant and persisted terminal completion oracle', () 
       expect(paths).toEqual([
         'GET /api/session/ses-exercised/message',
         'POST /api/experimental/session/ses-exercised/wait',
+        'GET /api/session/ses-exercised/message',
         'GET /api/session/ses-exercised/message',
         'GET /api/session/ses-exercised/message/msg-fresh',
       ])
