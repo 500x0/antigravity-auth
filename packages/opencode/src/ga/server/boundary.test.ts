@@ -203,6 +203,149 @@ function snapshot(output: AntigravityStateOutput): AntigravityStateSnapshot {
   return output
 }
 
+function expectPlainJson(value: unknown): void {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  ) {
+    return
+  }
+  if (typeof value === 'number') {
+    expect(Number.isFinite(value)).toBe(true)
+    return
+  }
+  expect(typeof value).toBe('object')
+  if (typeof value !== 'object') throw new Error('Expected a JSON value')
+  if (Array.isArray(value)) {
+    for (const entry of value) expectPlainJson(entry)
+    return
+  }
+  expect([Object.prototype, null]).toContain(Object.getPrototypeOf(value))
+  for (const key of Reflect.ownKeys(value)) {
+    expect(typeof key).toBe('string')
+    expectPlainJson(Reflect.get(value, key))
+  }
+}
+
+describe('JSON-safe state projection', () => {
+  it('state returns JSON-safe fresh-account DTOs without own undefined optional fields', async () => {
+    const activation = activate({
+      state: makeState({}, (read) => ({
+        ...read,
+        accounts: {
+          kind: 'complete',
+          rows: [
+            { selector: selectorFor(0), row: { index: 0, enabled: true } },
+          ],
+        },
+      })),
+      commands: makeCommands(),
+      generation: 'gen',
+    })
+    const output = snapshot(
+      await activation.handlers.state(stateInput(null, SESSION_A, 0)),
+    )
+    expect(output.accounts).toHaveLength(1)
+    const account = output.accounts[0]
+    if (!account) throw new Error('Expected the fresh account')
+    expect(Object.hasOwn(account, 'cooldownUntil')).toBe(false)
+    expect(account.quota).toEqual({})
+    expectPlainJson(output)
+  })
+
+  it.each([
+    0, 1_700_000_123_456,
+  ])('keeps the exact defined cooldown %s', async (coolingDownUntil) => {
+    const activation = activate({
+      state: makeState({}, (read) => ({
+        ...read,
+        accounts: {
+          kind: 'complete',
+          rows: [
+            { selector: selectorFor(0), row: { index: 0, coolingDownUntil } },
+          ],
+        },
+      })),
+      commands: makeCommands(),
+      generation: 'gen',
+    })
+    const output = snapshot(
+      await activation.handlers.state(stateInput(null, SESSION_A, 0)),
+    )
+    expect(output.accounts[0]?.cooldownUntil).toBe(coolingDownUntil)
+    expectPlainJson(output)
+  })
+
+  it.each([
+    false,
+    true,
+  ])('omits sparse quota/window timestamps and preserves defined ones (defined=%s)', async (defined) => {
+    const resetAt = 1_700_000_123_456
+    const checkedAt = 1_700_000_000_000
+    const resetTime = defined ? new Date(resetAt).toISOString() : undefined
+    const activation = activate({
+      state: makeState({}, (read) => ({
+        ...read,
+        accounts: {
+          kind: 'complete',
+          rows: [
+            {
+              selector: selectorFor(0),
+              row: {
+                index: 0,
+                cachedQuotaUpdatedAt: defined ? checkedAt : undefined,
+                cachedQuota: {
+                  gemini: { remainingFraction: 0.42, resetTime },
+                  'non-gemini': {
+                    remainingFraction: 0.5,
+                    resetTime,
+                    windows: [
+                      {
+                        window: '5h',
+                        remainingFraction: 0.5,
+                        resetTime: resetTime ?? '',
+                      },
+                    ],
+                  },
+                },
+                tier: {
+                  id: 'free-tier',
+                  capturedAt: checkedAt,
+                  paidId: undefined,
+                },
+              },
+            },
+          ],
+        },
+      })),
+      commands: makeCommands(),
+      generation: 'gen',
+    })
+    const output = snapshot(
+      await activation.handlers.state(stateInput(null, SESSION_A, 0)),
+    )
+    const account = output.accounts[0]
+    if (!account) throw new Error('Expected the quota account')
+    expect(Object.hasOwn(account.quota.gemini ?? {}, 'windows')).toBe(false)
+    expect(account.quota.gemini?.remainingPercent).toBe(42)
+    expect(account.quota['non-gemini']?.remainingPercent).toBe(50)
+    expect(account.quota['non-gemini']?.windows?.[0]?.window).toBe('5h')
+    for (const entry of [
+      account.quota.gemini,
+      account.quota['non-gemini'],
+      account.quota['non-gemini']?.windows?.[0],
+    ]) {
+      if (!entry) throw new Error('Expected a quota entry')
+      expect(Object.hasOwn(entry, 'resetAt')).toBe(defined)
+      expect(Object.hasOwn(entry, 'checkedAt')).toBe(defined)
+      expect(entry.resetAt).toBe(defined ? resetAt : undefined)
+      expect(entry.checkedAt).toBe(defined ? checkedAt : undefined)
+    }
+    expectPlainJson(output)
+  })
+})
+
 describe('generation', () => {
   it('creates a distinct contract-valid token per activation', () => {
     const first = createGaGeneration()
