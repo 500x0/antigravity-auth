@@ -1,8 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile, } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createPrivateBytes, createPrivateDirectoryExclusive, ensurePrivateDirectory, PrivateFileError, privateOperation, readPrivateText, verifyPrivate, windowsPrivateFiles, writePrivateAtomic, } from './private-files.js';
 import { LockOwnershipError, lockPathFor } from './with-lock.js';
+/**
+ * Create a new owner-only file and write `text` into it, failing with EEXIST if
+ * the file already exists. Writing through the handle rather than path-based
+ * `writeFile(path, …, { flag: 'wx' })` matters: Bun's path form also truncates
+ * the file it has just created, and on some Linux filesystems (XFS under load)
+ * that redundant ftruncate stalls for hundreds of milliseconds, inside every
+ * lock acquisition.
+ */
+async function createExclusiveText(path, text) {
+    const handle = await open(path, 'wx', 0o600);
+    try {
+        await handle.writeFile(text, 'utf8');
+    }
+    finally {
+        await handle.close();
+    }
+}
 const setRefreshLockRenewalTimeout = globalThis.setTimeout.bind(globalThis);
 const clearRefreshLockRenewalTimeout = globalThis.clearTimeout.bind(globalThis);
 // A concurrent contender renaming the freshly-created eviction-marker directory
@@ -152,11 +169,7 @@ export async function acquireRefreshFileLock(options) {
         if (windowsPrivateFiles)
             await createPrivateBytes(lockPath, bytes);
         else
-            await writeFile(lockPath, bytes, {
-                encoding: 'utf8',
-                mode: 0o600,
-                flag: 'wx',
-            });
+            await createExclusiveText(lockPath, bytes);
     }
     async function leaseContention(error) {
         const code = error.code;
@@ -304,11 +317,7 @@ export async function acquireRefreshFileLock(options) {
             if (windowsPrivateFiles)
                 await createPrivateBytes(evictOwnerPath, bytes);
             else
-                await writeFile(evictOwnerPath, bytes, {
-                    encoding: 'utf8',
-                    mode: 0o600,
-                    flag: 'wx',
-                });
+                await createExclusiveText(evictOwnerPath, bytes);
         }
         catch (error) {
             // A competing contender can rename our just-created marker directory
