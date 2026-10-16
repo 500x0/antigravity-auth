@@ -521,15 +521,129 @@ describe('state output', () => {
     ).toBe(true)
   })
 
-  it('accepts the sidebar projection, whose optional fields may be undefined', () => {
+  it('refuses own undefined optional output fields instead of accepting the sidebar projection', () => {
     const projected = {
       ...ACCOUNT,
       cooldownUntil: undefined,
       tier: undefined,
     }
     expect(
-      AntigravityStateOutputSchema.parse({ ...SNAPSHOT, accounts: [projected] })
-        .ok,
+      pathsOf(
+        AntigravityStateOutputSchema.parse({
+          ...SNAPSHOT,
+          accounts: [projected],
+        }),
+      ).sort(),
+    ).toEqual(['accounts.0.cooldownUntil', 'accounts.0.tier'])
+  })
+
+  it.each([
+    ['Date', new Date(0)],
+    ['Map', new Map()],
+    [
+      'class instance',
+      new (class Tier {
+        id = 'free-tier'
+        capturedAt = 0
+      })(),
+    ],
+    ['function', () => undefined],
+    ['BigInt', 1n],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['negative Infinity', Number.NEGATIVE_INFINITY],
+    ['symbol', Symbol('not-json')],
+  ])('refuses non-JSON state output values: %s', (_name, value) => {
+    expect(
+      pathsOf(
+        AntigravityStateOutputSchema.parse({
+          ...SNAPSHOT,
+          accounts: [{ ...ACCOUNT, tier: value }],
+        }),
+      ),
+    ).toEqual(['accounts.0.tier'])
+  })
+
+  it('refuses own undefined fields recursively in quotas, windows and tier metadata', () => {
+    expect(
+      pathsOf(
+        AntigravityStateOutputSchema.parse({
+          ...SNAPSHOT,
+          accounts: [
+            {
+              ...ACCOUNT,
+              quota: {
+                gemini: {
+                  remainingPercent: 42,
+                  checkedAt: undefined,
+                  windows: [
+                    { window: '5h', remainingPercent: 42, resetAt: undefined },
+                  ],
+                },
+              },
+              tier: { id: 'free-tier', capturedAt: 0, paidId: undefined },
+            },
+          ],
+        }),
+      ),
+    ).toEqual([
+      'accounts.0.quota.gemini.checkedAt',
+      'accounts.0.quota.gemini.windows.0.resetAt',
+      'accounts.0.tier.paidId',
+    ])
+  })
+
+  it('rejects cycles, sparse arrays and non-JSON properties without invoking accessors', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    const values: unknown[] = [
+      cyclic,
+      new Array(1),
+      Object.assign([], { extra: undefined }),
+      { [Symbol('key')]: 1 },
+      Object.defineProperty({}, 'hidden', { value: undefined }),
+      Object.defineProperty({}, 'read', {
+        enumerable: true,
+        get: () => {
+          throw new Error('must not read')
+        },
+      }),
+    ]
+    for (const tier of values) {
+      const issues = issuesOf(
+        AntigravityStateOutputSchema.parse({
+          ...SNAPSHOT,
+          accounts: [{ ...ACCOUNT, tier }],
+        }),
+      )
+      expect(issues.length).toBeGreaterThan(0)
+      expect(
+        issues.every((issue) =>
+          issue.path.join('.').startsWith('accounts.0.tier'),
+        ),
+      ).toBe(true)
+    }
+    expect(
+      AntigravityStateOutputSchema.parse({
+        ...SNAPSHOT,
+        accounts: [ACCOUNT, ACCOUNT],
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('keeps optional undefined fields accepted on received apply inputs', () => {
+    expect(
+      AntigravityApplyInputSchema.parse({
+        version: 1,
+        generation: GENERATION,
+        scope: { kind: 'sessionless' },
+        request: {
+          command: 'antigravity',
+          sectionId: 'limits',
+          actionId: 'set',
+          confirmed: undefined,
+        },
+      }).ok,
     ).toBe(true)
   })
 

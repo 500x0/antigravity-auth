@@ -210,9 +210,8 @@ export interface AntigravityQuotaEntryDto {
 }
 
 /**
- * One account as the sidebar shows it: the redacted, ordinal shape that
- * `redactAccountForSidebar` produces from a live account. Optional keys may
- * be absent or `undefined`.
+ * One account for GA clients, labeled by list position rather than email.
+ * Optional keys are omitted when unknown; own undefined values are not sent.
  */
 export interface AntigravityAccountDto {
   /**
@@ -1437,8 +1436,76 @@ function validateApplyInput(value: unknown, issues: Issues): void {
   }
 }
 
+/** Output must survive the host's JSON boundary, not just optional-key checks. */
+function checkJsonValue(
+  value: unknown,
+  path: Path,
+  issues: Issues,
+  ancestors = new Set<object>(),
+): boolean {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  ) {
+    return true
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return true
+  if (typeof value !== 'object' || value === null) {
+    issues.add(path, 'expected a plain JSON value')
+    return false
+  }
+  const array = Array.isArray(value)
+  if (
+    (array && Object.getPrototypeOf(value) !== Array.prototype) ||
+    (!array && !isPlainRecord(value)) ||
+    ancestors.has(value)
+  ) {
+    issues.add(path, 'expected a plain JSON value without cycles')
+    return false
+  }
+  ancestors.add(value)
+  const before = issues.list.length
+  if (array) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) {
+        issues.add([...path, index], 'expected a JSON array element')
+      }
+    }
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (array && key === 'length') continue
+    if (typeof key !== 'string') {
+      issues.add(path, 'expected a JSON string key')
+      continue
+    }
+    const index = Number(key)
+    const arrayIndex =
+      array &&
+      Number.isSafeInteger(index) &&
+      index >= 0 &&
+      index < value.length &&
+      String(index) === key
+    const fieldPath = [...path, arrayIndex ? index : key]
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (
+      !descriptor ||
+      !('value' in descriptor) ||
+      !descriptor.enumerable ||
+      (array && !arrayIndex)
+    ) {
+      issues.add(fieldPath, 'expected a JSON data property')
+      continue
+    }
+    checkJsonValue(descriptor.value, fieldPath, issues, ancestors)
+  }
+  ancestors.delete(value)
+  return issues.list.length === before
+}
+
 function validateStateOutput(value: unknown, issues: Issues): void {
   const path: Path = []
+  if (!checkJsonValue(value, path, issues)) return
   if (!isPlainRecord(value)) {
     issues.add(path, 'expected a plain object')
     return

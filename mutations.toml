@@ -17,6 +17,18 @@
 # catalogued here; .github/workflows/windows-migration.yml remains its platform gate.
 
 [[control]]
+id = "ga-state-json-safe-account-projection"
+guards = "Fresh account state omits own undefined sidebar optionals before reaching the host JSON boundary."
+file = "packages/opencode/src/ga/server/index.ts"
+old = "    return omitUndefinedFields({"
+new = "    return ({ // NON-VACUITY BREAK: retain undefined sidebar fields."
+test_file = "packages/opencode/src/ga/server/boundary.test.ts"
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/boundary.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^JSON-safe\sstate\sprojection\sstate\sreturns\sJSON-safe\sfresh-account\sDTOs\swithout\sown\sundefined\soptional\sfields$']
+
+[[control]]
 id = "command-projection-ordinal-labels"
 guards = "Stored profile labels never replace ordinal account labels in the account reply."
 file = "packages/opencode/src/plugin/command-data.ts"

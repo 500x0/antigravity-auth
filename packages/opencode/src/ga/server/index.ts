@@ -961,6 +961,19 @@ function routeDto(
   }
 }
 
+/** Sidebar optionals must be omitted, not sent as own undefined JSON fields. */
+function omitUndefinedFields<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(omitUndefinedFields) as T
+  if (value === null || typeof value !== 'object') return value
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, field]) => field !== undefined)
+      .map(([key, field]) => [key, omitUndefinedFields(field)]),
+  ) as T
+}
+
 export function createGaRpcActivation(
   options: GaRpcActivationOptions,
 ): GaRpcActivation {
@@ -1088,13 +1101,13 @@ export function createGaRpcActivation(
     }
     const gemini = entry(quota.gemini)
     const nonGemini = entry(quota['non-gemini'])
-    return {
+    return omitUndefinedFields({
       ...rest,
       quota: {
         ...(gemini ? { gemini } : {}),
         ...(nonGemini ? { 'non-gemini': nonGemini } : {}),
       },
-    }
+    })
   }
 
   const state = async (
