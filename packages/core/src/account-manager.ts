@@ -98,6 +98,11 @@ export interface AccountManagerOptions {
   random?: () => number
   pid?: number
   onDiagnostic?: (message: string, fields?: Record<string, unknown>) => void
+  /**
+   * Return true to let the caller report this exact write error instead of
+   * emitting the generic account diagnostic. Repository flush still reports failures.
+   */
+  onWriteError?: (error: unknown) => boolean
 }
 
 export type { RateLimitReason } from './rotation.ts'
@@ -427,6 +432,7 @@ export class AccountManager {
   /** A promise chain that applies reloads in request order. */
   private reloading: Promise<void> = Promise.resolve()
   private readonly onDiagnostic: AccountManagerOptions['onDiagnostic']
+  private readonly onWriteError: AccountManagerOptions['onWriteError']
   private readonly now: () => number
 
   constructor(
@@ -448,6 +454,7 @@ export class AccountManager {
     this.repository = options.repository
     this.storagePath = options.storagePath ?? ''
     this.onDiagnostic = options.onDiagnostic
+    this.onWriteError = options.onWriteError
     this.now = options.now ?? (() => Date.now())
     const repositoryBacked = options.repository !== undefined
     this.selection = new AccountSelector<ManagedAccount>({
@@ -1076,6 +1083,7 @@ export class AccountManager {
       return
     }
     write(repository, ref).catch((error: unknown) => {
+      if (this.onWriteError?.(error)) return
       this.onDiagnostic?.(`Account ${label} was not persisted`, {
         rowId: ref.id,
         error: error instanceof Error ? error.message : String(error),

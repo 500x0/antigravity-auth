@@ -24,6 +24,7 @@ import {
   type AccountRepositoryRead,
   type AccountRow,
   createAccountRepositoryFactory,
+  createQuotaManager,
   initializeFreshAccountStore,
   loadCommonAuthStoreModules,
   type RowRef,
@@ -41,15 +42,19 @@ import type {
   HarnessAccountsObservation,
 } from '../ga/server/index.ts'
 import { GaRequestOwnership, rewriteGaHttpRequest } from '../ga/server/index.ts'
+import { createLocalAccountCredentials } from './accounts.ts'
+import { BackgroundQuotaRefresh } from './background-quota-refresh.ts'
 import type { LocationDebug } from './debug.ts'
 import {
   createOperatorSettingsRegistry,
   emptyOperatorSettings,
   type OperatorSettings,
 } from './operator-settings.ts'
+import { createStoreQuotaService } from './quota.ts'
 import { AgySessionRegistry } from './session-context.ts'
 import {
   createLocationRuntime,
+  createMemoryQuotaSnapshots,
   type LocationRuntime,
 } from './shared/runtime.ts'
 
@@ -738,7 +743,7 @@ describe('GA request pipeline pieces', () => {
   )
 })
 
-async function freshRepository() {
+async function freshRepository(options: { expiresAt?: () => number } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-quota-')))
   const legacyPath = join(root, 'antigravity-accounts.json')
   const modules = await loadCommonAuthStoreModules()
@@ -758,7 +763,7 @@ async function freshRepository() {
       return {
         accessToken: 'access-fresh',
         refreshToken,
-        expiresAt: Date.now() + 3_600_000,
+        expiresAt: options.expiresAt?.() ?? Date.now() + 3_600_000,
       }
     },
   })
@@ -1852,6 +1857,142 @@ describe('GA composed request context', () => {
 })
 
 describe('GA quota check authorization', () => {
+  it('defaults absent purpose to required and skips refresh only on explicit advisory purpose', async () => {
+    const { repository, ref, exchanged, cleanup } = await freshRepository()
+    try {
+      expect(
+        (await authorizeGaQuotaCheck(repository, { rowRef: ref }, Date.now))
+          .status,
+      ).toBe('authorized')
+      expect(exchanged).toEqual(['refresh-quota'])
+      const expiredNow = () => Date.now() + 7_200_000
+      expect(
+        await authorizeGaQuotaCheck(
+          repository,
+          { rowRef: ref },
+          expiredNow,
+          'advisory',
+        ),
+      ).toEqual({ status: 'skipped', reason: 'refresh-needed' })
+      expect(exchanged).toEqual(['refresh-quota'])
+      expect(
+        (
+          await authorizeGaQuotaCheck(
+            repository,
+            { rowRef: ref },
+            expiredNow,
+            'required',
+          )
+        ).status,
+      ).toBe('authorized')
+      expect(exchanged).toEqual(['refresh-quota', 'refresh-quota'])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  for (const caller of ['manual', 'poller'] as const) {
+    it(`${caller} quota still refreshes required credentials without advisory opt-in`, async () => {
+      let issueExpired = true
+      const {
+        repository,
+        ref: loginRef,
+        exchanged,
+        cleanup,
+      } = await freshRepository({
+        expiresAt: () => Date.now() + (issueExpired ? -3_600_000 : 3_600_000),
+      })
+      const seeded = await repository.refresh(loginRef)
+      if (seeded.status !== 'rotated')
+        throw new Error('expired credential unavailable')
+      const ref = seeded.ref
+      issueExpired = false
+      exchanged.length = 0
+      const manager = AccountManager.fromRepository(await repository.read(), {
+        repository,
+      })
+      let quotaCalls = 0
+      const transport = async () => {
+        quotaCalls++
+        return Response.json({ groups: [] })
+      }
+      const ensureProject = async (
+        auth: ReturnType<typeof manager.toAuthDetails>,
+      ) => ({ auth, effectiveProjectId: 'project-q' })
+      const quota = createQuotaManager({
+        keyOf: (account) => account.refreshToken,
+        fetchAccountQuota: createGaFetchAccountQuota({
+          repository,
+          now: Date.now,
+          logger: { debug: () => {} },
+          overrides: {
+            ensureProjectContext: ensureProject,
+            quotaFetch: transport,
+          },
+        }),
+      })
+      const service = createStoreQuotaService({
+        manager,
+        repository,
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+        },
+        credentials: {
+          ...createLocalAccountCredentials(manager, { repository }),
+          ensureProject,
+        },
+        transport: () => transport,
+      })
+      let poller: BackgroundQuotaRefresh | undefined
+      try {
+        if (caller === 'manual') {
+          await service.checkStoreQuota([ref])
+        } else {
+          const snapshots = createMemoryQuotaSnapshots()
+          const observed = Promise.withResolvers<void>()
+          const write = snapshots.write
+          snapshots.write = async (state) => {
+            await write(state)
+            observed.resolve()
+          }
+          poller = new BackgroundQuotaRefresh({
+            intervalMs: 60_000,
+            snapshots,
+            getAccountManager: () => manager,
+            quotaManager: quota,
+            random: () => 0,
+          })
+          poller.start()
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            await Promise.race([
+              observed.promise,
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error('poller quota was not reached')),
+                  3_000,
+                )
+              }),
+            ])
+          } finally {
+            clearTimeout(timer)
+          }
+        }
+        expect(exchanged).toEqual(['refresh-quota'])
+        expect(quotaCalls).toBe(1)
+      } finally {
+        await poller?.dispose()
+        await quota.dispose()
+        await service.dispose()
+        await manager.dispose()
+        await cleanup()
+      }
+    })
+  }
+
   it('refuses a target without a captured ref', async () => {
     const { repository, exchanged, cleanup } = await freshRepository()
     try {

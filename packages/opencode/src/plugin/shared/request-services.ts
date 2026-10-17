@@ -269,11 +269,18 @@ export interface LocalRequestCredentials<A extends RequestAccountRow> {
     readonly accessToken: string
   }): CapturedLocalGrant
   /**
-   * Started without awaiting after a successful send, with the selected row
-   * and `quota_refresh_interval_minutes`. `createLocalQuotaRefresh` builds
-   * it for a core account manager. Absent: no refresh from the request path.
+   * The executor starts this optional quota refresh callback after a successful
+   * send without awaiting it. `createLocalQuotaRefresh` supplies a callback that
+   * refreshes the selected row's quota in a core manager, using the configured
+   * interval. Without a callback, requests do not refresh quota. The signal stays
+   * linked to executor shutdown until the quota refresh settles, independently
+   * of response-body cleanup.
    */
-  refreshQuotaAfterSuccess?(account: A, intervalMinutes: number): Promise<void>
+  refreshQuotaAfterSuccess?(
+    account: A,
+    intervalMinutes: number,
+    signal?: AbortSignal,
+  ): Promise<void>
 }
 
 /**
@@ -682,10 +689,15 @@ export function createLocalQuotaRefresh(
   >,
   quotaManager: Pick<QuotaManager, 'refreshAccount' | 'hashedLogLabel'>,
   log: Logger,
-): (account: ManagedAccount, intervalMinutes: number) => Promise<void> {
+): (
+  account: ManagedAccount,
+  intervalMinutes: number,
+  signal?: AbortSignal,
+) => Promise<void> {
   return async function refreshQuotaAfterSuccess(
     account: ManagedAccount,
     intervalMinutes: number,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (intervalMinutes <= 0) return
 
@@ -714,8 +726,11 @@ export function createLocalQuotaRefresh(
 
       const result = await quotaManager.refreshAccount(singleAccount, {
         index: accountIndex,
+        purpose: 'advisory',
+        ...(signal ? { signal } : {}),
       })
 
+      if (signal?.aborted) return
       if (result.status === 'ok' && result.quota?.groups) {
         // Re-resolve the selected row itself. If it was removed meanwhile,
         // drop the reading rather than writing onto whichever row shifted
@@ -766,6 +781,8 @@ export function createRequestExecutor<A extends RequestAccountRow>(
   const warmupState: WarmupState = createWarmupState()
   const shutdown = new AbortController()
   const inFlight = new Set<Promise<unknown>>()
+  const advisoryWork = new Set<Promise<void>>()
+  let advisoryClosing = false
   const bufferedOverflow = new WeakMap<Response, string>()
   let retired = false
   let drainPromise: Promise<void> | undefined
@@ -2218,23 +2235,40 @@ export function createRequestExecutor<A extends RequestAccountRow>(
             if (response.ok) {
               account.consecutiveFailures = 0
               trackers.health.recordSuccess(account.index)
-              accountManager.markAccountUsed(account.index)
+              if (!advisoryClosing)
+                accountManager.markAccountUsed(account.index)
 
               if (
                 credentials.domain === 'local' &&
+                !advisoryClosing &&
                 credentials.refreshQuotaAfterSuccess
               ) {
-                void credentials
+                const quotaCancellation = createRequestCancellation(
+                  init?.signal
+                    ? [init.signal, shutdown.signal]
+                    : [shutdown.signal],
+                )
+                const work = credentials
                   .refreshQuotaAfterSuccess(
                     account,
                     config.quota_refresh_interval_minutes,
+                    quotaCancellation.signal,
                   )
-                  .catch(() => {})
+                  .catch(() => {
+                    log.debug('post-response-advisory-work-failed')
+                  })
+                  .finally(() => quotaCancellation.release())
+                advisoryWork.add(work)
+                void work.then(
+                  () => advisoryWork.delete(work),
+                  () => advisoryWork.delete(work),
+                )
               }
 
               const proactiveThreshold =
                 config.proactive_rotation_threshold_percent ?? 20
               if (
+                !advisoryClosing &&
                 proactiveThreshold > 0 &&
                 accountManager.shouldProactivelyRotate(
                   family,
@@ -2608,9 +2642,11 @@ export function createRequestExecutor<A extends RequestAccountRow>(
   // Waits for every admitted request and retained body, then releases the
   // bookkeeping they use. Runs once, whether `retire` or `dispose` asks first.
   function drain(): Promise<void> {
+    advisoryClosing = true
     drainPromise ??= (async () => {
       // A refresh that already exchanged tokens must finish its owned store write.
       while (inFlight.size > 0) await Promise.allSettled([...inFlight])
+      while (advisoryWork.size > 0) await Promise.allSettled([...advisoryWork])
       retryState.dispose()
       warmupState.dispose()
     })()

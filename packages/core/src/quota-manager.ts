@@ -34,6 +34,8 @@ export const QUOTA_MANAGER_DEFAULT_BASE_BACKOFF_MS = 30_000
 export const QUOTA_MANAGER_DEFAULT_MAX_BACKOFF_MS = 10 * 60 * 1000
 export const QUOTA_MANAGER_DEFAULT_TIMEOUT_MS = 10_000
 
+export type QuotaCheckPurpose = 'required' | 'advisory'
+
 /**
  * Signature for the harness-supplied quota fetch callback.
  *
@@ -44,6 +46,7 @@ export const QUOTA_MANAGER_DEFAULT_TIMEOUT_MS = 10_000
 export type FetchAccountQuota = (
   account: AccountMetadataV3,
   signal: AbortSignal,
+  purpose?: QuotaCheckPurpose,
 ) => Promise<AccountQuotaResult>
 
 export interface QuotaManagerOptions {
@@ -67,6 +70,10 @@ export interface RefreshAccountOptions {
   index: number
   /** Bypass backoff (used by manual quota dialogs). */
   force?: boolean
+  /** Cancels this refresh alongside the manager's existing fetch deadline. */
+  signal?: AbortSignal
+  /** Only successful-send after-work opts into best-effort authorization. */
+  purpose?: QuotaCheckPurpose
 }
 
 export interface RefreshAccountsOptions {
@@ -104,6 +111,7 @@ interface AccountState {
   consecutiveFailures: number
   backoffUntil: number
   inflight?: Promise<AccountQuotaResult>
+  inflightPurpose?: QuotaCheckPurpose
   controller?: AbortController
   cached?: AccountQuotaResult
 }
@@ -226,6 +234,19 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
 
     const inflight = entry?.inflight
     if (inflight) {
+      if (refreshOptions.purpose === 'advisory') {
+        log.debug('advisory-quota-skipped-refresh-in-flight')
+        return {
+          index,
+          email: account.email,
+          status: 'skipped',
+          disabled: false,
+        }
+      }
+      if (entry.inflightPurpose === 'advisory') {
+        await inflight
+        return refreshAccount(account, refreshOptions)
+      }
       // Reuse the cached result of the in-flight fetch, but preserve this
       // caller's requested index for attribution.
       const cached = await inflight
@@ -238,6 +259,7 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
       backoffUntil: 0,
     }
     stored.controller = controller
+    stored.inflightPurpose = refreshOptions.purpose ?? 'required'
     state.set(key, stored)
 
     const promise = (async (): Promise<AccountQuotaResult> => {
@@ -252,13 +274,21 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
       // stays undefined and the finally block has no listener to remove.
       let deadline: AbortSignal | undefined
       const forwardDeadline = (): void => controller.abort(deadline?.reason)
+      const forwardCancellation = (): void =>
+        controller.abort(refreshOptions.signal?.reason)
       try {
         deadline = AbortSignal.timeout(fetchTimeoutMs)
         deadline.addEventListener('abort', forwardDeadline, { once: true })
-        const result = await options.fetchAccountQuota(
-          account,
-          controller.signal,
-        )
+        if (refreshOptions.signal?.aborted) forwardCancellation()
+        else
+          refreshOptions.signal?.addEventListener(
+            'abort',
+            forwardCancellation,
+            { once: true },
+          )
+        const result = await (refreshOptions.purpose === 'advisory'
+          ? options.fetchAccountQuota(account, controller.signal, 'advisory')
+          : options.fetchAccountQuota(account, controller.signal))
         if (disposed) {
           throw new Error('quota manager disposed mid-fetch')
         }
@@ -267,6 +297,7 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
           index,
           ...(result.status === 'ok' ? { checkedAt: now() } : {}),
         }
+        if (result.status === 'skipped') return attributed
         cacheResult(key, attributed)
 
         // Adapter contract: `fetchAccountQuota` resolves with an
@@ -318,9 +349,11 @@ export function createQuotaManager(options: QuotaManagerOptions): QuotaManager {
       } finally {
         // The callback has settled, so a later deadline must not abort it.
         deadline?.removeEventListener('abort', forwardDeadline)
+        refreshOptions.signal?.removeEventListener('abort', forwardCancellation)
         const finished = state.get(key)
         if (finished) {
           finished.inflight = undefined
+          finished.inflightPurpose = undefined
           finished.controller = undefined
           state.set(key, finished)
         }

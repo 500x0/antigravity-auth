@@ -1081,3 +1081,107 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/e2e-tests/src/opencode-ga-inputs.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^GA\scurrent-store\sfixture\sadmission\sphase\sclocks\sreport\sa\snever-resolving\sphase\sbefore\sa\sreal\sBun\stest\stimeout$']
+
+[[control]]
+id = "ga-advisory-refusal-identity-filter"
+guards = "The advisory owner absorbs only error objects received by its own writes, never an unowned refusal with identical text."
+file = "packages/opencode/src/plugin/shared/advisory-repository.ts"
+old = "                (reason: unknown) => !failures.has(reason),"
+new = "                () => false, // NON-VACUITY BREAK: drop another owner's refusal."
+test_file = "packages/opencode/src/plugin/shared/advisory-repository.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/advisory-repository.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/advisory-repository.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^keeps\sunowned\srefusals\seven\swhen\stheir\smessage\smatches\san\sowned\srefusal$']
+
+[[control]]
+id = "ga-advisory-flush-report-cause"
+guards = "A required credential failure survives the same flush window as an absorbed advisory refusal."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = "                        { cause: result },"
+new = "                        { cause: undefined }, // NON-VACUITY BREAK: discard required flush failures."
+test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/ownership-source.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^preserves\sa\srequired\scredential\sfailure\sin\sthe\ssame\sflush\sas\sa\srefused\sadvisory\swrite$']
+
+[[control]]
+id = "shared-successful-quota-disposal-drain"
+guards = "Executor disposal waits for admitted successful-send quota after-work while the reply itself remains independent."
+file = "packages/opencode/src/plugin/shared/request-services.ts"
+old = "      while (advisoryWork.size > 0) await Promise.allSettled([...advisoryWork])"
+new = "      // NON-VACUITY BREAK: dispose without joining successful-send quota work."
+test_file = "packages/opencode/src/plugin/shared/request-services.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/plugin/shared/request-services.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/plugin/shared/request-services.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^disposal\sdrains\ssuccessful-send\squota\safter-work\swithout\sdelaying\sthe\sreply$']
+
+[[control]]
+id = "ga-advisory-quota-abort-bound"
+guards = "Request cancellation bounds quota after-work even when an injected quota transport never settles."
+file = "packages/opencode/src/plugin/quota.ts"
+old = "      const payloads = await untilQuotaAborted(pendingPayloads, signal)"
+new = "      const payloads = await pendingPayloads // NON-VACUITY BREAK: let a hung transport block disposal."
+test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/ownership-source.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^disposal\scancels\sa\snever-resolving\ssuccessful-send\squota\sfetch\swithin\sthe\sexisting\sbound$']
+
+[[control]]
+id = "ga-advisory-quota-refresh-purpose"
+guards = "Successful-send advisory quota never refreshes credentials or changes credential/account files when its token needs refresh."
+file = "packages/opencode/src/plugin/ga-location-services.ts"
+old = "  if (purpose === 'advisory')"
+new = "  if (false) // NON-VACUITY BREAK: let advisory quota refresh credentials."
+test_file = "packages/opencode/src/ga/server/ownership-source.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/opencode/src/ga/server/ownership-source.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/opencode/src/ga/server/ownership-source.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^successful-send\sadvisory\squota\sskips\san\sexpired\scredential\swithout\srefresh\sor\snetwork\swork$']
+
+[[control]]
+id = "shared-advisory-quota-required-inflight-isolation"
+guards = "Successful-send advisory work does not wait on another caller's required credential refresh."
+file = "packages/core/src/quota-manager.ts"
+old = "      if (refreshOptions.purpose === 'advisory') {"
+new = "      if (false) { // NON-VACUITY BREAK: join an in-flight required refresh from advisory work."
+test_file = "packages/core/src/quota-manager.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/quota-manager.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/quota-manager.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^does\snot\slet\sadvisory\swork\sjoin\san\sin-flight\srequired\scredential\srefresh$']
+
+[[control]]
+id = "shared-required-quota-advisory-inflight-isolation"
+guards = "Default required quota checks cannot inherit the best-effort skip result of an advisory check."
+file = "packages/core/src/quota-manager.ts"
+old = "      if (entry.inflightPurpose === 'advisory') {"
+new = "      if (false) { // NON-VACUITY BREAK: give a required caller the advisory result."
+test_file = "packages/core/src/quota-manager.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/quota-manager.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/quota-manager.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^does\snot\slet\sa\srequired\scaller\sinherit\san\sadvisory-only\sresult$']
+
+[[control]]
+id = "shared-advisory-quota-skip-freshness"
+guards = "An advisory skip does not erase a real cached reading or fabricate a new quota timestamp."
+file = "packages/core/src/quota-manager.ts"
+old = "        if (result.status === 'skipped') return attributed"
+new = "        // NON-VACUITY BREAK: cache an advisory skip as a fresh reading."
+test_file = "packages/core/src/quota-manager.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/core/src/quota-manager.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/quota-manager.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^does\snot\stimestamp\sor\sreplace\scached\squota\sfor\san\sadvisory\sskip$']
