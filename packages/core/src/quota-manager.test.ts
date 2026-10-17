@@ -7,6 +7,7 @@ import {
   createQuotaManager,
   type FetchAccountQuota,
   fetchQuotaSummary,
+  type QuotaCheckPurpose,
   type RetrieveUserQuotaSummaryResponse,
 } from './quota-manager.ts'
 import type { AccountQuotaResult } from './quota-types.ts'
@@ -80,6 +81,122 @@ function track<T extends { dispose: () => void }>(disposable: T): T {
   managers.push(disposable)
   return disposable
 }
+
+it('defaults quota calls to required and forwards only explicit advisory purpose', async () => {
+  const purposes: QuotaCheckPurpose[] = []
+  const manager = createQuotaManager({
+    keyOf: keyOfAccount,
+    fetchAccountQuota: async (_account, _signal, purpose = 'required') => {
+      purposes.push(purpose)
+      return { index: 0, status: 'ok' }
+    },
+  })
+  try {
+    const account = makeAccount()
+    await manager.refreshAccount(account, { index: 0 })
+    await manager.refreshAccount(account, { index: 0, purpose: 'advisory' })
+    await manager.refreshAccount(account, { index: 0, purpose: 'required' })
+    await manager.refreshAccounts([account], { indexFor: () => 0 })
+    expect(purposes).toEqual(['required', 'advisory', 'required', 'required'])
+  } finally {
+    await manager.dispose()
+  }
+})
+
+it('does not let advisory work join an in-flight required credential refresh', async () => {
+  const gate = Promise.withResolvers<void>()
+  const reached = Promise.withResolvers<void>()
+  const purposes: QuotaCheckPurpose[] = []
+  const manager = createQuotaManager({
+    keyOf: keyOfAccount,
+    fetchAccountQuota: async (_account, _signal, purpose = 'required') => {
+      purposes.push(purpose)
+      reached.resolve()
+      await gate.promise
+      return { index: 0, status: 'ok' }
+    },
+  })
+  const account = makeAccount()
+  const required = manager.refreshAccount(account, { index: 0 })
+  let advisory: Promise<AccountQuotaResult> | undefined
+  try {
+    await reached.promise
+    let result: AccountQuotaResult | undefined
+    advisory = manager
+      .refreshAccount(account, { index: 0, purpose: 'advisory' })
+      .then((value) => {
+        result = value
+        return value
+      })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(result?.status).toBe('skipped')
+    expect(purposes).toEqual(['required'])
+  } finally {
+    gate.resolve()
+    await required
+    await advisory
+    await manager.dispose()
+  }
+})
+
+it('does not timestamp or replace cached quota for an advisory skip', async () => {
+  const manager = createQuotaManager({
+    keyOf: keyOfAccount,
+    fetchAccountQuota: async (_account, _signal, purpose = 'required') =>
+      purpose === 'advisory'
+        ? { index: 0, status: 'skipped' }
+        : { index: 0, status: 'ok', quota: { groups: {}, modelCount: 0 } },
+  })
+  try {
+    const account = makeAccount()
+    const reading = await manager.refreshAccount(account, { index: 0 })
+    const skipped = await manager.refreshAccount(account, {
+      index: 0,
+      purpose: 'advisory',
+    })
+    expect(skipped.status).toBe('skipped')
+    expect(skipped.checkedAt).toBeUndefined()
+    expect(skipped.quota).toBeUndefined()
+    expect(manager.getCached(account)).toBe(reading)
+  } finally {
+    await manager.dispose()
+  }
+})
+
+it('does not let a required caller inherit an advisory-only result', async () => {
+  const gate = Promise.withResolvers<void>()
+  const reached = Promise.withResolvers<void>()
+  const purposes: QuotaCheckPurpose[] = []
+  const manager = createQuotaManager({
+    keyOf: keyOfAccount,
+    fetchAccountQuota: async (_account, _signal, purpose = 'required') => {
+      purposes.push(purpose)
+      if (purpose === 'advisory') {
+        reached.resolve()
+        await gate.promise
+        return { index: 0, status: 'skipped' }
+      }
+      return { index: 0, status: 'ok' }
+    },
+  })
+  const account = makeAccount()
+  const advisory = manager.refreshAccount(account, {
+    index: 0,
+    purpose: 'advisory',
+  })
+  try {
+    await reached.promise
+    const required = manager.refreshAccount(account, { index: 0 })
+    gate.resolve()
+    expect((await required).status).toBe('ok')
+    expect(purposes).toEqual(['advisory', 'required'])
+    await advisory
+  } finally {
+    gate.resolve()
+    await advisory
+    await manager.dispose()
+  }
+})
 
 describe('classifyQuotaGroup', () => {
   it('classifies Claude models into the non-Gemini pool', () => {

@@ -624,6 +624,51 @@ const NON_STREAM_URL = modelUrl('gemini-3-flash', 'generateContent')
 const STREAM_URL = modelUrl('gemini-3-flash')
 const CLAUDE_URL = modelUrl('claude-sonnet-5-5-low', 'generateContent')
 
+it('disposal drains successful-send quota after-work without delaying the reply', async () => {
+  const reached = Promise.withResolvers<void>()
+  const gate = Promise.withResolvers<void>()
+  const h = harness({
+    respond: async () => okJson(),
+    config: { quota_refresh_interval_minutes: 1 },
+  })
+  if (h.deps.credentials.domain !== 'local')
+    throw new Error('local credentials required')
+  let settled = false
+  const executor = createRequestExecutor({
+    ...h.deps,
+    credentials: {
+      ...h.deps.credentials,
+      refreshQuotaAfterSuccess: async () => {
+        reached.resolve()
+        await gate.promise
+        settled = true
+        throw new Error('advisory quota unavailable')
+      },
+    },
+  })
+  try {
+    const response = await executor.execute(NON_STREAM_URL, CHAT_INIT())
+    await reached.promise
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('hi')
+    expect(settled).toBe(false)
+    let disposed = false
+    const disposal = executor.dispose().then(() => {
+      disposed = true
+    })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(disposed).toBe(false)
+    expect(settled).toBe(false)
+    gate.resolve()
+    await disposal
+    expect(settled).toBe(true)
+    expect(disposed).toBe(true)
+  } finally {
+    gate.resolve()
+    await executor.dispose()
+  }
+})
+
 describe('createRequestExecutor retry contract', () => {
   it('tries the Antigravity endpoints in fallback order after a 404', async () => {
     const h = harness({

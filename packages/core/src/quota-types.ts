@@ -110,7 +110,8 @@ export interface QuotaSummary {
   error?: string
 }
 
-export type AccountQuotaStatus = 'ok' | 'disabled' | 'error'
+/** A best-effort skip carries no reading and does not advance quota freshness. */
+export type AccountQuotaStatus = 'ok' | 'disabled' | 'error' | 'skipped'
 
 export interface AccountQuotaResult {
   index: number

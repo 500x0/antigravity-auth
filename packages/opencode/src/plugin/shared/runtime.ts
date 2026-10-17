@@ -442,9 +442,11 @@ async function buildLocationRuntime(
   const quotaManager = createLocationQuotaManager({
     logger: logger.createLogger('quota'),
     fetchAccountQuota: options.mayRun
-      ? async (account, signal) => {
+      ? async (account, signal, purpose) => {
           if (!(await options.mayRun?.())) throw new Error(VAULT_ACCOUNT_REMEDY)
-          return options.fetchAccountQuota(account, signal)
+          return purpose === 'advisory'
+            ? options.fetchAccountQuota(account, signal, purpose)
+            : options.fetchAccountQuota(account, signal)
         }
       : options.fetchAccountQuota,
     sidebar: {

@@ -35,6 +35,7 @@ import {
   fetchQuotaSummary,
   fetchWithActiveTimeout,
   getHealthTracker,
+  type QuotaCheckPurpose,
   type QuotaManager,
   type QuotaSummary,
   type RowRef,
@@ -153,7 +154,11 @@ export function createOpenCodeQuotaManager(
     providerId,
     options.fetchVia,
   )
-  const fetchAccountQuota: FetchAccountQuota = async (account, request) => {
+  const fetchAccountQuota: FetchAccountQuota = async (
+    account,
+    request,
+    purpose = 'required',
+  ) => {
     const target = account as AccountQuotaTarget
     const ref = target.rowRef
     if (options.mayRun && !(await options.mayRun()))
@@ -162,9 +167,13 @@ export function createOpenCodeQuotaManager(
       if (!options.fetchStoreAccountQuota)
         throw new Error('Store quota authorization is unavailable')
       const captured: AccountQuotaTarget = { ...target, rowRef: ref }
-      return options.fetchStoreAccountQuota(captured, request)
+      return purpose === 'advisory'
+        ? options.fetchStoreAccountQuota(captured, request, purpose)
+        : options.fetchStoreAccountQuota(captured, request)
     }
-    return fetchPoolFileQuota(account, request)
+    return purpose === 'advisory'
+      ? fetchPoolFileQuota(account, request, purpose)
+      : fetchPoolFileQuota(account, request)
   }
   const manager = createQuotaManager({
     fetchAccountQuota,
@@ -915,6 +924,10 @@ export type LocalQuotaGrantCheck =
  */
 export type LocalQuotaCheckAuthorization =
   | {
+      readonly status: 'skipped'
+      readonly reason: 'refresh-needed' | 'project-needed'
+    }
+  | {
       readonly status: 'authorized'
       readonly domain: 'local'
       readonly accessToken: string
@@ -945,6 +958,7 @@ export interface AuthorizedFetchAccountQuotaOptions {
   authorize(
     account: AccountMetadataV3,
     signal: AbortSignal,
+    purpose?: QuotaCheckPurpose,
   ): Promise<LocalQuotaCheckAuthorization>
   /** Receives the fetcher's diagnostic records; never tokens. */
   logger: Pick<Logger, 'debug'>
@@ -959,6 +973,27 @@ export interface AuthorizedFetchAccountQuotaOptions {
 /** Raised inside a check when a request's local grant is no longer current. */
 class LocalQuotaGrantStaleError extends Error {
   override readonly name = 'LocalQuotaGrantStaleError'
+}
+
+function untilQuotaAborted<T>(
+  pending: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+    void pending.then(
+      (value) => {
+        signal.removeEventListener('abort', abort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
 }
 
 /**
@@ -982,7 +1017,7 @@ class LocalQuotaGrantStaleError extends Error {
 export function createAuthorizedFetchAccountQuota(
   options: AuthorizedFetchAccountQuotaOptions,
 ): FetchAccountQuota {
-  return async (account, signal) => {
+  return async (account, signal, purpose = 'required') => {
     const base = { index: 0, email: account.email }
     if (account.enabled === false) {
       return { ...base, status: 'disabled', disabled: true }
@@ -994,8 +1029,15 @@ export function createAuthorizedFetchAccountQuota(
     try {
       // Called before the first await, so the callback sees the account as
       // handed in; a synchronous throw lands in the catch below.
-      const authorizing = options.authorize(account, signal)
+      const authorizing =
+        purpose === 'advisory'
+          ? options.authorize(account, signal, purpose)
+          : options.authorize(account, signal)
       const authorization = await authorizing
+      if (authorization.status === 'skipped') {
+        options.logger.debug(`advisory-quota-skipped-${authorization.reason}`)
+        return { ...base, status: 'skipped', disabled: false }
+      }
       if (authorization.status !== 'authorized') {
         return {
           ...base,
@@ -1024,6 +1066,7 @@ export function createAuthorizedFetchAccountQuota(
             { timeoutMs: extra.timeoutMs },
           ))
       const guarded: QuotaFetch = async (url, init, extra) => {
+        signal.throwIfAborted()
         if (staleReason !== null)
           throw new LocalQuotaGrantStaleError(staleReason)
         const check = await authorization.confirmSend(signal)
@@ -1036,13 +1079,16 @@ export function createAuthorizedFetchAccountQuota(
         // out at once, with this quota check's abort signal.
         return send(url, init, { ...extra, signal })
       }
-      const payloads = await fetchQuotaPayloads({
+      const pendingPayloads = fetchQuotaPayloads({
         accessToken: authorization.accessToken,
         managedProjectId: authorization.managedProjectId,
         projectId: authorization.projectId,
         fetchVia: guarded,
         logger: options.logger,
       })
+      // The quota manager's deadline and request cancellation also bound custom
+      // transports and response bodies that ignore their abort signal.
+      const payloads = await untilQuotaAborted(pendingPayloads, signal)
       if (staleReason !== null) {
         return {
           ...base,
@@ -1070,7 +1116,7 @@ function makeFetchAccountQuota(
   providerId: string,
   fetchVia?: QuotaFetch,
 ): FetchAccountQuota {
-  return async (account, signal) => {
+  return async (account, signal, purpose = 'required') => {
     const index = 0
     const disabled = account.enabled === false
     if (disabled) {
@@ -1094,6 +1140,67 @@ function makeFetchAccountQuota(
 
     let auth = buildAuthFromAccount(account)
     let rotatedRefresh: string | undefined
+
+    if (purpose === 'advisory') {
+      if (accessTokenExpired(auth)) {
+        log.debug('advisory-quota-skipped-refresh-needed')
+        return {
+          index,
+          email: account.email,
+          status: 'skipped',
+          disabled: false,
+        }
+      }
+      const parts = parseRefreshParts(auth.refresh)
+      const managedProjectId =
+        parts.managedProjectId ?? account.managedProjectId
+      const projectId = managedProjectId ?? parts.projectId ?? account.projectId
+      if (!projectId) {
+        log.debug('advisory-quota-skipped-project-needed')
+        return {
+          index,
+          email: account.email,
+          status: 'skipped',
+          disabled: false,
+        }
+      }
+      try {
+        const payloads = await untilQuotaAborted(
+          fetchQuotaPayloads({
+            accessToken: auth.access ?? '',
+            managedProjectId,
+            projectId,
+            fetchVia: (url, init, extra) => {
+              signal.throwIfAborted()
+              return fetchVia
+                ? fetchVia(url, init, { ...extra, signal })
+                : fetchWithActiveTimeout(
+                    url,
+                    { ...init, signal },
+                    { timeoutMs: extra.timeoutMs },
+                  )
+            },
+            logger: log,
+          }),
+          signal,
+        )
+        return {
+          index,
+          email: account.email,
+          status: 'ok',
+          disabled: false,
+          quota: payloads.quota,
+        }
+      } catch {
+        return {
+          index,
+          email: account.email,
+          status: 'error',
+          disabled: false,
+          error: 'advisory quota unavailable',
+        }
+      }
+    }
 
     try {
       if (accessTokenExpired(auth)) {
@@ -1513,6 +1620,9 @@ function heldAccount(
  *
  * Only accounts whose refresh token is stored locally use this service;
  * vault-held accounts never do.
+ * Successful-send quota is best-effort: its explicit advisory purpose uses only
+ * the stored token and project. Checks needing refresh or discovery are skipped
+ * so shutdown cannot acquire more credential writes or project-setup network work.
  */
 export function createStoreQuotaService(
   options: StoreQuotaServiceOptions,
@@ -1524,6 +1634,8 @@ export function createStoreQuotaService(
 
   const authorize = async (
     account: AccountQuotaTarget,
+    _signal?: AbortSignal,
+    purpose: QuotaCheckPurpose = 'required',
   ): Promise<LocalQuotaCheckAuthorization> => {
     const ref = account.rowRef
     if (ref === undefined) {
@@ -1537,6 +1649,8 @@ export function createStoreQuotaService(
     }
     let auth = manager.toAuthDetails(held)
     if (accessTokenExpired(auth)) {
+      if (purpose === 'advisory')
+        return { status: 'skipped', reason: 'refresh-needed' }
       const refreshed = await credentials.refresh(held)
       if (refreshed === undefined) {
         return { status: 'refused', reason: 'token refresh failed' }
@@ -1553,7 +1667,18 @@ export function createStoreQuotaService(
     }
     if (options.mayRun && !(await options.mayRun()))
       return { status: 'refused', reason: VAULT_ACCOUNT_REMEDY }
-    const project = await credentials.ensureProject(auth)
+    const storedProjects = parseRefreshParts(auth.refresh)
+    const storedProject =
+      storedProjects.managedProjectId ??
+      held.managedProjectId ??
+      storedProjects.projectId ??
+      held.projectId
+    if (purpose === 'advisory' && !storedProject)
+      return { status: 'skipped', reason: 'project-needed' }
+    const project =
+      purpose === 'advisory'
+        ? { auth, effectiveProjectId: storedProject ?? '' }
+        : await credentials.ensureProject(auth)
     if (options.mayRun && !(await options.mayRun()))
       return { status: 'refused', reason: VAULT_ACCOUNT_REMEDY }
     if (project.auth.refresh !== auth.refresh) {

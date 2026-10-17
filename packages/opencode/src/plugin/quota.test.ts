@@ -59,6 +59,47 @@ interface QuotaSnapshotAccount {
 const hooks = lifetimeHooks()
 const { it, afterEach } = hooks
 
+it('pool-file advisory quota skips refresh without OAuth, project or quota network work', async () => {
+  let fetchCalls = 0
+  let quotaCalls = 0
+  const authSet = mock(async () => {})
+  const client = { auth: { set: authSet } } as unknown as PluginClient
+  const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () => {
+    fetchCalls++
+    throw new Error('advisory quota must not start OAuth or project discovery')
+  }) as unknown as typeof fetch)
+  const account: AccountMetadataV3 = {
+    refreshToken: 'pool-file-refresh',
+    managedProjectId: 'pool-file-project',
+    addedAt: 1,
+    lastUsed: 1,
+  }
+  const manager = createOpenCodeQuotaManager(client, 'google', {
+    fetchVia: async () => {
+      quotaCalls++
+      return Response.json({ groups: [] })
+    },
+  })
+  try {
+    const result = await manager.refreshAccount(account, {
+      index: 0,
+      purpose: 'advisory',
+    })
+    expect(result.status).toBe('skipped')
+    expect(result.disabled).toBe(false)
+    expect(result.checkedAt).toBeUndefined()
+    expect(result.error).toBeUndefined()
+    expect(manager.getCached(account)).toBeUndefined()
+    expect(manager.getBackoffUntil(account)).toBe(0)
+    expect(fetchCalls).toBe(0)
+    expect(quotaCalls).toBe(0)
+    expect(authSet).not.toHaveBeenCalled()
+  } finally {
+    await manager.dispose()
+    fetchSpy.mockRestore()
+  }
+})
+
 describe('classifyQuotaGroup', () => {
   it('uses live Antigravity model ids for quota groups', () => {
     expect(

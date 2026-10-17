@@ -120,6 +120,7 @@ export async function loadAccountManagerFromRepository(
     random: options.random,
     pid: options.pid ?? process.pid,
     onDiagnostic: options.onDiagnostic ?? defaultDiagnostic,
+    onWriteError: options.onWriteError,
   })
 }
 

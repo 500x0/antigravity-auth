@@ -50,6 +50,7 @@ import {
   type ManagedAccount,
   type OAuthAuthDetails,
   parseRefreshParts,
+  type QuotaCheckPurpose,
   type RowRef,
   readAccountStoreAdmission,
   readAccountStoreBinding,
@@ -113,6 +114,7 @@ import {
 } from './request.ts'
 import { type OAuthListener, startOAuthListener } from './server.ts'
 import { AgySessionRegistry } from './session-context.ts'
+import { createAdvisoryRepositoryOwner } from './shared/advisory-repository.ts'
 import {
   type AntigravityRequestExecutor,
   createLocalQuotaRefresh,
@@ -1191,6 +1193,7 @@ export interface GaQuotaTarget {
 
 /** The bearer a quota check may use, for exactly the captured credential. */
 export type GaQuotaAuthorization =
+  | { readonly status: 'skipped'; readonly reason: 'refresh-needed' }
   | {
       readonly status: 'authorized'
       readonly ref: RowRef
@@ -1212,13 +1215,14 @@ const QUOTA_TOKEN_SKEW_MS = 60_000
  * Resolves the bearer for one quota check from the repository, by the
  * target's captured ref only. A row that no longer holds that exact
  * credential (replaced, re-identified or removed) is refused rather than
- * checked on its successor. An expired token is refreshed through the
- * repository's attributed refresh, never locally.
+ * checked on its successor. Required checks refresh an expired token through
+ * the repository. Explicit advisory checks skip instead of owning credential writes.
  */
 export async function authorizeGaQuotaCheck(
   repository: Pick<AccountRepository, 'read' | 'refresh'>,
   target: GaQuotaTarget,
   now: () => number,
+  purpose: QuotaCheckPurpose = 'required',
 ): Promise<GaQuotaAuthorization> {
   const ref = target.rowRef
   if (ref === undefined) return { status: 'refused', reason: 'unattributed' }
@@ -1261,6 +1265,8 @@ export async function authorizeGaQuotaCheck(
       },
     }
   }
+  if (purpose === 'advisory')
+    return { status: 'skipped', reason: 'refresh-needed' }
   const outcome = await repository.refresh(ref)
   if (outcome.status !== 'rotated')
     return { status: 'refused', reason: 'refresh-refused' }
@@ -1336,7 +1342,7 @@ export function createGaFetchAccountQuota(options: {
   return createAuthorizedFetchAccountQuota({
     logger: options.logger,
     ...(quotaFetch ? { transport: () => quotaFetch } : {}),
-    async authorize(account) {
+    async authorize(account, _signal, purpose = 'required') {
       // Captured before any await: the ref of exactly this target.
       const rowRef = rowRefOfTarget(account)
       await options.assertAdmission?.()
@@ -1344,13 +1350,24 @@ export function createGaFetchAccountQuota(options: {
         options.repository,
         { rowRef },
         options.now,
+        purpose,
       )
-      if (authorization.status !== 'authorized')
-        return { status: 'refused', reason: authorization.reason }
+      if (authorization.status !== 'authorized') return authorization
       const ref = authorization.ref
       const accessToken = authorization.auth.access ?? ''
       await options.assertAdmission?.()
-      const project = await ensureProject(authorization.auth)
+      const storedProjects = parseRefreshParts(authorization.auth.refresh)
+      const storedProject =
+        storedProjects.managedProjectId ?? storedProjects.projectId
+      if (purpose === 'advisory' && !storedProject)
+        return { status: 'skipped', reason: 'project-needed' }
+      const project =
+        purpose === 'advisory'
+          ? {
+              auth: authorization.auth,
+              effectiveProjectId: storedProject ?? '',
+            }
+          : await ensureProject(authorization.auth)
       await options.assertAdmission?.()
       const managedProjectId = parseRefreshParts(
         project.auth.refresh,
@@ -1536,11 +1553,14 @@ export async function createGaLocalRequestPipeline(
 ): Promise<GaRequestPipeline> {
   const runtime = input.runtime
   await input.assertAdmission?.()
-  const manager = await loadAccountManagerFromRepository(input.repository)
+  const logger = runtime.logger.createLogger('request')
+  const advisory = createAdvisoryRepositoryOwner(input.repository, logger)
+  const manager = await loadAccountManagerFromRepository(advisory.repository, {
+    onWriteError: advisory.owns,
+  })
   input.accounts.current = manager
   input.accounts.quotaLogger = runtime.logger.createLogger('quota')
   await runtime.replaceAccounts(manager)
-  const logger = runtime.logger.createLogger('request')
   const executor = createRequestExecutor({
     ...gaEngineCollaborators({
       runtime,
@@ -1592,6 +1612,7 @@ export async function createGaLocalRequestPipeline(
     async dispose() {
       await executor.dispose()
       await storeQuota.dispose()
+      await advisory.drain()
       if (input.accounts.current === manager) {
         input.accounts.current = null
         input.accounts.quotaLogger = null
@@ -2032,6 +2053,7 @@ export function createGaLocationServicesFactory(
                       throw new AggregateError(
                         failures,
                         'Local writes were refused by source authority',
+                        { cause: result },
                       )
                     }
                     return result
@@ -2437,7 +2459,7 @@ export function createGaRuntimeCollaborators(input: {
 }): GaRuntimeCollaborators {
   return {
     quotaSnapshots: createMemoryQuotaSnapshots(),
-    fetchAccountQuota: async (account, signal) => {
+    fetchAccountQuota: async (account, signal, purpose) => {
       const repository = await input.getRepository()
       return createGaFetchAccountQuota({
         repository,
@@ -2449,7 +2471,7 @@ export function createGaRuntimeCollaborators(input: {
         logger: {
           debug: (...args) => input.accounts.quotaLogger?.debug(...args),
         },
-      })(account, signal)
+      })(account, signal, purpose)
     },
     refreshToken: async (_auth, account) => {
       const manager = input.accounts.current
