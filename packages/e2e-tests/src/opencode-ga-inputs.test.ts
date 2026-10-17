@@ -847,7 +847,9 @@ describe('GA current-store fixture admission', () => {
       'seeds nothing and admits initialization-required only for the two real-login cases'
     const startedAt = performance.now()
     const ids = ['ga-ownership-pool-login', 'ga-ownership-empty-pool']
-    let modules: Awaited<ReturnType<typeof loadCommonAuthStoreModules>> | undefined
+    let modules:
+      | Awaited<ReturnType<typeof loadCommonAuthStoreModules>>
+      | undefined
     for (const id of ids) {
       await withFixturePhaseClock(
         testName,
@@ -862,7 +864,9 @@ describe('GA current-store fixture admission', () => {
               loadCommonAuthStoreModules(),
             )
           const storeModules = modules
-          const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-fresh-store-')))
+          const root = realpathSync(
+            mkdtempSync(join(tmpdir(), 'ga-fresh-store-')),
+          )
           try {
             const paths = prepareGaRoot(root)
             await phase('seedOwnedCurrentStore', () =>
@@ -888,22 +892,31 @@ describe('GA current-store fixture admission', () => {
               'terminal-frame',
               'pty-reauthorize-listener',
             ]) {
-              await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
-                expect(
-                  assertOwnedCurrentStoreInput(paths, other),
-                ).rejects.toThrow('did not publish a current store'),
+              await phase(
+                'negative assertOwnedCurrentStoreInput expectation',
+                async () =>
+                  expect(
+                    assertOwnedCurrentStoreInput(paths, other),
+                  ).rejects.toThrow('did not publish a current store'),
               )
             }
-            writeFileSync(legacyPath, JSON.stringify({ version: 4, accounts: [] }))
-            await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
-              expect(assertOwnedCurrentStoreInput(paths, id)).rejects.toThrow(
-                'GA_FRESH_STORE_REQUIRED',
-              ),
+            writeFileSync(
+              legacyPath,
+              JSON.stringify({ version: 4, accounts: [] }),
             )
-            await phase('negative seedOwnedCurrentStore expectation', async () =>
-              expect(seedOwnedCurrentStore(paths, id)).rejects.toThrow(
-                'pre-existing legacy/profile data',
-              ),
+            await phase(
+              'negative assertOwnedCurrentStoreInput expectation',
+              async () =>
+                expect(assertOwnedCurrentStoreInput(paths, id)).rejects.toThrow(
+                  'GA_FRESH_STORE_REQUIRED',
+                ),
+            )
+            await phase(
+              'negative seedOwnedCurrentStore expectation',
+              async () =>
+                expect(seedOwnedCurrentStore(paths, id)).rejects.toThrow(
+                  'pre-existing legacy/profile data',
+                ),
             )
           } finally {
             await phase('rmSync final cleanup', async () =>
@@ -924,7 +937,9 @@ describe('GA current-store fixture admission', () => {
       'pty-reauthorize-listener',
       'pty-two-location-oauth-bearer',
     ]
-    let modules: Awaited<ReturnType<typeof loadCommonAuthStoreModules>> | undefined
+    let modules:
+      | Awaited<ReturnType<typeof loadCommonAuthStoreModules>>
+      | undefined
     for (const id of ids) {
       await withFixturePhaseClock(
         testName,
@@ -939,7 +954,9 @@ describe('GA current-store fixture admission', () => {
               loadCommonAuthStoreModules(),
             )
           const storeModules = modules
-          const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-seeded-store-')))
+          const root = realpathSync(
+            mkdtempSync(join(tmpdir(), 'ga-seeded-store-')),
+          )
           try {
             const paths = prepareGaRoot(root)
             await phase('seedOwnedCurrentStore', () =>
@@ -950,10 +967,15 @@ describe('GA current-store fixture admission', () => {
             await phase('assertOwnedCurrentStoreInput', () =>
               assertOwnedCurrentStoreInput(paths, id),
             )
-            await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
-              expect(
-                assertOwnedCurrentStoreInput(paths, 'ga-ownership-pool-login'),
-              ).rejects.toThrow('GA_FRESH_STORE_REQUIRED'),
+            await phase(
+              'negative assertOwnedCurrentStoreInput expectation',
+              async () =>
+                expect(
+                  assertOwnedCurrentStoreInput(
+                    paths,
+                    'ga-ownership-pool-login',
+                  ),
+                ).rejects.toThrow('GA_FRESH_STORE_REQUIRED'),
             )
             const admitted = await phase('readAccountStoreAdmission', () =>
               readAccountStoreAdmission(
@@ -985,7 +1007,9 @@ describe('GA current-store fixture admission', () => {
               expect(read.rows).toHaveLength(
                 id === 'pty-two-location-oauth-bearer' ? 2 : 1,
               )
-              expect(read.rows[0]?.enabled).toBe(id === 'ga-ownership-passthrough')
+              expect(read.rows[0]?.enabled).toBe(
+                id === 'ga-ownership-passthrough',
+              )
             } finally {
               await phase('repository.dispose', () => repository.dispose())
             }
@@ -1009,10 +1033,7 @@ if (process.env.GA_STORE_FIXTURE_TIMEOUT_PROBE === '1') {
         'fixture-timeout-probe',
         { budgetMs: 100 },
         async (phase) =>
-          phase(
-            'repository.read',
-            () => new Promise<never>(() => undefined),
-          ),
+          phase('repository.read', () => new Promise<never>(() => undefined)),
       )
     },
     { timeout: 250 },
