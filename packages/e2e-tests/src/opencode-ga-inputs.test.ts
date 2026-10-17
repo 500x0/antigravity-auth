@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   initializeFreshAccountStore,
   readAccountStoreAdmission,
@@ -45,6 +47,98 @@ import {
   normalizeSameReadState,
   seedOwnedCurrentStore,
 } from './opencode-ga-inputs.ts'
+
+type PhaseRunner = <T>(name: string, action: () => Promise<T>) => Promise<T>
+
+type RecordedPhase = {
+  name: string
+  startedAt: number
+  finishedAt?: number
+}
+
+type FixtureClockOptions = {
+  budgetMs: number
+  startedAt?: number
+  write?: (line: string) => void
+  schedule?: (callback: () => void, delayMs: number) => () => void
+}
+
+function createFixturePhaseClock(
+  testName: string,
+  fixtureId: string,
+  options: FixtureClockOptions,
+) {
+  const startedAt = options.startedAt ?? performance.now()
+  const now = () => performance.now()
+  const phases: RecordedPhase[] = []
+  const openPhases: RecordedPhase[] = []
+  const write = options.write ?? ((line: string) => console.error(line))
+  let emitted = false
+
+  const elapsedMs = (value: number) => Math.round(value * 100) / 100
+  const emit = () => {
+    if (emitted) return
+    emitted = true
+    const at = now()
+    const report = {
+      testName,
+      fixtureId,
+      phases: phases.map((phase) => ({
+        name: phase.name,
+        startOffsetMs: elapsedMs(phase.startedAt - startedAt),
+        durationMs: elapsedMs((phase.finishedAt ?? at) - phase.startedAt),
+      })),
+      openPhase: openPhases.at(-1)?.name ?? null,
+    }
+    write(`GA_STORE_FIXTURE_PHASES=${JSON.stringify(report)}`)
+  }
+
+  const schedule =
+    options.schedule ??
+    ((callback: () => void, delayMs: number) => {
+      const timer = setTimeout(callback, delayMs)
+      return () => clearTimeout(timer)
+    })
+
+  // This timer only reports progress; Bun still owns the unchanged test deadline.
+  const cancelTimer = schedule(emit, Math.max(0, options.budgetMs))
+
+  const phase: PhaseRunner = async (name, action) => {
+    const record: RecordedPhase = { name, startedAt: now() }
+    phases.push(record)
+    openPhases.push(record)
+    try {
+      return await action()
+    } finally {
+      record.finishedAt = now()
+      const index = openPhases.lastIndexOf(record)
+      if (index >= 0) openPhases.splice(index, 1)
+    }
+  }
+
+  return {
+    phase,
+    emit,
+    close: cancelTimer,
+  }
+}
+
+async function withFixturePhaseClock(
+  testName: string,
+  fixtureId: string,
+  options: FixtureClockOptions,
+  run: (phase: PhaseRunner) => Promise<void>,
+): Promise<void> {
+  const clock = createFixturePhaseClock(testName, fixtureId, options)
+  try {
+    await run(clock.phase)
+  } catch (error) {
+    clock.emit()
+    throw error
+  } finally {
+    clock.close()
+  }
+}
 
 // These tests exercise the parsing and menu-matching helpers on synthetic
 // state answers, plus one block that runs createAntigravityCommandMenu from
@@ -640,91 +734,287 @@ describe('GA menu targeting against the core menu', () => {
 })
 
 describe('GA current-store fixture admission', () => {
-  it('seeds nothing and admits initialization-required only for the two real-login cases', async () => {
-    const modules = await loadCommonAuthStoreModules()
-    for (const id of ['ga-ownership-pool-login', 'ga-ownership-empty-pool']) {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-fresh-store-')))
-      try {
-        const paths = prepareGaRoot(root)
-        await seedOwnedCurrentStore(paths, id)
-        await assertOwnedCurrentStoreInput(paths, id)
-        const legacyPath = join(
-          paths.opencodeConfig,
-          'antigravity-accounts.json',
-        )
-        expect(
-          (await readAccountStoreBinding(legacyPath, modules, Date.now)).status,
-        ).toBe('initialization-required')
-        expect(existsSync(legacyPath)).toBe(false)
-        expect(readdirSync(paths.opencodeConfig)).toEqual([])
-        for (const other of [
-          'ga-ownership-passthrough',
-          'terminal-frame',
-          'pty-reauthorize-listener',
-        ]) {
-          await expect(
-            assertOwnedCurrentStoreInput(paths, other),
-          ).rejects.toThrow('did not publish a current store')
-        }
-        writeFileSync(legacyPath, JSON.stringify({ version: 4, accounts: [] }))
-        await expect(assertOwnedCurrentStoreInput(paths, id)).rejects.toThrow(
-          'GA_FRESH_STORE_REQUIRED',
-        )
-        await expect(seedOwnedCurrentStore(paths, id)).rejects.toThrow(
-          'pre-existing legacy/profile data',
-        )
-      } finally {
-        rmSync(root, { recursive: true, force: true })
+  it('phase clocks report a never-resolving phase once at the fake budget', async () => {
+    const lines: string[] = []
+    let fireBudget: (() => void) | undefined
+    const clock = createFixturePhaseClock(
+      'fake budget timeout test',
+      'fixture-never-finishes',
+      {
+        budgetMs: 5,
+        write: (line) => lines.push(line),
+        schedule: (callback, delayMs) => {
+          expect(delayMs).toBe(5)
+          fireBudget = callback
+          return () => undefined
+        },
+      },
+    )
+    try {
+      const pending = clock.phase(
+        'repository.read',
+        () => new Promise<never>(() => undefined),
+      )
+      fireBudget?.()
+      expect(lines).toHaveLength(1)
+      const line = lines[0] ?? ''
+      expect(line.startsWith('GA_STORE_FIXTURE_PHASES=')).toBe(true)
+      const trace = JSON.parse(
+        line.slice('GA_STORE_FIXTURE_PHASES='.length),
+      ) as {
+        testName: string
+        fixtureId: string
+        phases: Array<{
+          name: string
+          startOffsetMs: number
+          durationMs: number
+        }>
+        openPhase: string | null
       }
+      expect(trace.testName).toBe('fake budget timeout test')
+      expect(trace.fixtureId).toBe('fixture-never-finishes')
+      expect(trace.phases).toHaveLength(1)
+      expect(trace.phases[0]?.name).toBe('repository.read')
+      expect(Number.isFinite(trace.phases[0]?.startOffsetMs)).toBe(true)
+      expect(Number.isFinite(trace.phases[0]?.durationMs)).toBe(true)
+      expect(trace.openPhase).toBe('repository.read')
+      void pending
+    } finally {
+      clock.close()
+    }
+  })
+
+  it('phase clocks stay silent when all phases complete', async () => {
+    const lines: string[] = []
+    const clock = createFixturePhaseClock(
+      'passing clock test',
+      'fixture-completes',
+      {
+        budgetMs: 5,
+        write: (line) => lines.push(line),
+        schedule: () => () => undefined,
+      },
+    )
+    try {
+      await clock.phase('repository.read', async () => undefined)
+      expect(lines).toEqual([])
+    } finally {
+      clock.close()
+    }
+  })
+
+  it('phase clocks report a never-resolving phase before a real Bun test timeout', () => {
+    const child = spawnSync(
+      process.execPath,
+      [
+        'test',
+        '--isolate',
+        fileURLToPath(import.meta.url),
+        '-t',
+        'GA store fixture phase clock timeout probe',
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, GA_STORE_FIXTURE_TIMEOUT_PROBE: '1' },
+        encoding: 'utf8',
+        timeout: 5000,
+      },
+    )
+    const output = `${child.stdout ?? ''}${child.stderr ?? ''}`
+    expect(child.error).toBeUndefined()
+    expect(child.status).not.toBe(0)
+    expect(output).toMatch(/timed out|timeout/i)
+    const lines = output
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('GA_STORE_FIXTURE_PHASES='))
+    expect(lines).toHaveLength(1)
+    const trace = JSON.parse(
+      (lines[0] ?? '').slice('GA_STORE_FIXTURE_PHASES='.length),
+    ) as {
+      testName: string
+      fixtureId: string
+      phases: Array<{ name: string; startOffsetMs: number; durationMs: number }>
+      openPhase: string | null
+    }
+    expect(trace.testName).toBe('GA store fixture timeout probe')
+    expect(trace.fixtureId).toBe('fixture-timeout-probe')
+    expect(trace.phases.at(-1)?.name).toBe('repository.read')
+    expect(trace.openPhase).toBe('repository.read')
+  })
+
+  it('seeds nothing and admits initialization-required only for the two real-login cases', async () => {
+    const testName =
+      'seeds nothing and admits initialization-required only for the two real-login cases'
+    const startedAt = performance.now()
+    const ids = ['ga-ownership-pool-login', 'ga-ownership-empty-pool']
+    let modules: Awaited<ReturnType<typeof loadCommonAuthStoreModules>> | undefined
+    for (const id of ids) {
+      await withFixturePhaseClock(
+        testName,
+        id,
+        {
+          startedAt,
+          budgetMs: Math.max(0, 4000 - (performance.now() - startedAt)),
+        },
+        async (phase) => {
+          if (!modules)
+            modules = await phase('loadCommonAuthStoreModules', () =>
+              loadCommonAuthStoreModules(),
+            )
+          const storeModules = modules
+          const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-fresh-store-')))
+          try {
+            const paths = prepareGaRoot(root)
+            await phase('seedOwnedCurrentStore', () =>
+              seedOwnedCurrentStore(paths, id, (name, action) =>
+                phase(`seedOwnedCurrentStore.${name}`, action),
+              ),
+            )
+            await phase('assertOwnedCurrentStoreInput', () =>
+              assertOwnedCurrentStoreInput(paths, id),
+            )
+            const legacyPath = join(
+              paths.opencodeConfig,
+              'antigravity-accounts.json',
+            )
+            const binding = await phase('readAccountStoreBinding', () =>
+              readAccountStoreBinding(legacyPath, storeModules, Date.now),
+            )
+            expect(binding.status).toBe('initialization-required')
+            expect(existsSync(legacyPath)).toBe(false)
+            expect(readdirSync(paths.opencodeConfig)).toEqual([])
+            for (const other of [
+              'ga-ownership-passthrough',
+              'terminal-frame',
+              'pty-reauthorize-listener',
+            ]) {
+              await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
+                expect(
+                  assertOwnedCurrentStoreInput(paths, other),
+                ).rejects.toThrow('did not publish a current store'),
+              )
+            }
+            writeFileSync(legacyPath, JSON.stringify({ version: 4, accounts: [] }))
+            await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
+              expect(assertOwnedCurrentStoreInput(paths, id)).rejects.toThrow(
+                'GA_FRESH_STORE_REQUIRED',
+              ),
+            )
+            await phase('negative seedOwnedCurrentStore expectation', async () =>
+              expect(seedOwnedCurrentStore(paths, id)).rejects.toThrow(
+                'pre-existing legacy/profile data',
+              ),
+            )
+          } finally {
+            await phase('rmSync final cleanup', async () =>
+              rmSync(root, { recursive: true, force: true }),
+            )
+          }
+        },
+      )
     }
   })
 
   it('keeps passthrough populated and preserves both reauthorization fixtures', async () => {
-    const modules = await loadCommonAuthStoreModules()
-    for (const id of [
+    const testName =
+      'keeps passthrough populated and preserves both reauthorization fixtures'
+    const startedAt = performance.now()
+    const ids = [
       'ga-ownership-passthrough',
       'pty-reauthorize-listener',
       'pty-two-location-oauth-bearer',
-    ]) {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-seeded-store-')))
-      try {
-        const paths = prepareGaRoot(root)
-        await seedOwnedCurrentStore(paths, id)
-        await assertOwnedCurrentStoreInput(paths, id)
-        await expect(
-          assertOwnedCurrentStoreInput(paths, 'ga-ownership-pool-login'),
-        ).rejects.toThrow('GA_FRESH_STORE_REQUIRED')
-        const admitted = await readAccountStoreAdmission(
-          join(paths.opencodeConfig, 'antigravity-accounts.json'),
-          modules,
-          Date.now,
-        )
-        expect(admitted.status).toBe('active')
-        if (admitted.status !== 'active')
-          throw new Error('Fixture not admitted')
-        const repository = createAccountRepositoryFactory(modules)({
-          paths: admitted.paths,
-          now: Date.now,
-          exchange: async ({ refreshToken }) => ({
-            refreshToken,
-            accessToken: 'synthetic-access',
-            expiresAt: Date.now() + 3600000,
-          }),
-        })
-        try {
-          const read = await repository.read()
-          expect(read.status).toBe('ready')
-          if (read.status !== 'ready') throw new Error('Fixture not ready')
-          expect(read.rows).toHaveLength(
-            id === 'pty-two-location-oauth-bearer' ? 2 : 1,
-          )
-          expect(read.rows[0]?.enabled).toBe(id === 'ga-ownership-passthrough')
-        } finally {
-          await repository.dispose()
-        }
-      } finally {
-        rmSync(root, { recursive: true, force: true })
-      }
+    ]
+    let modules: Awaited<ReturnType<typeof loadCommonAuthStoreModules>> | undefined
+    for (const id of ids) {
+      await withFixturePhaseClock(
+        testName,
+        id,
+        {
+          startedAt,
+          budgetMs: Math.max(0, 4000 - (performance.now() - startedAt)),
+        },
+        async (phase) => {
+          if (!modules)
+            modules = await phase('loadCommonAuthStoreModules', () =>
+              loadCommonAuthStoreModules(),
+            )
+          const storeModules = modules
+          const root = realpathSync(mkdtempSync(join(tmpdir(), 'ga-seeded-store-')))
+          try {
+            const paths = prepareGaRoot(root)
+            await phase('seedOwnedCurrentStore', () =>
+              seedOwnedCurrentStore(paths, id, (name, action) =>
+                phase(`seedOwnedCurrentStore.${name}`, action),
+              ),
+            )
+            await phase('assertOwnedCurrentStoreInput', () =>
+              assertOwnedCurrentStoreInput(paths, id),
+            )
+            await phase('negative assertOwnedCurrentStoreInput expectation', async () =>
+              expect(
+                assertOwnedCurrentStoreInput(paths, 'ga-ownership-pool-login'),
+              ).rejects.toThrow('GA_FRESH_STORE_REQUIRED'),
+            )
+            const admitted = await phase('readAccountStoreAdmission', () =>
+              readAccountStoreAdmission(
+                join(paths.opencodeConfig, 'antigravity-accounts.json'),
+                storeModules,
+                Date.now,
+              ),
+            )
+            expect(admitted.status).toBe('active')
+            if (admitted.status !== 'active')
+              throw new Error('Fixture not admitted')
+            const repository = await phase('repository creation', async () =>
+              createAccountRepositoryFactory(storeModules)({
+                paths: admitted.paths,
+                now: Date.now,
+                exchange: async ({ refreshToken }) => ({
+                  refreshToken,
+                  accessToken: 'synthetic-access',
+                  expiresAt: Date.now() + 3600000,
+                }),
+              }),
+            )
+            try {
+              const read = await phase('repository.read', () =>
+                repository.read(),
+              )
+              expect(read.status).toBe('ready')
+              if (read.status !== 'ready') throw new Error('Fixture not ready')
+              expect(read.rows).toHaveLength(
+                id === 'pty-two-location-oauth-bearer' ? 2 : 1,
+              )
+              expect(read.rows[0]?.enabled).toBe(id === 'ga-ownership-passthrough')
+            } finally {
+              await phase('repository.dispose', () => repository.dispose())
+            }
+          } finally {
+            await phase('rmSync final cleanup', async () =>
+              rmSync(root, { recursive: true, force: true }),
+            )
+          }
+        },
+      )
     }
   })
 })
+
+if (process.env.GA_STORE_FIXTURE_TIMEOUT_PROBE === '1') {
+  it(
+    'GA store fixture phase clock timeout probe',
+    async () => {
+      await withFixturePhaseClock(
+        'GA store fixture timeout probe',
+        'fixture-timeout-probe',
+        { budgetMs: 100 },
+        async (phase) =>
+          phase(
+            'repository.read',
+            () => new Promise<never>(() => undefined),
+          ),
+      )
+    },
+    { timeout: 250 },
+  )
+}

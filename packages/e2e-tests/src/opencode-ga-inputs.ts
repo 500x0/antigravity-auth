@@ -348,7 +348,10 @@ async function openOwnedRepository(paths: GaPaths): Promise<AccountRepository> {
 export async function seedOwnedCurrentStore(
   paths: GaPaths,
   scenario: string,
+  phase?: <T>(name: string, action: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
+  const inPhase = <T>(name: string, action: () => Promise<T>) =>
+    phase ? phase(name, action) : action()
   const legacyPath = join(paths.opencodeConfig, 'antigravity-accounts.json')
   ownedPath(paths.root, legacyPath)
   assertInput(
@@ -388,11 +391,13 @@ export async function seedOwnedCurrentStore(
     { mode: 0o600, flag: 'wx' },
   )
   const modules = await loadCommonAuthStoreModules()
-  const outcome = await createAccountMigrationFactory(modules)({
-    legacyPath,
-    offline: { processesStopped: true },
-    now: Date.now,
-  })
+  const outcome = await inPhase('migration', () =>
+    createAccountMigrationFactory(modules)({
+      legacyPath,
+      offline: { processesStopped: true },
+      now: Date.now,
+    }),
+  )
   assertInput(
     outcome.status === 'completed',
     'Real owned migration did not complete',
@@ -401,9 +406,11 @@ export async function seedOwnedCurrentStore(
     !existsSync(legacyPath),
     'Legacy fixture remained live after current-store activation',
   )
-  const repository = await openOwnedRepository(paths)
+  const repository = await inPhase('repository.create', () =>
+    openOwnedRepository(paths),
+  )
   try {
-    const read = await repository.read()
+    const read = await inPhase('repository.read', () => repository.read())
     assertInput(
       read.status === 'ready' &&
         read.rows.length === count &&
@@ -421,12 +428,16 @@ export async function seedOwnedCurrentStore(
         target,
         'Owned reauthorization fixture has no exact repository target',
       )
-      await repository.recordAccessVerdict(target.ref, {
-        kind: 'verification-required',
-        observedAt: Date.now(),
-        reason: 'VALIDATION_REQUIRED',
-      })
-      const blocked = await repository.read()
+      await inPhase('repository.recordAccessVerdict', () =>
+        repository.recordAccessVerdict(target.ref, {
+          kind: 'verification-required',
+          observedAt: Date.now(),
+          reason: 'VALIDATION_REQUIRED',
+        }),
+      )
+      const blocked = await inPhase('repository.readAfterVerdict', () =>
+        repository.read(),
+      )
       assertInput(
         blocked.status === 'ready' &&
           blocked.rows.some(
@@ -436,7 +447,7 @@ export async function seedOwnedCurrentStore(
       )
     }
   } finally {
-    await repository.dispose()
+    await inPhase('repository.dispose', () => repository.dispose())
   }
 }
 
