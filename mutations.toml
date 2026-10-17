@@ -1040,3 +1040,31 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^held\snative\scommand\stimers\sare\sarmed\sand\scleared\swithout\sdispatch\suntil\sthe\scleanup\strigger$']
+
+[[control]]
+id = "ga-inert-thread-departure"
+guards = "A terminal actor leader and an observed child close cannot certify teardown while a thread of that group remains in cgroup.threads."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = '''    const departed =
+      !identities.some(inertAlive) &&
+      !inertGroupTasksRemain(identities, deadline)'''
+new = '''    const departed = !identities.some(inertAlive) // NON-VACUITY BREAK: restore leader-only completion.'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^terminal\sleader\steardown\swaits\sfor\sclose\sand\severy\slisted\sgroup\sthread\sto\sdepart$']
+
+[[control]]
+id = "ga-inert-partial-identity-live-group"
+guards = "Partial leader identity ENOENT refuses at the extant-thread-group branch on stable modeled task membership, before any launch or signal."
+file = "packages/e2e-tests/docker/measure-ga-proxy-matrix.ts"
+old = '  if (threadGroupHasLiveTasks(pid, summary, budget))'
+new = '  if (false) // NON-VACUITY BREAK: ignore live tasks of an unqualifiable group.'
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^qualified\sprivate\snamespace\snative\scleanup\ssource\sand\sinert\scontrols\smodeled\spartial\snamespace\sENOENT\sreaches\sthe\sextant\sthread\sgroup\srefusal\swithout\slaunch\sor\ssignal$']

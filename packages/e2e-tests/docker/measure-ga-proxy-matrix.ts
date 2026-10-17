@@ -2112,11 +2112,95 @@ function cgroupThreadMembers(
     throw new Error('UNKNOWN ambiguous cgroup task inventory')
   return members
 }
+export interface NativeTaskDiagnostic {
+  runnerPid: number
+  actorPids: () => number[]
+  emit: (line: string) => void
+}
+let nativeTaskDiagnostic: NativeTaskDiagnostic | undefined
+
+// Tests can log task-list changes, but logging must not permit a command to start
+// or decide which processes command cleanup may signal.
+export function enableNativeTaskDiagnostic(
+  diagnostic: NativeTaskDiagnostic,
+): () => void {
+  const previous = nativeTaskDiagnostic
+  nativeTaskDiagnostic = diagnostic
+  return () => {
+    nativeTaskDiagnostic = previous
+  }
+}
+
+interface NativeTaskFact {
+  tid: number
+  tgid: number | null
+  start: string | null
+  state: string | null
+}
+function emitNativeTaskDifference(
+  before: number[],
+  after: number[],
+  first: Map<number, NativeTaskFact>,
+): void {
+  const diagnostic = nativeTaskDiagnostic
+  if (!diagnostic) return
+  try {
+    const facts = [...new Set([...before, ...after])].map((tid) => {
+      let fact = first.get(tid)
+      if (!fact) {
+        fact = { tid, tgid: null, start: null, state: null }
+        // Capture newly appearing TIDs as soon as the second inventory exposes them.
+        // Missing fields stay explicit; later scans cannot reconstruct a vanished TID.
+        try {
+          const status = nativeJobFixture().parseKernelStatus(
+            readFileSync(`/proc/${tid}/status`, 'utf8'),
+          )
+          fact.tgid = positiveInteger(Number(status.Tgid))
+        } catch {
+          /* Diagnostic observation is best-effort, never a new refusal. */
+        }
+        try {
+          const stat = readFileSync(`/proc/${tid}/stat`, 'utf8')
+          const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+          fact.start = fields[19] ?? null
+          fact.state = fields[0] ?? null
+        } catch {
+          /* Diagnostic observation is best-effort, never a new refusal. */
+        }
+        first.set(tid, fact)
+      }
+      return fact
+    })
+    let actors = new Set<number>()
+    try {
+      actors = new Set(diagnostic.actorPids())
+    } catch {
+      // If known test-process IDs cannot be read, still log both task lists and
+      // identify only the runner; other thread groups remain unknown.
+    }
+    const tasks = facts.map((fact) => ({
+      ...fact,
+      group:
+        fact.tgid === diagnostic.runnerPid
+          ? 'runner'
+          : fact.tgid !== null && actors.has(fact.tgid)
+            ? 'actor'
+            : 'unknown',
+    }))
+    diagnostic.emit(
+      `NATIVE_ADMISSION_TASK_DIFFERENCE=${JSON.stringify({ before, after, tasks })}`,
+    )
+  } catch {
+    /* A diagnostic sink must not replace the original admission refusal. */
+  }
+}
+
 function observedNativeTasks(
   summary: ReturnType<typeof parseProcessBoundary>,
   budget?: NativeCleanupBudget,
 ): { tid: number; tgid: number; state: string }[] {
   let members = cgroupThreadMembers(summary, budget)
+  const first = new Map<number, NativeTaskFact>()
   for (;;) {
     checkCleanupBudget(budget)
     const observations: { tid: number; tgid: number; state: string }[] = []
@@ -2134,6 +2218,8 @@ function observedNativeTasks(
         if (positiveInteger(Number(status.Pid)) !== tid)
           throw new Error('UNKNOWN cgroup task identity changed')
         const tgid = positiveInteger(Number(status.Tgid))
+        const fact: NativeTaskFact = { tid, tgid, start: null, state: null }
+        if (nativeTaskDiagnostic && !first.has(tid)) first.set(tid, fact)
         const stat = withinCleanupBudget(budget, () =>
           readFileSync(`/proc/${tid}/stat`, 'utf8'),
         )
@@ -2141,6 +2227,9 @@ function observedNativeTasks(
           stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0],
           /^[A-Z]$/,
         )
+        fact.state = state
+        fact.start =
+          stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null
         observations.push({ tid, tgid, state })
       } catch (error) {
         if (
@@ -2169,8 +2258,10 @@ function observedNativeTasks(
     // Every TID in cgroup.threads must have been inspected before absence is safe.
     // Inspect replacements within the existing cleanup budget. Without a budget,
     // a changed task list refuses admission rather than starting an unbounded scan.
-    if (!budget)
+    if (!budget) {
+      emitNativeTaskDifference(members, next, first)
       throw new Error('UNKNOWN cgroup task inventory changed during admission')
+    }
     members = next
   }
 }
@@ -2584,6 +2675,8 @@ export async function runNativeCommand(
     outputCapBytes?: number
     // Fixture controls may hold dispatch until readiness; normal runs use real timers.
     testTimers?: NativeCommandTimers
+    // Tests retain direct-child handles independently of command cleanup results.
+    testChild?: (child: ChildProcess) => void
   },
 ): Promise<NativeCommandResult> {
   recheckNativeScope(scope)
@@ -2769,6 +2862,7 @@ export async function runNativeCommand(
         closed = true
         void complete()
       })
+      options.testChild?.(child)
     } catch (error) {
       spawnError = String(error)
       closed = true

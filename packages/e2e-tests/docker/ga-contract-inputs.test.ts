@@ -48,11 +48,14 @@ import {
 import {
   captureInertBirth,
   finishInertTest,
+  type InertChild,
   type InertIdentity,
   type InertReadyIdentity,
+  inertAlive,
   publishInertFixture,
   readInertIdentity,
   readyBeforeInertCleanup,
+  waitForInertDeparture,
   waitForInertReady,
 } from './inert-fixture.ts'
 import {
@@ -64,7 +67,9 @@ import {
   assertNativeRunnerUnchanged,
   classify,
   commandForCase,
+  enableNativeTaskDiagnostic,
   inventory,
+  runNativeCommand as invokeNativeCommand,
   isolatedEnv,
   type Matrix,
   MatrixSchema,
@@ -79,7 +84,6 @@ import {
   parseTunnelRequests,
   prepareNativeGit,
   qualifyNativeProcessScope,
-  runNativeCommand,
   scopedProcesses,
   selectCases,
   sha256,
@@ -250,7 +254,41 @@ function motorTest(
   test(name, async () => {
     motorExecuted.push(fullName)
     console.log(`MOTOR_INERT_EXECUTED=${JSON.stringify(fullName)}`)
-    await body()
+    const run: InertRun = {
+      children: [],
+      identities: [],
+      roots: new Set(),
+      errors: [],
+    }
+    activeInertRun = run
+    const stopDiagnostic = enableNativeTaskDiagnostic({
+      runnerPid: process.pid,
+      actorPids: () =>
+        [...run.identities, ...[...run.roots].flatMap(fixtureIdentities)].map(
+          (identity) => identity.pid,
+        ),
+      emit: (line) => console.log(line),
+    })
+    const errors: unknown[] = []
+    try {
+      await body()
+    } catch (error) {
+      errors.push(error)
+    } finally {
+      await finishInertTest(errors, [
+        async () => {
+          for (const root of run.roots)
+            run.identities.push(...fixtureIdentities(root))
+          await reapInertIdentities(run.identities, run)
+          if (run.errors.length)
+            throw new AggregateError(run.errors, 'actor birth capture failed')
+        },
+        () => {
+          stopDiagnostic()
+          activeInertRun = undefined
+        },
+      ])
+    }
   })
   motorRegistered.push(fullName)
 }
@@ -422,7 +460,76 @@ function observeBuiltin<T extends object>(
 function fixtureUid(stat: object, uid: number): number | bigint {
   return 'uid' in stat && typeof stat.uid === 'bigint' ? BigInt(uid) : uid
 }
+interface InertRun {
+  children: {
+    handle: childProcess.ChildProcess
+    identity?: InertIdentity
+    closed: () => boolean
+  }[]
+  identities: InertIdentity[]
+  roots: Set<string>
+  errors: unknown[]
+  deadline?: number
+}
+let activeInertRun: InertRun | undefined
+
+function retainStartedInertChild(child: childProcess.ChildProcess): void {
+  const run = activeInertRun
+  if (!run || child.pid === undefined) return
+  run.deadline ??= performance.now() + 500
+  let closed = false
+  child.once('close', () => {
+    closed = true
+  })
+  try {
+    const identity = captureStartedInertBirth(child.pid)
+    run.children.push({ handle: child, identity, closed: () => closed })
+    run.identities.push(identity)
+  } catch (error) {
+    // Keep the handle even if a birth read fails; teardown must report it.
+    run.errors.push(error)
+    run.children.push({ handle: child, closed: () => closed })
+  }
+}
+
+function runNativeCommand(
+  ...[scope, binary, args, options]: Parameters<typeof invokeNativeCommand>
+) {
+  return invokeNativeCommand(scope, binary, args, {
+    ...options,
+    testChild: retainStartedInertChild,
+  })
+}
+
+function captureStartedInertBirth(pid: number): InertIdentity {
+  try {
+    return captureInertBirth(pid)
+  } catch (error) {
+    if (
+      !['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      throw error
+    // A just-exited child can lose namespace links before its close event.
+    // Its terminal stat still supplies birth; membership was inherited at spawn.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    if (
+      !['Z', 'X'].includes(fields[0] ?? '') ||
+      !/^\d+$/.test(fields[19] ?? '')
+    )
+      throw error
+    return {
+      pid,
+      start: fields[19]!,
+      pgid: Number(fields[2]),
+      sid: Number(fields[3]),
+      namespace: readlinkSync('/proc/self/ns/pid'),
+      cgroup: readFileSync('/proc/self/cgroup', 'utf8'),
+    }
+  }
+}
 function inertProgram(root: string): string {
+  activeInertRun?.roots.add(root)
   const path = join(root, 'inert-native-child.mjs')
   writeFileSync(
     path,
@@ -517,20 +624,16 @@ function heldNativeTimer() {
     },
   }
 }
-function inertAlive(identity: InertIdentity): boolean {
-  try {
-    const text = readFileSync(`/proc/${identity.pid}/stat`, 'utf8')
-    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
-    return (
-      fields[19] === identity.start && !['Z', 'X'].includes(fields[0] ?? '')
-    )
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-    throw error
-  }
-}
 async function finallyReapInert(root: string): Promise<void> {
   const identities = fixtureIdentities(root)
+  activeInertRun?.identities.push(...identities)
+  await reapInertIdentities(identities, activeInertRun)
+  console.log(`INERT_FINALLY_EMPTY=${JSON.stringify(identities)}`)
+}
+async function reapInertIdentities(
+  identities: InertIdentity[],
+  run?: InertRun,
+): Promise<void> {
   for (const identity of identities) {
     if (
       !Number.isInteger(identity.pid) ||
@@ -549,12 +652,12 @@ async function finallyReapInert(root: string): Promise<void> {
       throw new Error('independent fixture identity escaped its job')
     process.kill(identity.pid, 'SIGKILL')
   }
-  const end = performance.now() + 500
-  while (identities.some(inertAlive) && performance.now() < end)
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  if (identities.some(inertAlive))
-    throw new Error('independent fixture cleanup failed')
-  console.log(`INERT_FINALLY_EMPTY=${JSON.stringify(identities)}`)
+  const children: InertChild[] = run?.children ?? []
+  await waitForInertDeparture(
+    identities,
+    children,
+    run?.deadline ?? performance.now() + 500,
+  )
 }
 async function inertListener(port: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
@@ -940,6 +1043,158 @@ test('actor fixture publication never exposes truncated JSON before rename', asy
   }
 })
 
+test('runner-held actor handles retain birth and require close rather than exit', () => {
+  const run: InertRun = {
+    children: [],
+    identities: [],
+    roots: new Set(),
+    errors: [],
+  }
+  const child = new childProcess.ChildProcess()
+  Object.defineProperty(child, 'pid', { value: 100 })
+  const original = fs.readFileSync
+  const originalLink = fs.readlinkSync
+  const reads = spyOn(fs, 'readFileSync').mockImplementation(
+    new Proxy(original, {
+      apply(target, receiver, args: unknown[]) {
+        if (String(args[0]) === '/proc/100/stat')
+          return `100 (child) S ${Array(18).fill('0').join(' ')} 123 0\n`
+        if (String(args[0]) === '/proc/100/cgroup') return '0::/modeled\n'
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const links = spyOn(fs, 'readlinkSync').mockImplementation(
+    new Proxy(originalLink, {
+      apply(target, receiver, args: unknown[]) {
+        return String(args[0]) === '/proc/100/ns/pid'
+          ? 'pid:[1]'
+          : Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  activeInertRun = run
+  try {
+    retainStartedInertChild(child)
+    expect(run.errors).toEqual([])
+    expect(run.identities).toMatchObject([
+      { pid: 100, start: '123', namespace: 'pid:[1]', cgroup: '0::/modeled\n' },
+    ])
+    expect(run.children[0]?.handle).toBe(child)
+    child.emit('exit', 0, null)
+    expect(run.children[0]?.closed()).toBe(false)
+    child.emit('close', 0, null)
+    expect(run.children[0]?.closed()).toBe(true)
+  } finally {
+    activeInertRun = undefined
+    links.mockRestore()
+    reads.mockRestore()
+  }
+})
+
+test('terminal leader teardown waits for close and every listed group thread to depart', async () => {
+  const identity: InertIdentity = {
+    pid: 100,
+    start: '123',
+    namespace: 'pid:[1]',
+    cgroup: '0::/modeled\n',
+    pgid: 100,
+    sid: 100,
+  }
+  let listed = true
+  let closed = false
+  let done = false
+  const read = fs.readFileSync
+  const reads = spyOn(fs, 'readFileSync').mockImplementation(
+    new Proxy(read, {
+      apply(target, receiver, args: unknown[]) {
+        const path = String(args[0])
+        if (path === '/proc/100/stat')
+          return `100 (terminal) Z ${Array(18).fill('0').join(' ')} 123 0\n`
+        if (path === '/sys/fs/cgroup/modeled/cgroup.threads')
+          return listed ? '101\n' : ''
+        if (path === '/proc/101/status') return 'Pid:\t101\nTgid:\t100\n'
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const pending = waitForInertDeparture(
+    [identity],
+    [{ identity, closed: () => closed }],
+    performance.now() + 500,
+  ).then(() => {
+    done = true
+  })
+  try {
+    expect(inertAlive(identity)).toBe(false)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(done).toBe(false)
+    closed = true
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(done).toBe(false)
+    listed = false
+    await pending
+    expect(done).toBe(true)
+  } finally {
+    listed = false
+    closed = true
+    await pending
+    reads.mockRestore()
+  }
+})
+
+for (const unresolved of [
+  'listed group thread',
+  'unavailable listed thread',
+  'unclosed child',
+] as const)
+  test(`fixture departure deadline fails visibly for an ${unresolved}`, async () => {
+    const identity: InertIdentity = {
+      pid: 100,
+      start: '123',
+      namespace: 'pid:[1]',
+      cgroup: '0::/modeled\n',
+      pgid: 100,
+      sid: 100,
+    }
+    const original = fs.readFileSync
+    let elapsed = 0
+    const clock = spyOn(performance, 'now').mockImplementation(() => elapsed)
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          if (path === '/proc/100/stat')
+            return `100 (terminal) Z ${Array(18).fill('0').join(' ')} 123 0\n`
+          if (path === '/sys/fs/cgroup/modeled/cgroup.threads')
+            return unresolved === 'unclosed child' ? '' : '101\n'
+          if (path === '/proc/101/status') {
+            if (unresolved === 'unavailable listed thread')
+              throw Object.assign(new Error('modeled missing task'), {
+                code: 'ENOENT',
+              })
+            return 'Pid:\t101\nTgid:\t100\n'
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    try {
+      const pending = waitForInertDeparture(
+        [identity],
+        [{ closed: () => unresolved !== 'unclosed child' }],
+        500,
+      )
+      elapsed = 500
+      await expect(pending).rejects.toThrow(
+        'independent fixture task departure deadline exceeded',
+      )
+    } finally {
+      reads.mockRestore()
+      clock.mockRestore()
+    }
+  })
+
 test('slow actor readiness precedes the cleanup trigger within the existing deadline', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ga-ready-order-'))
   const path = join(root, 'worker.json')
@@ -1146,6 +1401,192 @@ test('actor teardown preserves the primary failure and still settles and removes
 })
 
 describe(CLEANUP_GROUP, () => {
+  test('modeled partial namespace ENOENT reaches the extant thread group refusal without launch or signal', () => {
+    const summary = nativeBoundarySummary()
+    const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+    const original = fs.readFileSync
+    const originalLink = fs.readlinkSync
+    const originalDirectory = fs.readdirSync
+    let injected = 0
+    let launches = 0
+    let signals = 0
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          if (path === threads) return '101\n'
+          if (path === threads.replace('cgroup.threads', 'cgroup.procs'))
+            return '100\n'
+          if (path === '/proc/101/status') return 'Pid:\t101\nTgid:\t100\n'
+          if (path === '/proc/100/status')
+            return 'Pid:\t100\nTgid:\t100\nUid:\t999 999 999 999\n'
+          if (path === '/proc/100/stat' || path === '/proc/101/stat')
+            return `${path.includes('/100/') ? '100 (leader) Z' : '101 (task) S'} ${Array(18).fill('0').join(' ')} 123 0\n`
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    const links = spyOn(fs, 'readlinkSync').mockImplementation(
+      new Proxy(originalLink, {
+        apply(target, receiver, args: unknown[]) {
+          if (String(args[0]) === '/proc/100/ns/pid') {
+            injected++
+            throw Object.assign(new Error('modeled namespace ENOENT'), {
+              code: 'ENOENT',
+            })
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    const directories = spyOn(fs, 'readdirSync').mockImplementation(
+      new Proxy(originalDirectory, {
+        apply(target, receiver, args: unknown[]) {
+          return String(args[0]) === '/proc'
+            ? ['100']
+            : Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    const launch = spyOn(childProcess, 'spawn').mockImplementation(() => {
+      launches++
+      throw new Error('modeled launch trap')
+    })
+    const signal = spyOn(process, 'kill').mockImplementation(() => {
+      signals++
+      return true
+    })
+    try {
+      let reason: string | undefined
+      try {
+        scopedProcesses(summary, true)
+      } catch (error) {
+        reason = (error as Error).message
+      }
+      expect(reason).toBe(
+        'UNKNOWN extant thread group 100 has a dead or unqualifiable leader: Error: UNKNOWN partial identity for thread group 100: Error: modeled namespace ENOENT',
+      )
+      expect(injected).toBe(1)
+      expect(launches).toBe(0)
+      expect(signals).toBe(0)
+    } finally {
+      signal.mockRestore()
+      launch.mockRestore()
+      directories.mockRestore()
+      links.mockRestore()
+      reads.mockRestore()
+    }
+  })
+  test('admission task diagnostic retains first identities without changing the exact refusal', () => {
+    const summary = nativeBoundarySummary()
+    const threads = `/sys/fs/cgroup${summary.cgroup.self}/cgroup.threads`
+    const original = fs.readFileSync
+    const lines: string[] = []
+    let inventories = 0
+    let vanishedReads = 0
+    const reads = spyOn(fs, 'readFileSync').mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args: unknown[]) {
+          const path = String(args[0])
+          if (path === threads)
+            return ++inventories === 1 ? '101\n102\n103\n' : '102\n103\n104\n'
+          const match = /^\/proc\/(10[1-4])\/(status|stat)$/.exec(path)
+          if (match) {
+            const tid = Number(match[1])
+            if (tid === 101 && ++vanishedReads > 2)
+              throw Object.assign(new Error('vanished'), { code: 'ENOENT' })
+            return match[2] === 'status'
+              ? `Pid:\t${tid}\nTgid:\t${tid === 101 ? 100 : tid === 102 ? process.pid : 300}\n`
+              : `${tid} (task) S ${Array(18).fill('0').join(' ')} ${tid * 10} 0\n`
+          }
+          return Reflect.apply(target, receiver, args)
+        },
+      }),
+    )
+    try {
+      const refusal = () => {
+        let message: string | undefined
+        try {
+          threadGroupHasLiveTasks(100, summary)
+        } catch (error) {
+          message = (error as Error).message
+        }
+        expect(message).toBe(
+          'UNKNOWN cgroup task inventory changed during admission',
+        )
+      }
+      refusal()
+      expect(lines).toEqual([])
+      inventories = 0
+      vanishedReads = 0
+      const stop = enableNativeTaskDiagnostic({
+        runnerPid: process.pid,
+        actorPids: () => [100],
+        emit: (line) => {
+          lines.push(line)
+        },
+      })
+      try {
+        refusal()
+      } finally {
+        stop()
+      }
+      expect(vanishedReads).toBe(2)
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0]!.split('=')[1]!)).toEqual({
+        before: [101, 102, 103],
+        after: [102, 103, 104],
+        tasks: [
+          { tid: 101, tgid: 100, start: '1010', state: 'S', group: 'actor' },
+          {
+            tid: 102,
+            tgid: process.pid,
+            start: '1020',
+            state: 'S',
+            group: 'runner',
+          },
+          { tid: 103, tgid: 300, start: '1030', state: 'S', group: 'unknown' },
+          { tid: 104, tgid: 300, start: '1040', state: 'S', group: 'unknown' },
+        ],
+      })
+      inventories = 0
+      vanishedReads = 0
+      const stopThrowing = enableNativeTaskDiagnostic({
+        runnerPid: process.pid,
+        actorPids: () => [],
+        emit: () => {
+          throw new Error('diagnostic sink failed')
+        },
+      })
+      try {
+        refusal()
+      } finally {
+        stopThrowing()
+      }
+      inventories = 0
+      vanishedReads = 0
+      const stopUnknownActors = enableNativeTaskDiagnostic({
+        runnerPid: process.pid,
+        actorPids: () => {
+          throw new Error('actor fixture unavailable')
+        },
+        emit: (line) => {
+          lines.push(line)
+        },
+      })
+      try {
+        refusal()
+      } finally {
+        stopUnknownActors()
+      }
+      expect(lines).toHaveLength(2)
+      expect(JSON.parse(lines[1]!.split('=')[1]!).tasks[0].group).toBe(
+        'unknown',
+      )
+    } finally {
+      reads.mockRestore()
+    }
+  })
   for (const control of [
     'duplicate inventory',
     'listed unavailable task',
@@ -1524,6 +1965,7 @@ describe(CLEANUP_GROUP, () => {
         detached: true,
         stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
       })
+      retainStartedInertChild(child)
       let timer: ReturnType<typeof setTimeout> | undefined
       let links: ReturnType<typeof spyOn<typeof fs, 'readlinkSync'>> | undefined
       let launchTrap:
@@ -1598,7 +2040,6 @@ describe(CLEANUP_GROUP, () => {
           () => finallyReapInert(root),
           () => {
             child.stdio[3]?.destroy()
-            child.unref()
           },
           () => rmSync(root, { recursive: true, force: true }),
         ])
@@ -1833,7 +2274,13 @@ describe(CLEANUP_GROUP, () => {
       let oracle: ReturnType<typeof setTimeout> | undefined
       let cleanupCertified = false
       let owned:
-        | { tgid: number; tid: number; birth: string; port: number }
+        | {
+            tgid: number
+            tid: number
+            birth: string
+            port: number
+            group: InertIdentity
+          }
         | undefined
       const pending = runNativeCommand(
         scope,
@@ -1883,13 +2330,23 @@ describe(CLEANUP_GROUP, () => {
           tgid === process.pid ||
           typeof birth !== 'string' ||
           !/^\d+$/.test(birth) ||
+          typeof witness.leaderBefore?.birth !== 'string' ||
+          !/^\d+$/.test(witness.leaderBefore.birth) ||
           typeof port !== 'number' ||
           !Number.isSafeInteger(port) ||
           port < 1 ||
           port > 65535
         )
           throw new Error('UNKNOWN malformed/missing owned thread identity')
-        return { witness, identity: { tgid, tid, birth, port } }
+        const group: InertIdentity = {
+          pid: tgid,
+          start: witness.leaderBefore.birth,
+          pgid: tgid,
+          sid: tgid,
+          namespace: scope.summary.namespace.self,
+          cgroup: `0::${scope.summary.cgroup.self}\n`,
+        }
+        return { witness, identity: { tgid, tid, birth, port, group } }
       }
       const direct = (tid: number) => {
         try {
@@ -2102,6 +2559,11 @@ describe(CLEANUP_GROUP, () => {
                   new Error('FAILED actor listener remains live'),
                 )
             }
+          } catch (error) {
+            cleanupErrors.push(error)
+          }
+          try {
+            await waitForInertDeparture([owned.group], [], oracleEnd)
           } catch (error) {
             cleanupErrors.push(error)
           }
@@ -2505,6 +2967,7 @@ describe(CLEANUP_GROUP, () => {
         detached: true,
         stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
       })
+      retainStartedInertChild(child)
       let timer: ReturnType<typeof setTimeout> | undefined
       const errors: unknown[] = []
       try {
@@ -2555,7 +3018,6 @@ describe(CLEANUP_GROUP, () => {
           () => finallyReapInert(root),
           () => {
             child.stdio[3]?.destroy()
-            child.unref()
           },
           () => rmSync(root, { recursive: true, force: true }),
         ])

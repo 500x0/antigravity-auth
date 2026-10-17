@@ -12,6 +12,81 @@ export interface InertIdentity {
 }
 export type InertReadyIdentity = InertIdentity & { port: number }
 
+export interface InertChild {
+  identity?: InertIdentity
+  closed: () => boolean
+}
+
+export function inertAlive(identity: InertIdentity): boolean {
+  try {
+    const text = fs.readFileSync(`/proc/${identity.pid}/stat`, 'utf8')
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
+    return (
+      fields[19] === identity.start && !['Z', 'X'].includes(fields[0] ?? '')
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function inertGroupTasksRemain(
+  identities: InertIdentity[],
+  deadline: number,
+): boolean {
+  for (const cgroup of new Set(identities.map((identity) => identity.cgroup))) {
+    const match = /^0::([^\n]+)\n$/.exec(cgroup)
+    if (!match) throw new Error('invalid actor cgroup membership')
+    const groups = new Set(
+      identities
+        .filter((identity) => identity.cgroup === cgroup)
+        .map((identity) => identity.pid),
+    )
+    const members = fs
+      .readFileSync(`/sys/fs/cgroup${match[1]}/cgroup.threads`, 'utf8')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    for (const tid of members) {
+      if (performance.now() >= deadline)
+        throw new Error('independent fixture task departure deadline exceeded')
+      if (!/^\d+$/.test(tid)) throw new Error('invalid fixture task inventory')
+      try {
+        const status = fs.readFileSync(`/proc/${tid}/status`, 'utf8')
+        const tgid = /^Tgid:\s+(\d+)$/m.exec(status)?.[1]
+        if (!tgid) throw new Error('unavailable fixture task group')
+        if (groups.has(Number(tgid))) return true
+      } catch (error) {
+        // A disappearing task is not evidence of departure while it is listed.
+        if (
+          ['ENOENT', 'ESRCH'].includes(
+            (error as NodeJS.ErrnoException).code ?? '',
+          )
+        )
+          return true
+        throw error
+      }
+    }
+  }
+  return false
+}
+
+export async function waitForInertDeparture(
+  identities: InertIdentity[],
+  children: InertChild[],
+  deadline: number,
+): Promise<void> {
+  while (performance.now() < deadline) {
+    const departed =
+      !identities.some(inertAlive) &&
+      !inertGroupTasksRemain(identities, deadline)
+    if (performance.now() >= deadline) break
+    if (departed && children.every((child) => child.closed())) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  throw new Error('independent fixture task departure deadline exceeded')
+}
+
 export function captureInertBirth(pid: number): InertIdentity {
   if (!Number.isInteger(pid) || pid <= 1)
     throw new Error('invalid actor birth PID')
