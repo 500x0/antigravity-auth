@@ -199,7 +199,8 @@ export async function publishInertFixture(
     fs.writeFileSync(file, bytes.subarray(0, middle))
     await afterHalfWrite?.()
     fs.writeFileSync(file, bytes.subarray(middle))
-    fs.fsyncSync(file)
+    // Rename is atomically visible to other processes on this running system.
+    // Fsync only adds power-loss durability, which a test fixture does not need.
     fs.closeSync(file)
     file = undefined
     fs.renameSync(temporary, path)

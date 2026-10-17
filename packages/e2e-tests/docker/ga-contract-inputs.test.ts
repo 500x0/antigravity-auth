@@ -31,7 +31,10 @@ import {
   isCallExpression,
   isFunctionDeclaration,
   isIfStatement,
+  isObjectLiteralExpression,
+  isPropertyAssignment,
   isReturnStatement,
+  isStringLiteral,
   isVariableDeclaration,
   ModuleKind,
   ModuleResolutionKind,
@@ -525,6 +528,56 @@ function reportInertOracle(
     deadline,
     inertDiagnostic(additionalIdentities),
     missingReady,
+  )
+}
+
+async function withChangedBirthDiagnostic(
+  assertions: () => void | Promise<void>,
+  snapshot: () => unknown,
+  diagnostic = inertDiagnostic(),
+): Promise<void> {
+  try {
+    await assertions()
+  } catch (error) {
+    try {
+      diagnostic?.emit(`CHANGED_BIRTH_FAILURE=${JSON.stringify(snapshot())}`)
+    } catch {
+      // A diagnostic read or sink failure must not replace the assertion failure.
+    }
+    throw error
+  }
+}
+
+function changedBirthFixtureFiles(root: string, read = fs.readFileSync) {
+  const names = new Set([
+    'leader.json',
+    'worker-spawn.json',
+    'worker-birth.json',
+    'worker.json',
+    'preexisting-birth.json',
+    'preexisting.json',
+    ...fs.readdirSync(root),
+  ])
+  return Object.fromEntries(
+    [...names].map((name) => {
+      const path = join(root, name)
+      const present = existsSync(path)
+      try {
+        return [
+          name,
+          {
+            present,
+            identity: name.endsWith('.json')
+              ? ((name === 'worker.json' || name === 'preexisting.json'
+                  ? readInertIdentity(path, true, read)
+                  : readInertIdentity(path, false, read)) ?? null)
+              : null,
+          },
+        ]
+      } catch (error) {
+        return [name, { present, error: String(error) }]
+      }
+    }),
   )
 }
 
@@ -1671,12 +1724,186 @@ test('held native command timers are armed and cleared without dispatch until th
   held.assertCompleted(0)
 })
 
-test('actor publication syncs and closes an exclusive sibling before rename and removes failed writes', async () => {
+// These portable source controls check the motor call sites, not native reaping.
+// The behavioral held-timer control above exercises the timer implementation.
+for (const name of [
+  'genuinely exited groups remain clean with zero cleanup signals',
+  'extant thread group is unknown while its listener survives original-command close',
+  'preexisting listener controller and PID1 are protected from native command cleanup',
+  'a changed captured birth fails closed but remaining owned listener is still reaped',
+]) {
+  test(`natural-exit timer wiring holds until exit: ${name}`, () => {
+    const source = createSourceFile(
+      'ga-contract-inputs.test.ts',
+      readFileSync(fileURLToPath(import.meta.url), 'utf8'),
+      ScriptTarget.Latest,
+      true,
+    )
+    const registrations: Node[] = []
+    const visit = (node: Node) => {
+      if (
+        isCallExpression(node) &&
+        node.expression.getText(source) === 'motorTest' &&
+        node.arguments[1] &&
+        isStringLiteral(node.arguments[1]) &&
+        node.arguments[1].text === name
+      )
+        registrations.push(node.arguments[2]!)
+      forEachChild(node, visit)
+    }
+    visit(source)
+    expect(registrations).toHaveLength(1)
+    let held = 0
+    let commands = 0
+    let wired = 0
+    let asserted = 0
+    const inspect = (node: Node) => {
+      if (
+        isVariableDeclaration(node) &&
+        node.name.getText(source) === 'timerControl'
+      ) {
+        expect(node.initializer?.getText(source)).toBe('heldNativeTimer()')
+        held++
+      }
+      if (isCallExpression(node)) {
+        const callee = node.expression.getText(source)
+        if (callee === 'runNativeCommand') {
+          commands++
+          const options = node.arguments[3]
+          if (options && isObjectLiteralExpression(options))
+            for (const property of options.properties)
+              if (
+                isPropertyAssignment(property) &&
+                property.name.getText(source) === 'testTimers'
+              ) {
+                expect(property.initializer.getText(source)).toBe(
+                  'timerControl.timers',
+                )
+                wired++
+              }
+        }
+        if (callee === 'timerControl.assertCompleted') {
+          expect(node.arguments.map((arg) => arg.getText(source))).toEqual([
+            '0',
+          ])
+          asserted++
+        }
+      }
+      forEachChild(node, inspect)
+    }
+    inspect(registrations[0]!)
+    expect({ held, commands, wired, asserted }).toEqual({
+      held: 1,
+      commands: 1,
+      wired: 1,
+      asserted: 1,
+    })
+  })
+}
+
+test('changed-birth assertion failure emits exactly one full snapshot and preserves the failure', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ga-birth-diagnostic-'))
+  const worker: InertReadyIdentity = {
+    pid: 123,
+    start: '456',
+    namespace: 'pid:[789]',
+    cgroup: '0::/fixture\n',
+    pgid: 123,
+    sid: 123,
+    port: 12345,
+  }
+  try {
+    await publishInertFixture(join(root, 'worker.json'), worker)
+    writeFileSync(join(root, 'worker-birth.json'), '{')
+    const fixtureFiles = changedBirthFixtureFiles(root)
+    expect(fixtureFiles['worker.json']).toEqual({
+      present: true,
+      identity: worker,
+    })
+    expect(fixtureFiles['leader.json']).toEqual({
+      present: false,
+      identity: null,
+    })
+    expect(fixtureFiles['worker-birth.json']?.present).toBe(true)
+    expect(typeof fixtureFiles['worker-birth.json']?.error).toBe('string')
+    const lines: string[] = []
+    const diagnostic: InertDeadlineDiagnostic = {
+      testName: 'modeled changed birth',
+      identities: () => [],
+      emit: (line) => lines.push(line),
+    }
+    const snapshot = {
+      result: {
+        code: 0,
+        signal: null,
+        timedOut: false,
+        spawnError: null,
+        stdout: 'actor output',
+        stderr: '',
+        cleanup: {
+          failures: ['identity changed before signal'],
+          signals: [
+            { identity: { pid: 123, start: '456' }, signal: 'SIGKILL' },
+          ],
+          survivors: [],
+        },
+      },
+      fixtureFiles,
+      spyCalls: 17,
+      matchingPathCount: 0,
+    }
+    let failure: unknown
+    await expect(
+      withChangedBirthDiagnostic(
+        () => {
+          try {
+            expect(snapshot.matchingPathCount).toBeGreaterThanOrEqual(2)
+          } catch (error) {
+            failure = error
+            throw error
+          }
+        },
+        () => snapshot,
+        diagnostic,
+      ),
+    ).rejects.toBe(failure)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]?.startsWith('CHANGED_BIRTH_FAILURE=')).toBe(true)
+    expect(
+      JSON.parse(lines[0]!.slice('CHANGED_BIRTH_FAILURE='.length)),
+    ).toEqual(snapshot)
+    lines.length = 0
+    await withChangedBirthDiagnostic(
+      () => {},
+      () => snapshot,
+      diagnostic,
+    )
+    expect(lines).toEqual([])
+    const primary = new Error('later assertion')
+    await expect(
+      withChangedBirthDiagnostic(
+        () => {
+          throw primary
+        },
+        () => snapshot,
+        {
+          ...diagnostic,
+          emit: () => {
+            throw new Error('sink failure')
+          },
+        },
+      ),
+    ).rejects.toBe(primary)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('actor publication closes an exclusive sibling before rename without fsync and removes failed writes', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ga-publish-protocol-'))
   const path = join(root, 'worker-spawn.json')
   const events: string[] = []
   const originalOpen = fs.openSync
-  const originalSync = fs.fsyncSync
   const originalClose = fs.closeSync
   const originalRename = fs.renameSync
   let temporary = ''
@@ -1692,16 +1919,17 @@ test('actor publication syncs and closes an exclusive sibling before rename and 
       },
     }),
   )
-  const syncs = spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
-    events.push('sync')
-    originalSync(fd)
+  const syncs = spyOn(fs, 'fsyncSync').mockImplementation(() => {
+    throw new Error(
+      'fixture publication must not wait for power-loss durability',
+    )
   })
   const closes = spyOn(fs, 'closeSync').mockImplementation((fd) => {
     events.push('close')
     originalClose(fd)
   })
   const renames = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-    expect(events).toEqual(['open', 'sync', 'close'])
+    expect(events).toEqual(['open', 'close'])
     expect(String(from)).toBe(temporary)
     expect(String(to)).toBe(path)
     events.push('rename')
@@ -1709,7 +1937,7 @@ test('actor publication syncs and closes an exclusive sibling before rename and 
   })
   try {
     await publishInertFixture(path, { birth: 1 })
-    expect(events).toEqual(['open', 'sync', 'close', 'rename'])
+    expect(events).toEqual(['open', 'close', 'rename'])
     const firstTemporary = temporary
     events.length = 0
     await expect(
@@ -2299,13 +2527,17 @@ describe(CLEANUP_GROUP, () => {
     'genuinely exited groups remain clean with zero cleanup signals',
     async () => {
       const scope = qualifyNativeProcessScope()
+      // This control measures natural exit, not command timeout accuracy.
+      const timerControl = heldNativeTimer()
       const result = await runNativeCommand(scope, '/bin/true', [], {
         cwd: '/tmp',
         env: { PATH: '/usr/bin:/bin' },
         timeoutMs: 100,
+        testTimers: timerControl.timers,
       })
       expect(result.code).toBe(0)
       expect(result.timedOut).toBe(false)
+      timerControl.assertCompleted(0)
       expect(result.cleanup.outcome).toBe('clean')
       expect(result.cleanup.signaled).toBe(0)
       expect(result.cleanup.survivors).toEqual([])
@@ -2644,6 +2876,8 @@ describe(CLEANUP_GROUP, () => {
             group: InertIdentity
           }
         | undefined
+      // The parent must publish its witness and exit naturally before cleanup.
+      const timerControl = heldNativeTimer()
       const pending = runNativeCommand(
         scope,
         '/usr/bin/python3',
@@ -2655,7 +2889,12 @@ describe(CLEANUP_GROUP, () => {
           scope.summary.namespace.self,
           scope.summary.cgroup.self,
         ],
-        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          testTimers: timerControl.timers,
+        },
       ).then(
         (result) => {
           settled = true
@@ -2871,6 +3110,7 @@ describe(CLEANUP_GROUP, () => {
         expect(observed.result.spawnError).toBeNull()
         expect(observed.result.timedOut).toBe(false)
         expect(observed.result.outputCapExceeded).toBe(false)
+        timerControl.assertCompleted(0)
         expect(await listener(owned.port)).toBe('alive')
         console.log(
           `MAIN_EXITED_LIVE_THREAD_AT_COMMAND_RETURN=${JSON.stringify({ witness, task, result: observed.result })}`,
@@ -3376,13 +3616,21 @@ describe(CLEANUP_GROUP, () => {
           'ga-protected',
         )
         expect(await inertListener(identity.port)).toBe(true)
+        // Preserve the command's natural-exit result after preexisting readiness.
+        const timerControl = heldNativeTimer()
         const result = await runNativeCommand(
           scope,
           process.execPath,
           ['-e', "console.log('inert command')"],
-          { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+          {
+            cwd: root,
+            env: nativeHostEnv(root, {}),
+            timeoutMs: 100,
+            testTimers: timerControl.timers,
+          },
         )
         expect(result.code).toBe(0)
+        timerControl.assertCompleted(0)
         expect(result.cleanup.outcome).toBe('clean')
         expect(result.cleanup.signaled).toBe(0)
         expect(inertAlive(identity)).toBe(true)
@@ -3433,43 +3681,78 @@ describe(CLEANUP_GROUP, () => {
           return value
         }),
       )
+      // Success exits only after the worker publishes readiness and notifies it.
+      // Hold the timeout so only that natural exit can start cleanup.
+      const timerControl = heldNativeTimer()
       const pending = runNativeCommand(
         scope,
         process.execPath,
         [script, 'success', root],
-        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          testTimers: timerControl.timers,
+        },
       )
       let oracle: ReturnType<typeof setTimeout> | undefined
       const errors: unknown[] = []
+      let admitted: InertReadyIdentity | undefined
       try {
         const completionDeadline = performance.now() + 500
+        const completion = waitForInertReady(
+          join(root, 'worker.json'),
+          completionDeadline,
+        ).then((identity) => {
+          admitted = identity
+          return pending
+        })
         const observed = await Promise.race([
-          pending.then((result) => ({ result })),
+          completion.then((result) => ({ result })),
           new Promise<{ expired: true }>((resolve) => {
             oracle = setTimeout(() => resolve({ expired: true }), 500)
           }),
         ])
-        if (!('result' in observed)) reportInertOracle(completionDeadline)
+        if (!('result' in observed))
+          reportInertOracle(
+            completionDeadline,
+            !admitted ? join(root, 'worker.json') : undefined,
+          )
+        if (!('result' in observed) && !admitted)
+          throw new Error(
+            `actor fixture setup deadline expired: ${join(root, 'worker.json')}`,
+          )
         expect('result' in observed).toBe(true)
         if (!('result' in observed))
           throw new Error('ownership failure did not finish cleanup')
-        expect(targetReads).toBeGreaterThanOrEqual(2)
-        expect(observed.result.code).toBe(0)
-        expect(observed.result.cleanup.outcome).toBe('failed')
-        expect(observed.result.cleanup.failures.join('\n')).toContain(
-          'identity changed before signal',
+        await withChangedBirthDiagnostic(
+          async () => {
+            expect(targetReads).toBeGreaterThanOrEqual(2)
+            expect(observed.result.code).toBe(0)
+            expect(observed.result.cleanup.outcome).toBe('failed')
+            expect(observed.result.cleanup.failures.join('\n')).toContain(
+              'identity changed before signal',
+            )
+            expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
+            const worker = readInertIdentity(
+              join(root, 'worker.json'),
+              true,
+              original,
+            )
+            if (!worker)
+              throw new Error(
+                `missing ready actor fixture ${join(root, 'worker.json')}`,
+              )
+            expect(await inertListener(worker.port, worker)).toBe(false)
+            timerControl.assertCompleted(0)
+          },
+          () => ({
+            result: observed.result,
+            fixtureFiles: changedBirthFixtureFiles(root, original),
+            spyCalls: reads.mock.calls.length,
+            matchingPathCount: targetReads,
+          }),
         )
-        expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
-        const worker = readInertIdentity(
-          join(root, 'worker.json'),
-          true,
-          original,
-        )
-        if (!worker)
-          throw new Error(
-            `missing ready actor fixture ${join(root, 'worker.json')}`,
-          )
-        expect(await inertListener(worker.port, worker)).toBe(false)
       } catch (error) {
         errors.push(error)
       } finally {
@@ -3478,6 +3761,7 @@ describe(CLEANUP_GROUP, () => {
             reads.mockRestore()
             if (oracle) clearTimeout(oracle)
           },
+          timerControl.settleOnFailure,
           () => finallyReapInert(root),
           () => pending,
           () => rmSync(root, { recursive: true, force: true }),

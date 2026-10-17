@@ -984,20 +984,33 @@ expect_red = ['^GA\sownership\sharness\spreparation\s\(source\scontrols,\snot\sn
 
 [[control]]
 id = "ga-inert-fixture-atomic-publication"
-guards = "Actor birth and ready files expose only a complete old record or absence until the new JSON is synced, closed and renamed."
+guards = "Actor birth and ready files expose only a complete old record or absence until the new JSON is closed and renamed."
 file = "packages/e2e-tests/docker/inert-fixture.ts"
 old = '''  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
   let file: number | undefined
   try {
     const bytes = Buffer.from(JSON.stringify(value))
     const middle = Math.floor(bytes.length / 2)
-    file = fs.openSync(temporary, 'wx')'''
+    file = fs.openSync(temporary, 'wx')
+    fs.writeFileSync(file, bytes.subarray(0, middle))
+    await afterHalfWrite?.()
+    fs.writeFileSync(file, bytes.subarray(middle))
+    // Rename is atomically visible to other processes on this running system.
+    // Fsync only adds power-loss durability, which a test fixture does not need.
+    fs.closeSync(file)
+    file = undefined
+    fs.renameSync(temporary, path)'''
 new = '''  const temporary = path // NON-VACUITY BREAK: write directly to the visible final path.
   let file: number | undefined
   try {
     const bytes = Buffer.from(JSON.stringify(value))
     const middle = Math.floor(bytes.length / 2)
-    file = fs.openSync(temporary, 'w')'''
+    file = fs.openSync(temporary, 'w')
+    fs.writeFileSync(file, bytes.subarray(0, middle))
+    await afterHalfWrite?.()
+    fs.writeFileSync(file, bytes.subarray(middle))
+    fs.closeSync(file)
+    file = undefined'''
 test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
 list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
 runner = "command"
@@ -1270,3 +1283,132 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^deadline\ssnapshot\sis\semitted\son\sdeparture\stimeout\sand\sdoes\snot\schange\sthe\soutcome$']
+
+[[control]]
+id = "ga-inert-fixture-no-fsync"
+guards = "Fixture publication must not wait for power-loss durability before exposing a complete record."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = '''    fs.closeSync(file)
+    file = undefined'''
+new = '''    fs.fsyncSync(file) // NON-VACUITY BREAK: restore durability wait.
+    fs.closeSync(file)
+    file = undefined'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^actor\spublication\scloses\san\sexclusive\ssibling\sbefore\srename\swithout\sfsync\sand\sremoves\sfailed\swrites$']
+
+[[control]]
+id = "ga-inert-changed-birth-failure-diagnostic"
+guards = "An assertion failure after changed-birth cleanup emits exactly one full failure snapshot and preserves the original error."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '      diagnostic?.emit(`CHANGED_BIRTH_FAILURE=${JSON.stringify(snapshot())}`)'
+new = '      void snapshot // NON-VACUITY BREAK: suppress assertion-failure evidence.'
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^changed-birth\sassertion\sfailure\semits\sexactly\sone\sfull\ssnapshot\sand\spreserves\sthe\sfailure$']
+
+[[control]]
+id = "ga-inert-exited-group-held-timer"
+guards = "The natural-exit group control wires the held timer rather than racing exec against a real command timeout (portable source control)."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''      const result = await runNativeCommand(scope, '/bin/true', [], {
+        cwd: '/tmp',
+        env: { PATH: '/usr/bin:/bin' },
+        timeoutMs: 100,
+        testTimers: timerControl.timers,
+      })'''
+new = '''      const result = await runNativeCommand(scope, '/bin/true', [], {
+        cwd: '/tmp',
+        env: { PATH: '/usr/bin:/bin' },
+        timeoutMs: 100,
+        // NON-VACUITY BREAK: restore the unheld command timer.
+      })'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^natural-exit\stimer\swiring\sholds\suntil\sexit:\sgenuinely\sexited\sgroups\sremain\sclean\swith\szero\scleanup\ssignals$']
+
+[[control]]
+id = "ga-inert-thread-witness-held-timer"
+guards = "The live-thread witness must publish before its command's natural exit; the portable source control rejects an unheld timer."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''          scope.summary.cgroup.self,
+        ],
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          testTimers: timerControl.timers,
+        },'''
+new = '''          scope.summary.cgroup.self,
+        ],
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          // NON-VACUITY BREAK: restore the unheld command timer.
+        },'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^natural-exit\stimer\swiring\sholds\suntil\sexit:\sextant\sthread\sgroup\sis\sunknown\swhile\sits\slistener\ssurvives\soriginal-command\sclose$']
+
+[[control]]
+id = "ga-inert-preexisting-command-held-timer"
+guards = "The protected preexisting listener case preserves the command's natural exit rather than racing a real timeout (portable source control)."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''          ['-e', "console.log('inert command')"],
+          {
+            cwd: root,
+            env: nativeHostEnv(root, {}),
+            timeoutMs: 100,
+            testTimers: timerControl.timers,
+          },'''
+new = '''          ['-e', "console.log('inert command')"],
+          {
+            cwd: root,
+            env: nativeHostEnv(root, {}),
+            timeoutMs: 100,
+            // NON-VACUITY BREAK: restore the unheld command timer.
+          },'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^natural-exit\stimer\swiring\sholds\suntil\sexit:\spreexisting\slistener\scontroller\sand\sPID1\sare\sprotected\sfrom\snative\scommand\scleanup$']
+
+[[control]]
+id = "ga-inert-changed-birth-held-timer"
+guards = "Changed-birth cleanup follows the success leader's post-ready natural exit, never an unheld timeout (portable source control)."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''        [script, 'success', root],
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          testTimers: timerControl.timers,
+        },'''
+new = '''        [script, 'success', root],
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          // NON-VACUITY BREAK: restore the unheld command timer.
+        },'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^natural-exit\stimer\swiring\sholds\suntil\sexit:\sa\schanged\scaptured\sbirth\sfails\sclosed\sbut\sremaining\sowned\slistener\sis\sstill\sreaped$']
