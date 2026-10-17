@@ -1043,18 +1043,16 @@ expect_red = ['^held\snative\scommand\stimers\sare\sarmed\sand\scleared\swithout
 
 [[control]]
 id = "ga-inert-thread-departure"
-guards = "A terminal actor leader and an observed child close cannot certify teardown while a thread of that group remains in cgroup.threads."
+guards = "A terminal exact-owned leader and closed child cannot certify departure while a live sibling remains in that actor's own task directory."
 file = "packages/e2e-tests/docker/inert-fixture.ts"
-old = '''    const departed =
-      !identities.some(inertAlive) &&
-      !inertGroupTasksRemain(identities, deadline)'''
+old = '    const departed = !identities.some(inertActorTasksRemain)'
 new = '''    const departed = !identities.some(inertAlive) // NON-VACUITY BREAK: restore leader-only completion.'''
 test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
 list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
 runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
-expect_red = ['^terminal\sleader\steardown\swaits\sfor\sclose\sand\severy\slisted\sgroup\sthread\sto\sdepart$']
+expect_red = ['^terminal\sleader\steardown\swaits\sfor\sclose\sand\sits\sown\slive\ssibling\sthread\sto\sdepart$']
 
 [[control]]
 id = "ga-inert-partial-identity-live-group"
@@ -1185,3 +1183,90 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/core/src/quota-manager.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^does\snot\stimestamp\sor\sreplace\scached\squota\sfor\san\sadvisory\sskip$']
+
+[[control]]
+id = "ga-inert-owned-zombie-departed"
+guards = "An exact-owned single-thread orphan zombie runs no code and does not wait for PID1 reaping."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = "  if (!['Z', 'X'].includes(leader.state)) return true"
+new = "  if (!['X'].includes(leader.state)) return true // NON-VACUITY BREAK: treat owned Z as live."
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^owned\sorphan\szombie\sis\sdeparted\swhile\sPID1\sdoes\snot\sreap\sit$']
+
+[[control]]
+id = "ga-inert-owned-live-blocks"
+guards = "A live or stopped exact-owned actor blocks departure without relying on a direct-child close guard."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = "  if (!['Z', 'X'].includes(leader.state)) return true"
+new = "  if (!['Z', 'X'].includes(leader.state)) return false // NON-VACUITY BREAK: ignore owned S/T."
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^owned\slive\sor\sstopped\sactor\sblocks\sfixture\sdeparture$']
+
+[[control]]
+id = "ga-inert-no-shared-task-scan"
+guards = "Foreign or vanished TIDs in a shared job cgroup cannot influence owned fixture departure."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = "  const leader = inertStat(`/proc/${identity.pid}/stat`)"
+new = '''  fs.readFileSync(`/sys/fs/cgroup${identity.cgroup.trim().slice(3)}/cgroup.threads`, 'utf8') // NON-VACUITY BREAK: reintroduce a shared task scan.
+  const leader = inertStat(`/proc/${identity.pid}/stat`)'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^vanished\sforeign\sTID\scannot\sblock\sowned\sfixture\sdeparture$']
+
+[[control]]
+id = "ga-inert-teardown-own-budget"
+guards = "Body-finally and outer-finally each arm a separate 500ms departure budget at teardown rather than consuming the readiness budget."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''async function reapInertIdentities(
+  identities: InertIdentity[],
+  run?: InertRun,
+): Promise<void> {
+  const deadline = performance.now() + 500'''
+new = '''async function reapInertIdentities(
+  identities: InertIdentity[],
+  run?: InertRun,
+): Promise<void> {
+  const deadline = (run?.children[0]?.retainedAt ?? performance.now()) + 500 // NON-VACUITY BREAK: arm at first retained child.'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^teardown\sbudget\sstarts\sat\steardown,\snot\sat\sfirst\schild$']
+
+[[control]]
+id = "ga-inert-reset-requires-departure"
+guards = "A post-kill reset is evidence of no listener only after the exact listener identity is confirmed non-live in the same probe."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = "          if (!inertActorTasksRemain(identity)) resolve(false)"
+new = "          if (true) resolve(false) // NON-VACUITY BREAK: accept reset without reading listener identity."
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^a\sreset\swhile\sthe\slistener\sidentity\sis\slive\sstill\sfails$']
+
+[[control]]
+id = "ga-inert-departure-deadline-snapshot"
+guards = "Departure timeout emits an exact-identity failure snapshot before preserving the original deadline error."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = "  reportInertDeadline('departure', deadline, diagnostic)"
+new = "  void diagnostic // NON-VACUITY BREAK: suppress the departure deadline snapshot."
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^deadline\ssnapshot\sis\semitted\son\sdeparture\stimeout\sand\sdoes\snot\schange\sthe\soutcome$']

@@ -15,58 +15,136 @@ export type InertReadyIdentity = InertIdentity & { port: number }
 export interface InertChild {
   identity?: InertIdentity
   closed: () => boolean
+  retainedAt?: number
 }
 
-export function inertAlive(identity: InertIdentity): boolean {
+export interface InertDeadlineDiagnostic {
+  testName: string
+  identities: () => InertIdentity[]
+  children?: () => InertChild[]
+  emit: (line: string) => void
+  reported?: Set<string>
+}
+
+function inertStat(path: string) {
   try {
-    const text = fs.readFileSync(`/proc/${identity.pid}/stat`, 'utf8')
-    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
-    return (
-      fields[19] === identity.start && !['Z', 'X'].includes(fields[0] ?? '')
+    const text = fs.readFileSync(path, 'utf8')
+    const fields = text
+      .slice(text.lastIndexOf(')') + 2)
+      .trim()
+      .split(/\s+/)
+    const start = fields[19]
+    const state = fields[0]
+    if (
+      !start ||
+      !/^\d+$/.test(start) ||
+      !state ||
+      !/^\d+$/.test(fields[1] ?? '')
     )
+      throw new Error(`invalid owned actor stat: ${path}`)
+    return { start, state, ppid: Number(fields[1]) }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    if (
+      ['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      return undefined
     throw error
   }
 }
 
-function inertGroupTasksRemain(
-  identities: InertIdentity[],
+export function reportInertDeadline(
+  kind: 'departure' | 'readiness' | 'completion',
   deadline: number,
-): boolean {
-  for (const cgroup of new Set(identities.map((identity) => identity.cgroup))) {
-    const match = /^0::([^\n]+)\n$/.exec(cgroup)
-    if (!match) throw new Error('invalid actor cgroup membership')
-    const groups = new Set(
-      identities
-        .filter((identity) => identity.cgroup === cgroup)
-        .map((identity) => identity.pid),
-    )
-    const members = fs
-      .readFileSync(`/sys/fs/cgroup${match[1]}/cgroup.threads`, 'utf8')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-    for (const tid of members) {
-      if (performance.now() >= deadline)
-        throw new Error('independent fixture task departure deadline exceeded')
-      if (!/^\d+$/.test(tid)) throw new Error('invalid fixture task inventory')
+  diagnostic?: InertDeadlineDiagnostic,
+  missingReady?: string,
+  now: () => number = () => performance.now(),
+): void {
+  if (!diagnostic) return
+  try {
+    const key = JSON.stringify([kind, deadline, missingReady])
+    if (diagnostic.reported?.has(key)) return
+    diagnostic.reported?.add(key)
+    const elapsedMs = now() - (deadline - 500)
+    const identities = [
+      ...new Map(
+        diagnostic
+          .identities()
+          .map(
+            (identity) =>
+              [`${identity.pid}:${identity.start}`, identity] as const,
+          ),
+      ).values(),
+    ].map((identity) => {
+      const expected = { pid: identity.pid, start: identity.start }
       try {
-        const status = fs.readFileSync(`/proc/${tid}/status`, 'utf8')
-        const tgid = /^Tgid:\s+(\d+)$/m.exec(status)?.[1]
-        if (!tgid) throw new Error('unavailable fixture task group')
-        if (groups.has(Number(tgid))) return true
+        const observed = inertStat(`/proc/${identity.pid}/stat`)
+        return {
+          ...expected,
+          observedStart: observed?.start ?? null,
+          state: observed?.state ?? null,
+          ppid: observed?.ppid ?? null,
+          matched: observed?.start === identity.start,
+        }
       } catch (error) {
-        // A disappearing task is not evidence of departure while it is listed.
-        if (
-          ['ENOENT', 'ESRCH'].includes(
-            (error as NodeJS.ErrnoException).code ?? '',
-          )
-        )
-          return true
-        throw error
+        return {
+          ...expected,
+          observedStart: null,
+          state: null,
+          ppid: null,
+          matched: null,
+          error: String(error),
+        }
+      }
+    })
+    diagnostic.emit(
+      `INERT_DEADLINE_SNAPSHOT=${JSON.stringify({
+        testName: diagnostic.testName,
+        kind,
+        budgetMs: 500,
+        elapsedMs,
+        identities,
+        ...(missingReady === undefined ? {} : { missingReady }),
+        children:
+          diagnostic.children?.().map((child) => ({
+            pid: child.identity?.pid ?? null,
+            start: child.identity?.start ?? null,
+            closed: child.closed(),
+            retainedAtMs: child.retainedAt ?? null,
+          })) ?? [],
+      })}`,
+    )
+  } catch {
+    // Diagnostics must not replace a deadline failure, even if their sink fails.
+  }
+}
+
+export function inertAlive(identity: InertIdentity): boolean {
+  const observed = inertStat(`/proc/${identity.pid}/stat`)
+  return (
+    observed?.start === identity.start && !['Z', 'X'].includes(observed.state)
+  )
+}
+
+export function inertActorTasksRemain(identity: InertIdentity): boolean {
+  const leader = inertStat(`/proc/${identity.pid}/stat`)
+  if (leader?.start !== identity.start) return false
+  if (!['Z', 'X'].includes(leader.state)) return true
+  // A terminal leader can still have a live sibling. Only inspect its own task
+  // directory, never shared job membership or another process's /proc entry.
+  try {
+    const tids = fs.readdirSync(`/proc/${identity.pid}/task`)
+    for (const tid of tids) {
+      if (!/^\d+$/.test(tid)) throw new Error('invalid owned task identity')
+      const task = inertStat(`/proc/${identity.pid}/task/${tid}/stat`)
+      if (task && !['Z', 'X'].includes(task.state)) {
+        return inertStat(`/proc/${identity.pid}/stat`)?.start === identity.start
       }
     }
+  } catch (error) {
+    if (
+      !['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')
+    )
+      throw error
   }
   return false
 }
@@ -75,15 +153,15 @@ export async function waitForInertDeparture(
   identities: InertIdentity[],
   children: InertChild[],
   deadline: number,
+  diagnostic?: InertDeadlineDiagnostic,
 ): Promise<void> {
   while (performance.now() < deadline) {
-    const departed =
-      !identities.some(inertAlive) &&
-      !inertGroupTasksRemain(identities, deadline)
+    const departed = !identities.some(inertActorTasksRemain)
     if (performance.now() >= deadline) break
     if (departed && children.every((child) => child.closed())) return
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
+  reportInertDeadline('departure', deadline, diagnostic)
   throw new Error('independent fixture task departure deadline exceeded')
 }
 
@@ -202,6 +280,7 @@ export async function waitForInertReady(
   options: {
     now?: () => number
     absent?: () => void | Promise<void>
+    diagnostic?: InertDeadlineDiagnostic
   } = {},
 ): Promise<InertReadyIdentity> {
   const now = options.now ?? (() => performance.now())
@@ -212,6 +291,7 @@ export async function waitForInertReady(
     await options.absent?.()
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
+  reportInertDeadline('readiness', deadline, options.diagnostic, path, now)
   throw new Error(`actor fixture setup deadline expired: ${path}`)
 }
 

@@ -14,7 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { createConnection } from 'node:net'
+import * as net from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -49,14 +49,17 @@ import {
   captureInertBirth,
   finishInertTest,
   type InertChild,
+  type InertDeadlineDiagnostic,
   type InertIdentity,
   type InertReadyIdentity,
+  inertActorTasksRemain,
   inertAlive,
   publishInertFixture,
   readInertIdentity,
   readyBeforeInertCleanup,
+  reportInertDeadline,
+  waitForInertReady as waitForFixtureReady,
   waitForInertDeparture,
-  waitForInertReady,
 } from './inert-fixture.ts'
 import {
   armNativeCommandTimer,
@@ -255,6 +258,7 @@ function motorTest(
     motorExecuted.push(fullName)
     console.log(`MOTOR_INERT_EXECUTED=${JSON.stringify(fullName)}`)
     const run: InertRun = {
+      testName: fullName,
       children: [],
       identities: [],
       roots: new Set(),
@@ -461,34 +465,90 @@ function fixtureUid(stat: object, uid: number): number | bigint {
   return 'uid' in stat && typeof stat.uid === 'bigint' ? BigInt(uid) : uid
 }
 interface InertRun {
+  testName?: string
+  reportedDeadlines?: Set<string>
   children: {
     handle: childProcess.ChildProcess
     identity?: InertIdentity
     closed: () => boolean
+    retainedAt: number
   }[]
   identities: InertIdentity[]
   roots: Set<string>
   errors: unknown[]
-  deadline?: number
 }
 let activeInertRun: InertRun | undefined
+
+function inertDiagnostic(
+  additionalIdentities: () => InertIdentity[] = () => [],
+): InertDeadlineDiagnostic | undefined {
+  const run = activeInertRun
+  if (!run) return undefined
+  run.reportedDeadlines ??= new Set()
+  return {
+    testName: run.testName ?? 'modeled inert fixture',
+    identities: () => {
+      const identities = [...run.identities, ...additionalIdentities()]
+      for (const root of run.roots) {
+        try {
+          identities.push(...fixtureIdentities(root))
+        } catch {
+          // A bad publication must not hide already captured child identities.
+        }
+      }
+      return identities
+    },
+    emit: (line) => console.log(line),
+    children: () => run.children,
+    reported: run.reportedDeadlines,
+  }
+}
+
+function waitForInertReady(
+  path: string,
+  deadline: number,
+  options: Parameters<typeof waitForFixtureReady>[2] = {},
+): Promise<InertReadyIdentity> {
+  return waitForFixtureReady(path, deadline, {
+    diagnostic: inertDiagnostic(),
+    ...options,
+  })
+}
+
+function reportInertOracle(
+  deadline: number,
+  missingReady?: string,
+  additionalIdentities?: () => InertIdentity[],
+): void {
+  reportInertDeadline(
+    missingReady === undefined ? 'completion' : 'readiness',
+    deadline,
+    inertDiagnostic(additionalIdentities),
+    missingReady,
+  )
+}
 
 function retainStartedInertChild(child: childProcess.ChildProcess): void {
   const run = activeInertRun
   if (!run || child.pid === undefined) return
-  run.deadline ??= performance.now() + 500
+  const retainedAt = performance.now()
   let closed = false
   child.once('close', () => {
     closed = true
   })
   try {
     const identity = captureStartedInertBirth(child.pid)
-    run.children.push({ handle: child, identity, closed: () => closed })
+    run.children.push({
+      handle: child,
+      identity,
+      closed: () => closed,
+      retainedAt,
+    })
     run.identities.push(identity)
   } catch (error) {
     // Keep the handle even if a birth read fails; teardown must report it.
     run.errors.push(error)
-    run.children.push({ handle: child, closed: () => closed })
+    run.children.push({ handle: child, closed: () => closed, retainedAt })
   }
 }
 
@@ -634,6 +694,7 @@ async function reapInertIdentities(
   identities: InertIdentity[],
   run?: InertRun,
 ): Promise<void> {
+  const deadline = performance.now() + 500
   for (const identity of identities) {
     if (
       !Number.isInteger(identity.pid) ||
@@ -653,27 +714,33 @@ async function reapInertIdentities(
     process.kill(identity.pid, 'SIGKILL')
   }
   const children: InertChild[] = run?.children ?? []
-  await waitForInertDeparture(
-    identities,
-    children,
-    run?.deadline ?? performance.now() + 500,
-  )
+  await waitForInertDeparture(identities, children, deadline, inertDiagnostic())
 }
-async function inertListener(port: number): Promise<boolean> {
+async function inertListener(
+  port: number,
+  identity?: InertIdentity,
+): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const socket = createConnection({ host: '127.0.0.1', port })
+    const socket = net.createConnection({ host: '127.0.0.1', port })
     socket.setTimeout(100, () => {
       socket.destroy()
       reject(new Error('inert listener probe timed out'))
     })
     socket.once('data', (value) => {
       socket.destroy()
-      resolve(value.toString() === 'inert-listener')
+      resolve(identity !== undefined || value.toString() === 'inert-listener')
     })
     socket.once('error', (error: NodeJS.ErrnoException) => {
       socket.destroy()
       if (error.code === 'ECONNREFUSED') resolve(false)
-      else reject(error)
+      else if (error.code === 'ECONNRESET' && identity) {
+        try {
+          if (!inertActorTasksRemain(identity)) resolve(false)
+          else reject(error)
+        } catch (identityError) {
+          reject(identityError)
+        }
+      } else reject(error)
     })
   })
 }
@@ -1092,7 +1159,7 @@ test('runner-held actor handles retain birth and require close rather than exit'
   }
 })
 
-test('terminal leader teardown waits for close and every listed group thread to depart', async () => {
+function modeledInertActor(state = 'Z', start = '123') {
   const identity: InertIdentity = {
     pid: 100,
     start: '123',
@@ -1101,99 +1168,391 @@ test('terminal leader teardown waits for close and every listed group thread to 
     pgid: 100,
     sid: 100,
   }
-  let listed = true
-  let closed = false
-  let done = false
+  const model = { state, start, elapsed: 0, sibling: false }
+  const lines: string[] = []
+  const stat = (pid: number, currentState: string, birth: string) =>
+    `${pid} (modeled actor) ${currentState} 1 ${Array(17).fill('0').join(' ')} ${birth} 0\n`
+  const clock = spyOn(performance, 'now').mockImplementation(
+    () => model.elapsed,
+  )
   const read = fs.readFileSync
   const reads = spyOn(fs, 'readFileSync').mockImplementation(
     new Proxy(read, {
       apply(target, receiver, args: unknown[]) {
         const path = String(args[0])
-        if (path === '/proc/100/stat')
-          return `100 (terminal) Z ${Array(18).fill('0').join(' ')} 123 0\n`
-        if (path === '/sys/fs/cgroup/modeled/cgroup.threads')
-          return listed ? '101\n' : ''
-        if (path === '/proc/101/status') return 'Pid:\t101\nTgid:\t100\n'
+        if (path === '/proc/100/stat' || path === '/proc/100/task/100/stat')
+          return stat(100, model.state, model.start)
+        if (path === '/proc/100/task/101/stat' && model.sibling)
+          return stat(101, 'S', '124')
+        if (path === '/proc/100/cgroup') return identity.cgroup
+        if (path.startsWith('/proc/') || path.includes('cgroup.threads'))
+          throw new Error(`forbidden non-owned observation: ${path}`)
         return Reflect.apply(target, receiver, args)
       },
     }),
   )
+  const directory = fs.readdirSync
+  const directories = spyOn(fs, 'readdirSync').mockImplementation(
+    new Proxy(directory, {
+      apply(target, receiver, args: unknown[]) {
+        const path = String(args[0])
+        if (path === '/proc/100/task')
+          return model.sibling ? ['100', '101'] : ['100']
+        if (path.startsWith('/proc/') || path.includes('cgroup'))
+          throw new Error(`forbidden non-owned inventory: ${path}`)
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const link = fs.readlinkSync
+  const links = spyOn(fs, 'readlinkSync').mockImplementation(
+    new Proxy(link, {
+      apply(target, receiver, args: unknown[]) {
+        if (String(args[0]) === '/proc/100/ns/pid') return identity.namespace
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  return {
+    identity,
+    model,
+    lines,
+    diagnostic: (testName: string): InertDeadlineDiagnostic => ({
+      testName,
+      identities: () => [identity],
+      emit: (line) => lines.push(line),
+    }),
+    restore: () => {
+      links.mockRestore()
+      directories.mockRestore()
+      reads.mockRestore()
+      clock.mockRestore()
+    },
+  }
+}
+
+test('owned orphan zombie is departed while PID1 does not reap it', async () => {
+  const actor = modeledInertActor()
+  try {
+    const pending = waitForInertDeparture([actor.identity], [], 500)
+    actor.model.elapsed = 500
+    await expect(pending).resolves.toBeUndefined()
+  } finally {
+    actor.restore()
+  }
+})
+
+test('vanished foreign TID cannot block owned fixture departure', async () => {
+  const actor = modeledInertActor('X')
+  try {
+    // The read tripwire forbids even looking up a foreign TID that might vanish.
+    const pending = waitForInertDeparture([actor.identity], [], 500)
+    actor.model.elapsed = 500
+    await expect(pending).resolves.toBeUndefined()
+  } finally {
+    actor.restore()
+  }
+})
+
+test('reused PID with a different start time is not our actor', async () => {
+  const actor = modeledInertActor('S', '999')
+  try {
+    const pending = waitForInertDeparture([actor.identity], [], 500)
+    actor.model.elapsed = 500
+    await expect(pending).resolves.toBeUndefined()
+  } finally {
+    actor.restore()
+  }
+})
+
+test('owned live or stopped actor blocks fixture departure', async () => {
+  for (const state of ['S', 'T']) {
+    const actor = modeledInertActor(state)
+    const name = 'owned live or stopped actor blocks fixture departure'
+    let resolved = false
+    try {
+      const pending = waitForInertDeparture(
+        [actor.identity],
+        [],
+        500,
+        actor.diagnostic(name),
+      ).then(() => {
+        resolved = true
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(resolved).toBe(false)
+      expect(actor.lines).toEqual([])
+      actor.model.elapsed = 500
+      await expect(pending).rejects.toThrow(
+        'independent fixture task departure deadline exceeded',
+      )
+      expect(actor.lines).toHaveLength(1)
+      const snapshot = JSON.parse(actor.lines[0]!.split('=', 2)[1]!)
+      expect(snapshot).toMatchObject({
+        testName: name,
+        kind: 'departure',
+        budgetMs: 500,
+        elapsedMs: 500,
+        identities: [
+          {
+            pid: 100,
+            start: '123',
+            observedStart: '123',
+            state,
+            ppid: 1,
+            matched: true,
+          },
+        ],
+      })
+    } finally {
+      actor.model.elapsed = 500
+      actor.restore()
+    }
+  }
+})
+
+test('deadline snapshot is emitted on departure timeout and does not change the outcome', async () => {
+  const actor = modeledInertActor('T')
+  const name =
+    'deadline snapshot is emitted on departure timeout and does not change the outcome'
+  try {
+    const pending = waitForInertDeparture(
+      [actor.identity],
+      [],
+      500,
+      actor.diagnostic(name),
+    )
+    actor.model.elapsed = 500
+    await expect(pending).rejects.toThrow(
+      'independent fixture task departure deadline exceeded',
+    )
+    expect(actor.lines).toHaveLength(1)
+    expect(JSON.parse(actor.lines[0]!.split('=', 2)[1]!)).toMatchObject({
+      testName: name,
+      kind: 'departure',
+      elapsedMs: 500,
+      budgetMs: 500,
+      identities: [
+        { pid: 100, start: '123', state: 'T', ppid: 1, matched: true },
+      ],
+    })
+    await expect(
+      waitForInertDeparture([actor.identity], [], 500, {
+        ...actor.diagnostic(name),
+        emit: () => {
+          throw new Error('broken diagnostic sink')
+        },
+      }),
+    ).rejects.toThrow('independent fixture task departure deadline exceeded')
+  } finally {
+    actor.restore()
+  }
+})
+
+test('readiness and completion deadline snapshots retain the missing record and exact actor identity', async () => {
+  const actor = modeledInertActor('S')
+  const name =
+    'readiness and completion deadline snapshots retain the missing record and exact actor identity'
+  const output = spyOn(console, 'log').mockImplementation((line) =>
+    actor.lines.push(String(line)),
+  )
+  activeInertRun = {
+    testName: name,
+    children: [],
+    identities: [actor.identity],
+    roots: new Set(),
+    errors: [],
+  }
+  try {
+    await expect(
+      waitForInertReady('/missing-ready-record.json', 500, {
+        absent: () => {
+          actor.model.elapsed = 500
+        },
+      }),
+    ).rejects.toThrow('actor fixture setup deadline expired')
+    reportInertOracle(500, '/missing-ready-record.json')
+    reportInertOracle(500, undefined, () => [
+      { ...actor.identity, start: '999' },
+    ])
+    expect(actor.lines).toHaveLength(2)
+    const snapshots = actor.lines.map((line) =>
+      JSON.parse(line.split('=', 2)[1]!),
+    )
+    expect(snapshots[0]).toMatchObject({
+      testName: name,
+      kind: 'readiness',
+      budgetMs: 500,
+      elapsedMs: 500,
+      missingReady: '/missing-ready-record.json',
+      identities: [
+        { pid: 100, start: '123', state: 'S', ppid: 1, matched: true },
+      ],
+    })
+    expect(snapshots[1]).toMatchObject({
+      testName: name,
+      kind: 'completion',
+      budgetMs: 500,
+      elapsedMs: 500,
+      identities: [
+        { pid: 100, start: '123', observedStart: '123', matched: true },
+        { pid: 100, start: '999', observedStart: '123', matched: false },
+      ],
+    })
+    expect(snapshots[1]).not.toHaveProperty('missingReady')
+  } finally {
+    activeInertRun = undefined
+    output.mockRestore()
+    actor.restore()
+  }
+})
+
+function modeledInertConnection(event: 'reset' | 'answer') {
+  return spyOn(net, 'createConnection').mockImplementation(() => {
+    const socket = new net.Socket()
+    queueMicrotask(() => {
+      if (event === 'answer')
+        socket.emit('data', Buffer.from('an answering listener'))
+      else
+        socket.emit(
+          'error',
+          Object.assign(new Error('modeled reset'), { code: 'ECONNRESET' }),
+        )
+    })
+    return socket
+  })
+}
+
+test('post-kill reset counts as not listening only after the listener identity is gone', async () => {
+  const actor = modeledInertActor()
+  const connection = modeledInertConnection('reset')
+  try {
+    expect(await inertListener(12345, actor.identity)).toBe(false)
+    actor.model.state = 'S'
+    actor.model.start = '999'
+    expect(await inertListener(12345, actor.identity)).toBe(false)
+    await expect(inertListener(12345)).rejects.toThrow('modeled reset')
+  } finally {
+    connection.mockRestore()
+    actor.restore()
+  }
+})
+
+test('an accepted answering connection still fails the post-kill probe', async () => {
+  const actor = modeledInertActor()
+  const connection = modeledInertConnection('answer')
+  try {
+    expect(await inertListener(12345, actor.identity)).toBe(true)
+  } finally {
+    connection.mockRestore()
+    actor.restore()
+  }
+})
+
+test('a reset while the listener identity is live still fails', async () => {
+  const actor = modeledInertActor('S')
+  const connection = modeledInertConnection('reset')
+  try {
+    await expect(inertListener(12345, actor.identity)).rejects.toThrow(
+      'modeled reset',
+    )
+    actor.model.state = 'Z'
+    actor.model.sibling = true
+    await expect(inertListener(12345, actor.identity)).rejects.toThrow(
+      'modeled reset',
+    )
+  } finally {
+    connection.mockRestore()
+    actor.restore()
+  }
+})
+
+test('terminal leader teardown waits for close and its own live sibling thread to depart', async () => {
+  const actor = modeledInertActor()
+  actor.model.sibling = true
+  let closed = false
+  let done = false
   const pending = waitForInertDeparture(
-    [identity],
-    [{ identity, closed: () => closed }],
-    performance.now() + 500,
+    [actor.identity],
+    [{ closed: () => closed }],
+    500,
   ).then(() => {
     done = true
   })
   try {
-    expect(inertAlive(identity)).toBe(false)
+    expect(inertAlive(actor.identity)).toBe(false)
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(done).toBe(false)
     closed = true
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(done).toBe(false)
-    listed = false
+    actor.model.sibling = false
     await pending
     expect(done).toBe(true)
   } finally {
-    listed = false
+    actor.model.sibling = false
     closed = true
-    await pending
-    reads.mockRestore()
+    try {
+      await pending
+    } finally {
+      actor.restore()
+    }
   }
 })
 
-for (const unresolved of [
-  'listed group thread',
-  'unavailable listed thread',
-  'unclosed child',
-] as const)
-  test(`fixture departure deadline fails visibly for an ${unresolved}`, async () => {
-    const identity: InertIdentity = {
-      pid: 100,
-      start: '123',
-      namespace: 'pid:[1]',
-      cgroup: '0::/modeled\n',
-      pgid: 100,
-      sid: 100,
-    }
-    const original = fs.readFileSync
-    let elapsed = 0
-    const clock = spyOn(performance, 'now').mockImplementation(() => elapsed)
-    const reads = spyOn(fs, 'readFileSync').mockImplementation(
-      new Proxy(original, {
-        apply(target, receiver, args: unknown[]) {
-          const path = String(args[0])
-          if (path === '/proc/100/stat')
-            return `100 (terminal) Z ${Array(18).fill('0').join(' ')} 123 0\n`
-          if (path === '/sys/fs/cgroup/modeled/cgroup.threads')
-            return unresolved === 'unclosed child' ? '' : '101\n'
-          if (path === '/proc/101/status') {
-            if (unresolved === 'unavailable listed thread')
-              throw Object.assign(new Error('modeled missing task'), {
-                code: 'ENOENT',
-              })
-            return 'Pid:\t101\nTgid:\t100\n'
-          }
-          return Reflect.apply(target, receiver, args)
+test('fixture departure deadline fails visibly for an unclosed child', async () => {
+  const actor = modeledInertActor()
+  try {
+    const pending = waitForInertDeparture(
+      [actor.identity],
+      [{ closed: () => false }],
+      500,
+    )
+    actor.model.elapsed = 500
+    await expect(pending).rejects.toThrow(
+      'independent fixture task departure deadline exceeded',
+    )
+  } finally {
+    actor.restore()
+  }
+})
+
+test('teardown budget starts at teardown, not at first child', async () => {
+  const actor = modeledInertActor('S')
+  const run: InertRun = {
+    testName: 'teardown budget starts at teardown, not at first child',
+    children: [],
+    identities: [],
+    roots: new Set(),
+    errors: [],
+  }
+  const child = new childProcess.ChildProcess()
+  Object.defineProperty(child, 'pid', { value: 100 })
+  activeInertRun = run
+  try {
+    retainStartedInertChild(child)
+    expect(run.errors).toEqual([])
+    await expect(
+      waitForInertReady('/missing-ready-record.json', 500, {
+        absent: () => {
+          actor.model.elapsed = 500
         },
       }),
-    )
-    try {
-      const pending = waitForInertDeparture(
-        [identity],
-        [{ closed: () => unresolved !== 'unclosed child' }],
-        500,
-      )
-      elapsed = 500
-      await expect(pending).rejects.toThrow(
-        'independent fixture task departure deadline exceeded',
-      )
-    } finally {
-      reads.mockRestore()
-      clock.mockRestore()
-    }
-  })
+    ).rejects.toThrow('actor fixture setup deadline expired')
+    actor.model.state = 'Z'
+    const pending = reapInertIdentities(run.identities, run)
+    actor.model.elapsed = 999
+    child.emit('close', 0, null)
+    await expect(pending).resolves.toBeUndefined()
+    actor.model.elapsed = 1500
+    await expect(
+      reapInertIdentities(run.identities, run),
+    ).resolves.toBeUndefined()
+  } finally {
+    activeInertRun = undefined
+    actor.restore()
+  }
+})
 
 test('slow actor readiness precedes the cleanup trigger within the existing deadline', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ga-ready-order-'))
@@ -1973,19 +2332,20 @@ describe(CLEANUP_GROUP, () => {
         | undefined
       const errors: unknown[] = []
       try {
+        const readinessDeadline = performance.now() + 500
         await Promise.race([
           new Promise<void>((resolve, reject) => {
             child.stdio[3]!.once('data', () => resolve())
             child.once('error', reject)
           }),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error('partial identity fixture did not become ready'),
-                ),
-              500,
-            )
+            timer = setTimeout(() => {
+              reportInertOracle(
+                readinessDeadline,
+                join(root, 'preexisting.json'),
+              )
+              reject(new Error('partial identity fixture did not become ready'))
+            }, 500)
           }),
         ])
         const identity = readInertIdentity(join(root, 'preexisting.json'), true)
@@ -2083,12 +2443,14 @@ describe(CLEANUP_GROUP, () => {
       })
       let oracle: ReturnType<typeof setTimeout> | undefined
       try {
+        const completionDeadline = performance.now() + 500
         const observed = await Promise.race([
           pending.then((result) => ({ result })),
           new Promise<{ expired: true }>((resolve) => {
             oracle = setTimeout(() => resolve({ expired: true }), 500)
           }),
         ])
+        if (!('result' in observed)) reportInertOracle(completionDeadline)
         expect('result' in observed).toBe(true)
         if (!('result' in observed))
           throw new Error(
@@ -2348,6 +2710,13 @@ describe(CLEANUP_GROUP, () => {
         }
         return { witness, identity: { tgid, tid, birth, port, group } }
       }
+      const witnessIdentities = (): InertIdentity[] => {
+        try {
+          return [load().identity.group]
+        } catch {
+          return []
+        }
+      }
       const direct = (tid: number) => {
         try {
           const raw = readFileSync(`/proc/${tid}/stat`, 'utf8')
@@ -2399,7 +2768,7 @@ describe(CLEANUP_GROUP, () => {
           }
           const expected = Buffer.from('inert-listener')
           let received = Buffer.alloc(0)
-          let peer: ReturnType<typeof createConnection> | undefined
+          let peer: ReturnType<typeof net.createConnection> | undefined
           let timer: ReturnType<typeof setTimeout> | undefined
           let finished = false
           const finish = (result: 'alive' | 'refused' | Error) => {
@@ -2416,7 +2785,7 @@ describe(CLEANUP_GROUP, () => {
             Math.max(0, deadline - performance.now()),
           )
           try {
-            peer = createConnection({ host: '127.0.0.1', port })
+            peer = net.createConnection({ host: '127.0.0.1', port })
             peer.on('data', (chunk: Buffer) => {
               if (finished) return
               if (performance.now() >= deadline) {
@@ -2468,6 +2837,8 @@ describe(CLEANUP_GROUP, () => {
           }),
         ])
         if ('error' in observed) throw observed.error
+        if (!('result' in observed))
+          reportInertOracle(oracleEnd, undefined, witnessIdentities)
         if (!('result' in observed))
           throw new Error('FAILED WITNESS command result not reached')
         const loaded = load()
@@ -2540,12 +2911,14 @@ describe(CLEANUP_GROUP, () => {
           } catch (error) {
             cleanupErrors.push(error)
           }
-          if (!absent)
+          if (!absent) {
+            reportInertOracle(oracleEnd, undefined, witnessIdentities)
             cleanupErrors.push(
               new Error(
                 'UNKNOWN actor did not certify self-expiry within independent oracle',
               ),
             )
+          }
           let listenerRefused = false
           try {
             if (performance.now() >= oracleEnd)
@@ -2563,7 +2936,12 @@ describe(CLEANUP_GROUP, () => {
             cleanupErrors.push(error)
           }
           try {
-            await waitForInertDeparture([owned.group], [], oracleEnd)
+            await waitForInertDeparture(
+              [owned.group],
+              [],
+              performance.now() + 500,
+              inertDiagnostic(witnessIdentities),
+            )
           } catch (error) {
             cleanupErrors.push(error)
           }
@@ -2971,19 +3349,22 @@ describe(CLEANUP_GROUP, () => {
       let timer: ReturnType<typeof setTimeout> | undefined
       const errors: unknown[] = []
       try {
+        const readinessDeadline = performance.now() + 500
         await Promise.race([
           new Promise<void>((resolve, reject) => {
             child.stdio[3]!.once('data', () => resolve())
             child.once('error', reject)
           }),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error('preexisting inert fixture did not become ready'),
-                ),
-              500,
-            )
+            timer = setTimeout(() => {
+              reportInertOracle(
+                readinessDeadline,
+                join(root, 'preexisting.json'),
+              )
+              reject(
+                new Error('preexisting inert fixture did not become ready'),
+              )
+            }, 500)
           }),
         ])
         const identity = readInertIdentity(join(root, 'preexisting.json'), true)
@@ -3061,12 +3442,14 @@ describe(CLEANUP_GROUP, () => {
       let oracle: ReturnType<typeof setTimeout> | undefined
       const errors: unknown[] = []
       try {
+        const completionDeadline = performance.now() + 500
         const observed = await Promise.race([
           pending.then((result) => ({ result })),
           new Promise<{ expired: true }>((resolve) => {
             oracle = setTimeout(() => resolve({ expired: true }), 500)
           }),
         ])
+        if (!('result' in observed)) reportInertOracle(completionDeadline)
         expect('result' in observed).toBe(true)
         if (!('result' in observed))
           throw new Error('ownership failure did not finish cleanup')
@@ -3086,7 +3469,7 @@ describe(CLEANUP_GROUP, () => {
           throw new Error(
             `missing ready actor fixture ${join(root, 'worker.json')}`,
           )
-        expect(await inertListener(worker.port)).toBe(false)
+        expect(await inertListener(worker.port, worker)).toBe(false)
       } catch (error) {
         errors.push(error)
       } finally {
@@ -3177,6 +3560,11 @@ describe(CLEANUP_GROUP, () => {
             )
           }),
         ])
+        if (!('result' in observed))
+          reportInertOracle(
+            deadline,
+            !observedWorker ? join(root, 'worker.json') : undefined,
+          )
         if (!('result' in observed) && !observedWorker)
           throw new Error(
             `actor fixture setup deadline expired: ${join(root, 'worker.json')}`,
@@ -3196,7 +3584,7 @@ describe(CLEANUP_GROUP, () => {
         expect(observed.result.cleanup.failures).toEqual([expectedRefusal])
         const worker = observedWorker!
         expect(inertAlive(worker)).toBe(true)
-        expect(await inertListener(worker.port)).toBe(true)
+        expect(await inertListener(worker.port, worker)).toBe(true)
       } catch (error) {
         errors.push(error)
       } finally {
@@ -3309,6 +3697,13 @@ describe(CLEANUP_GROUP, () => {
               )
             }),
           ])
+          if (!('result' in observed))
+            reportInertOracle(
+              deadline,
+              mode === 'timeout' && !admitted
+                ? join(root, 'worker.json')
+                : undefined,
+            )
           if (!('result' in observed) && mode === 'timeout' && !admitted)
             throw new Error(
               `actor fixture setup deadline expired: ${join(root, 'worker.json')}`,
@@ -3325,7 +3720,7 @@ describe(CLEANUP_GROUP, () => {
           expect(worker.pgid).toBe(worker.pid)
           expect(worker.sid).toBe(worker.pid)
           expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
-          expect(await inertListener(worker.port)).toBe(false)
+          expect(await inertListener(worker.port, worker)).toBe(false)
           expect(result.cleanup.outcome).toBe('clean')
           expect(result.cleanup.signaled).toBeGreaterThan(0)
           expect(result.timedOut).toBe(mode === 'timeout')
