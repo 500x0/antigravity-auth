@@ -177,14 +177,17 @@ export function selectBestVerificationUrl(urls: string[]): string | undefined {
  * error: the account was never disabled, never rotated away from, and the
  * request was retried on the same account until the retry budget ran out.
  *
- * Keep every pattern anchored to refusal phrasing. A bare substring such as
- * /age/ also matches the privacy notice in a healthy 200 response ("...how
- * Gemini Code Assist for individuals handles your DATA...").
+ * Every alternative is anchored to Gemini refusal context. The age sentence
+ * alone is too broad — it must appear in the same body as the refusal, or the
+ * product name, so an unrelated 403 that merely mentions an age requirement
+ * cannot disable an account. A bare substring such as /age/ is worse still: it
+ * matches the privacy notice in a healthy 200 response ("...how Gemini Code
+ * Assist for individuals handles your DATA...").
  */
 const INELIGIBLE_REFUSAL_PATTERNS: readonly RegExp[] = [
   /(^|[^a-z0-9_])account_ineligible([^a-z0-9_]|$)/i,
   /not eligible for gemini code assist/i,
-  /18 years old or older/i,
+  /(gemini code assist[^\n]{0,200}18 years old or older)|(18 years old or older[^\n]{0,200}gemini code assist)/i,
 ]
 
 function matchesIneligibleRefusal(text: string): boolean {

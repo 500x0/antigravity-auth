@@ -113,6 +113,25 @@ describe('ineligible refusal detection', () => {
     expect(details.accountIneligible).toBe(false)
     expect(details.validationRequired).toBe(false)
   })
+
+  it('does not disable an account for an unrelated 403 mentioning an age requirement', () => {
+    const details = extractAccountAccessErrorDetails(
+      '{"error":{"code":403,"message":"Applicants must be 18 years old or older to use this service."}}',
+    )
+    expect(details.accountIneligible).toBe(false)
+  })
+
+  it('detects the age sentence when it names the product, in either order', () => {
+    const leading = extractAccountAccessErrorDetails(
+      'Gemini Code Assist for individuals requires that you must be 18 years old or older.',
+    )
+    expect(leading.accountIneligible).toBe(true)
+
+    const trailing = extractAccountAccessErrorDetails(
+      'You must be 18 years old or older to use Gemini Code Assist for individuals.',
+    )
+    expect(trailing.accountIneligible).toBe(true)
+  })
 })
 
 describe('verification URL selection', () => {
