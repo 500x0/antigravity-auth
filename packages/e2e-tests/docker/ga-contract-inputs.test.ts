@@ -46,6 +46,17 @@ import {
   matchesGoogleContentPath,
 } from './ga-loopback-request-contract.ts'
 import {
+  captureInertBirth,
+  finishInertTest,
+  type InertIdentity,
+  type InertReadyIdentity,
+  publishInertFixture,
+  readInertIdentity,
+  readyBeforeInertCleanup,
+  waitForInertReady,
+} from './inert-fixture.ts'
+import {
+  armNativeCommandTimer,
   assertCliCompletion,
   assertConformance,
   assertNative,
@@ -58,6 +69,7 @@ import {
   type Matrix,
   MatrixSchema,
   materialize,
+  type NativeCommandTimers,
   nativeHostEnv,
   observeNativeRunner,
   PinSchema,
@@ -218,6 +230,15 @@ const MOTOR_INERT_EXPECTED_R5 = Object.freeze([
   'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during signal requalification forbids subsequent reads and signals',
   'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during target identity read forbids subsequent reads and signals',
   'qualified private namespace native cleanup source and inert controls > actor-free budget expiry during final scoped check forbids subsequent reads and signals',
+])
+const MOTOR_INERT_EXPECTED_R6 = Object.freeze([
+  ...MOTOR_INERT_EXPECTED_R5.map((name) =>
+    name ===
+    `${CLEANUP_GROUP} > native cleanup reaps detached pipe-holding listener on timeout without changing the command result`
+      ? `${CLEANUP_GROUP} > native cleanup after a ready-gated timeout reaps detached pipe-holding listener without changing the command result`
+      : name,
+  ),
+  `${CLEANUP_GROUP} > native command real wall-clock timeout kills a sleeping owned child`,
 ])
 function motorTest(
   group: string,
@@ -384,15 +405,6 @@ function processBoundaryFixture() {
   }
 }
 
-interface InertIdentity {
-  pid: number
-  start: string
-  namespace: string
-  cgroup: string
-  pgid: number
-  sid: number
-  port?: number
-}
 // Keep each built-in's overloads and properties while changing a test observation.
 function observeBuiltin<T extends object>(
   target: T,
@@ -414,31 +426,30 @@ function inertProgram(root: string): string {
   const path = join(root, 'inert-native-child.mjs')
   writeFileSync(
     path,
-    `import { spawn } from 'node:child_process'
-import { readFileSync, writeFileSync, closeSync } from 'node:fs'
-import { readlinkSync } from 'node:fs'
+    `import { captureInertBirth as identity, publishInertFixture, readInertIdentity } from ${JSON.stringify(new URL('./inert-fixture.ts', import.meta.url).href)}
+import { spawn } from 'node:child_process'
+import { writeFileSync, closeSync } from 'node:fs'
 import { createServer } from 'node:net'
 const [mode, root] = process.argv.slice(2)
-const identity = (pid) => {
-  const stat = readFileSync('/proc/' + pid + '/stat', 'utf8')
-  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
-  return { pid, start: fields[19], pgid: Number(fields[2]), sid: Number(fields[3]), namespace: readlinkSync('/proc/' + pid + '/ns/pid'), cgroup: readFileSync('/proc/' + pid + '/cgroup', 'utf8') }
-}
 if (mode === 'worker' || mode === 'preexisting') {
   if (mode === 'preexisting') writeFileSync('/proc/self/comm', 'ga-protected')
   const file = root + '/' + (mode === 'worker' ? 'worker' : 'preexisting') + '.json'
-  writeFileSync(file, JSON.stringify(identity(process.pid)))
+  await publishInertFixture(root + '/' + mode + '-birth.json', identity(process.pid))
   const server = createServer((socket) => socket.end('inert-listener'))
-  server.listen(0, '127.0.0.1', () => {
-    writeFileSync(file, JSON.stringify({ ...identity(process.pid), port: server.address().port }))
+  server.listen(0, '127.0.0.1', async () => {
+    await publishInertFixture(file, { ...identity(process.pid), port: server.address().port })
     writeFileSync(3, 'ready')
     closeSync(3)
   })
 } else {
-  writeFileSync(root + '/leader.json', JSON.stringify(identity(process.pid)))
+  await publishInertFixture(root + '/leader.json', identity(process.pid))
   const child = spawn(process.execPath, [process.argv[1], 'worker', root], { env: process.env, detached: true, stdio: ['ignore', 'inherit', 'inherit', 'pipe'] })
-  try { writeFileSync(root + '/worker-spawn.json', JSON.stringify(identity(child.pid))) } catch {}
-  child.stdio[3].once('data', () => {
+  await publishInertFixture(root + '/worker-spawn.json', identity(child.pid))
+  child.stdio[3].once('data', async () => {
+    if (mode === 'boundary') {
+      while (!readInertIdentity(root + '/release.json', true)) await new Promise((resolve) => setImmediate(resolve))
+      process.exit(0)
+    }
     if (mode === 'success') process.exit(0)
     if (mode === 'nonzero') process.exit(7)
     if (mode === 'output-cap') process.stdout.write('X'.repeat(65536))
@@ -453,17 +464,58 @@ function fixtureIdentities(root: string): InertIdentity[] {
   const rows = [
     'leader.json',
     'worker-spawn.json',
+    'worker-birth.json',
     'worker.json',
+    'preexisting-birth.json',
     'preexisting.json',
   ]
-    .filter((name) => existsSync(join(root, name)))
-    .map(
-      (name) =>
-        JSON.parse(readFileSync(join(root, name), 'utf8')) as InertIdentity,
+    .map((name) =>
+      name === 'worker.json' || name === 'preexisting.json'
+        ? readInertIdentity(join(root, name), true)
+        : readInertIdentity(join(root, name)),
     )
+    .filter((row): row is InertIdentity => row !== undefined)
   return [
     ...new Map(rows.map((row) => [`${row.pid}:${row.start}`, row])).values(),
   ]
+}
+function heldNativeTimer() {
+  let callback: (() => void) | undefined
+  let cleared = false
+  let dispatched = 0
+  const delays: number[] = []
+  const token = {} as ReturnType<typeof setTimeout>
+  const timers: NativeCommandTimers = {
+    setTimer: (fn, delay) => {
+      expect(callback).toBeUndefined()
+      callback = fn
+      delays.push(delay)
+      return token
+    },
+    clearTimer: (handle) => {
+      expect(handle).toBe(token)
+      cleared = true
+    },
+  }
+  return {
+    timers,
+    fire: () => {
+      expect(callback).toBeDefined()
+      expect(cleared).toBe(false)
+      dispatched++
+      callback!()
+    },
+    settleOnFailure: () => {
+      // A setup failure may leave the timer held. Dispatch only during teardown
+      // so the pending command can settle even if independent reaping fails.
+      if (!cleared) callback?.()
+    },
+    assertCompleted: (dispatches: number) => {
+      expect(delays).toEqual([100])
+      expect(dispatched).toBe(dispatches)
+      expect(cleared).toBe(true)
+    },
+  }
 }
 function inertAlive(identity: InertIdentity): boolean {
   try {
@@ -826,6 +878,271 @@ describe('native boundary probe launcher source controls', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+})
+
+test('actor fixture publication never exposes truncated JSON before rename', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ga-publication-'))
+  const path = join(root, 'worker.json')
+  const old: InertReadyIdentity = {
+    pid: 123,
+    start: '456',
+    namespace: 'pid:[789]',
+    cgroup: '0::/fixture\n',
+    pgid: 123,
+    sid: 123,
+    port: 12345,
+  }
+  const next = { ...old, port: 23456 }
+  try {
+    for (const previous of [undefined, old]) {
+      if (previous) await publishInertFixture(path, previous)
+      const halfWritten = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const publishing = publishInertFixture(path, next, async () => {
+        halfWritten.resolve()
+        await release.promise
+      })
+      try {
+        await halfWritten.promise
+        expect(readInertIdentity(path, true)).toEqual(previous)
+      } finally {
+        release.resolve()
+        await publishing
+      }
+      expect(readInertIdentity(path, true)).toEqual(next)
+    }
+    for (const corrupt of [
+      '',
+      '{"pid":123,',
+      '{}',
+      JSON.stringify({ ...old, port: undefined }),
+    ]) {
+      writeFileSync(path, corrupt)
+      const original = fs.readFileSync
+      let attempts = 0
+      const reads = spyOn(fs, 'readFileSync').mockImplementation(
+        observeBuiltin(original, (value, args) => {
+          if (String(args[0]) === path) attempts++
+          return value
+        }),
+      )
+      try {
+        await expect(
+          waitForInertReady(path, performance.now() + 500),
+        ).rejects.toThrow(path)
+        expect(attempts).toBe(1)
+      } finally {
+        reads.mockRestore()
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('slow actor readiness precedes the cleanup trigger within the existing deadline', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ga-ready-order-'))
+  const path = join(root, 'worker.json')
+  const record: InertReadyIdentity = {
+    pid: 123,
+    start: '456',
+    namespace: 'pid:[789]',
+    cgroup: '0::/fixture\n',
+    pgid: 123,
+    sid: 123,
+    port: 12345,
+  }
+  const release = Promise.withResolvers<void>()
+  const absentRead = Promise.withResolvers<void>()
+  const deadline = performance.now() + 500
+  const events: string[] = []
+  let admitted: InertReadyIdentity | undefined
+  const publishing = (async () => {
+    await release.promise
+    await publishInertFixture(path, record)
+  })()
+  // Gate the actual publisher, then observe a read while readiness is absent.
+  const ready = waitForInertReady(path, deadline, {
+    absent: () => {
+      if (!events.includes('absent')) events.push('absent')
+      absentRead.resolve()
+    },
+  })
+  const ordered = readyBeforeInertCleanup(
+    ready,
+    () => {
+      events.push('trigger')
+      expect(admitted).toEqual(record)
+    },
+    (identity) => {
+      admitted = identity
+      events.push('ready')
+    },
+  ).then(
+    (identity) => ({ identity }),
+    (error: unknown) => ({ error }),
+  )
+  try {
+    await absentRead.promise
+    expect(events).toEqual(['absent'])
+    release.resolve()
+    await publishing
+    const result = await ordered
+    if ('error' in result) throw result.error
+    expect(result.identity.port).toBe(12345)
+    expect(events).toEqual(['absent', 'ready', 'trigger'])
+    expect(performance.now()).toBeLessThan(deadline)
+
+    rmSync(path)
+    let clock = 0
+    let absent = 0
+    let triggered = false
+    await expect(
+      readyBeforeInertCleanup(
+        waitForInertReady(path, 500, {
+          now: () => clock,
+          absent: () => {
+            absent++
+            clock = 500
+          },
+        }),
+        () => {
+          triggered = true
+        },
+      ),
+    ).rejects.toThrow(`actor fixture setup deadline expired: ${path}`)
+    expect(absent).toBe(1)
+    expect(clock).toBe(500)
+    expect(triggered).toBe(false)
+  } finally {
+    release.resolve()
+    await publishing
+    await ordered
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('native command timer defaults to real setTimeout and clearTimeout', async () => {
+  const originalSet = globalThis.setTimeout
+  const originalClear = globalThis.clearTimeout
+  const sets = spyOn(globalThis, 'setTimeout').mockImplementation(originalSet)
+  const clears = spyOn(globalThis, 'clearTimeout').mockImplementation(
+    originalClear,
+  )
+  try {
+    const fired = Promise.withResolvers<void>()
+    const cancel = armNativeCommandTimer(fired.resolve, 1)
+    expect(sets).toHaveBeenCalledWith(fired.resolve, 1)
+    await fired.promise
+    cancel()
+    expect(clears).toHaveBeenCalledWith(sets.mock.results[0]!.value)
+  } finally {
+    clears.mockRestore()
+    sets.mockRestore()
+  }
+})
+
+test('held native command timers are armed and cleared without dispatch until the cleanup trigger', () => {
+  const held = heldNativeTimer()
+  let dispatched = 0
+  const cancel = armNativeCommandTimer(
+    () => {
+      dispatched++
+    },
+    100,
+    held.timers,
+  )
+  expect(dispatched).toBe(0)
+  cancel()
+  held.assertCompleted(0)
+})
+
+test('actor publication syncs and closes an exclusive sibling before rename and removes failed writes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ga-publish-protocol-'))
+  const path = join(root, 'worker-spawn.json')
+  const events: string[] = []
+  const originalOpen = fs.openSync
+  const originalSync = fs.fsyncSync
+  const originalClose = fs.closeSync
+  const originalRename = fs.renameSync
+  let temporary = ''
+  const opens = spyOn(fs, 'openSync').mockImplementation(
+    new Proxy(originalOpen, {
+      apply(target, receiver, args: unknown[]) {
+        temporary = String(args[0])
+        expect(dirname(temporary)).toBe(root)
+        expect(temporary).not.toBe(path)
+        expect(args[1]).toBe('wx')
+        events.push('open')
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  const syncs = spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+    events.push('sync')
+    originalSync(fd)
+  })
+  const closes = spyOn(fs, 'closeSync').mockImplementation((fd) => {
+    events.push('close')
+    originalClose(fd)
+  })
+  const renames = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+    expect(events).toEqual(['open', 'sync', 'close'])
+    expect(String(from)).toBe(temporary)
+    expect(String(to)).toBe(path)
+    events.push('rename')
+    originalRename(from, to)
+  })
+  try {
+    await publishInertFixture(path, { birth: 1 })
+    expect(events).toEqual(['open', 'sync', 'close', 'rename'])
+    const firstTemporary = temporary
+    events.length = 0
+    await expect(
+      publishInertFixture(path, { birth: 2 }, () => {
+        throw new Error('controlled write failure')
+      }),
+    ).rejects.toThrow(path)
+    expect(temporary).not.toBe(firstTemporary)
+    expect(fs.readdirSync(root)).toEqual(['worker-spawn.json'])
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ birth: 1 })
+  } finally {
+    renames.mockRestore()
+    closes.mockRestore()
+    syncs.mockRestore()
+    opens.mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('actor teardown preserves the primary failure and still settles and removes after a reaper failure', async () => {
+  const primary = new Error('primary assertion')
+  const reaper = new Error('invalid fixture path')
+  const events: string[] = []
+  let failure: unknown
+  try {
+    await finishInertTest(
+      [primary],
+      [
+        () => {
+          events.push('reap')
+          throw reaper
+        },
+        () => {
+          events.push('settle')
+        },
+        () => {
+          events.push('remove')
+        },
+      ],
+    )
+  } catch (error) {
+    failure = error
+  }
+  expect(failure).toBeInstanceOf(AggregateError)
+  expect((failure as AggregateError).errors).toEqual([primary, reaper])
+  expect(events).toEqual(['reap', 'settle', 'remove'])
+  await expect(finishInertTest([primary], [])).rejects.toBe(primary)
 })
 
 describe(CLEANUP_GROUP, () => {
@@ -1212,6 +1529,7 @@ describe(CLEANUP_GROUP, () => {
       let launchTrap:
         | ReturnType<typeof spyOn<typeof childProcess, 'spawn'>>
         | undefined
+      const errors: unknown[] = []
       try {
         await Promise.race([
           new Promise<void>((resolve, reject) => {
@@ -1228,9 +1546,11 @@ describe(CLEANUP_GROUP, () => {
             )
           }),
         ])
-        const identity = JSON.parse(
-          readFileSync(join(root, 'preexisting.json'), 'utf8'),
-        ) as InertIdentity
+        const identity = readInertIdentity(join(root, 'preexisting.json'), true)
+        if (!identity)
+          throw new Error(
+            `missing ready actor fixture ${join(root, 'preexisting.json')}`,
+          )
         const original = fs.readlinkSync
         let observedENOENT = 0
         let dispatches = 0
@@ -1262,18 +1582,26 @@ describe(CLEANUP_GROUP, () => {
         expect(observedENOENT).toBeGreaterThan(0)
         expect(dispatches).toBe(0)
         expect(inertAlive(identity)).toBe(true)
-        expect(await inertListener(identity.port!)).toBe(true)
+        expect(await inertListener(identity.port)).toBe(true)
         console.log(
           'PARTIAL_IDENTITY_ENOENT_CONTROL=source-backed injected error; not the real Z-leader witness',
         )
+      } catch (error) {
+        errors.push(error)
       } finally {
-        launchTrap?.mockRestore()
-        links?.mockRestore()
-        if (timer) clearTimeout(timer)
-        await finallyReapInert(root)
-        child.stdio[3]?.destroy()
-        child.unref()
-        rmSync(root, { recursive: true, force: true })
+        await finishInertTest(errors, [
+          () => {
+            launchTrap?.mockRestore()
+            links?.mockRestore()
+            if (timer) clearTimeout(timer)
+          },
+          () => finallyReapInert(root),
+          () => {
+            child.stdio[3]?.destroy()
+            child.unref()
+          },
+          () => rmSync(root, { recursive: true, force: true }),
+        ])
       }
     },
   )
@@ -2178,6 +2506,7 @@ describe(CLEANUP_GROUP, () => {
         stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
       })
       let timer: ReturnType<typeof setTimeout> | undefined
+      const errors: unknown[] = []
       try {
         await Promise.race([
           new Promise<void>((resolve, reject) => {
@@ -2194,13 +2523,15 @@ describe(CLEANUP_GROUP, () => {
             )
           }),
         ])
-        const identity = JSON.parse(
-          readFileSync(join(root, 'preexisting.json'), 'utf8'),
-        ) as InertIdentity
+        const identity = readInertIdentity(join(root, 'preexisting.json'), true)
+        if (!identity)
+          throw new Error(
+            `missing ready actor fixture ${join(root, 'preexisting.json')}`,
+          )
         expect(readFileSync(`/proc/${identity.pid}/comm`, 'utf8').trim()).toBe(
           'ga-protected',
         )
-        expect(await inertListener(identity.port!)).toBe(true)
+        expect(await inertListener(identity.port)).toBe(true)
         const result = await runNativeCommand(
           scope,
           process.execPath,
@@ -2211,15 +2542,23 @@ describe(CLEANUP_GROUP, () => {
         expect(result.cleanup.outcome).toBe('clean')
         expect(result.cleanup.signaled).toBe(0)
         expect(inertAlive(identity)).toBe(true)
-        expect(await inertListener(identity.port!)).toBe(true)
+        expect(await inertListener(identity.port)).toBe(true)
         expect(process.kill(process.pid, 0)).toBe(true)
         expect(process.kill(1, 0)).toBe(true)
+      } catch (error) {
+        errors.push(error)
       } finally {
-        if (timer) clearTimeout(timer)
-        await finallyReapInert(root)
-        child.stdio[3]?.destroy()
-        child.unref()
-        rmSync(root, { recursive: true, force: true })
+        await finishInertTest(errors, [
+          () => {
+            if (timer) clearTimeout(timer)
+          },
+          () => finallyReapInert(root),
+          () => {
+            child.stdio[3]?.destroy()
+            child.unref()
+          },
+          () => rmSync(root, { recursive: true, force: true }),
+        ])
       }
     },
   )
@@ -2235,9 +2574,10 @@ describe(CLEANUP_GROUP, () => {
       const reads = spyOn(fs, 'readFileSync').mockImplementation(
         observeBuiltin(original, (value, args) => {
           const file = join(root, 'worker.json')
-          if (typeof value === 'string' && existsSync(file)) {
-            const identity = JSON.parse(original(file, 'utf8')) as InertIdentity
+          if (typeof value === 'string') {
+            const identity = readInertIdentity(file, true, original)
             if (
+              identity &&
               String(args[0]) === `/proc/${identity.pid}/stat` &&
               ++targetReads === 2
             ) {
@@ -2257,6 +2597,7 @@ describe(CLEANUP_GROUP, () => {
         { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
       )
       let oracle: ReturnType<typeof setTimeout> | undefined
+      const errors: unknown[] = []
       try {
         const observed = await Promise.race([
           pending.then((result) => ({ result })),
@@ -2274,16 +2615,28 @@ describe(CLEANUP_GROUP, () => {
           'identity changed before signal',
         )
         expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
-        const worker = JSON.parse(
-          original(join(root, 'worker.json'), 'utf8'),
-        ) as InertIdentity
-        expect(await inertListener(worker.port!)).toBe(false)
+        const worker = readInertIdentity(
+          join(root, 'worker.json'),
+          true,
+          original,
+        )
+        if (!worker)
+          throw new Error(
+            `missing ready actor fixture ${join(root, 'worker.json')}`,
+          )
+        expect(await inertListener(worker.port)).toBe(false)
+      } catch (error) {
+        errors.push(error)
       } finally {
-        reads.mockRestore()
-        if (oracle) clearTimeout(oracle)
-        await finallyReapInert(root)
-        await pending.catch(() => undefined)
-        rmSync(root, { recursive: true, force: true })
+        await finishInertTest(errors, [
+          () => {
+            reads.mockRestore()
+            if (oracle) clearTimeout(oracle)
+          },
+          () => finallyReapInert(root),
+          () => pending,
+          () => rmSync(root, { recursive: true, force: true }),
+        ])
       }
     },
   )
@@ -2300,16 +2653,14 @@ describe(CLEANUP_GROUP, () => {
       const originalRead = fs.readFileSync
       const originalStat = fs.lstatSync
       let invalidate = false
+      let observedWorker: InertReadyIdentity | undefined
       const reads = spyOn(fs, 'readFileSync').mockImplementation(
         observeBuiltin(originalRead, (value, args) => {
-          const file = join(root, 'worker.json')
-          if (typeof value === 'string' && existsSync(file)) {
-            const identity = JSON.parse(
-              originalRead(file, 'utf8'),
-            ) as InertIdentity
-            if (String(args[0]) === `/proc/${identity.pid}/stat`)
-              invalidate = true
-          }
+          if (
+            observedWorker &&
+            String(args[0]) === `/proc/${observedWorker.pid}/stat`
+          )
+            invalidate = true
           return value
         }),
       )
@@ -2331,43 +2682,73 @@ describe(CLEANUP_GROUP, () => {
           return changed
         }),
       )
+      // Hold the timer so cleanup follows only the actor's natural, post-ready exit.
+      const timerControl = heldNativeTimer()
+      const deadline = performance.now() + 500
       const pending = runNativeCommand(
         scope,
         process.execPath,
-        [script, 'success', root],
-        { cwd: root, env: nativeHostEnv(root, {}), timeoutMs: 100 },
+        [script, 'boundary', root],
+        {
+          cwd: root,
+          env: nativeHostEnv(root, {}),
+          timeoutMs: 100,
+          testTimers: timerControl.timers,
+        },
       )
       let oracle: ReturnType<typeof setTimeout> | undefined
+      const errors: unknown[] = []
       try {
+        const completion = readyBeforeInertCleanup(
+          waitForInertReady(join(root, 'worker.json'), deadline),
+          () => publishInertFixture(join(root, 'release.json'), observedWorker),
+          (identity) => {
+            observedWorker = identity
+          },
+        ).then(() => pending)
         const observed = await Promise.race([
-          pending.then((result) => ({ result })),
+          completion.then((result) => ({ result })),
           new Promise<{ expired: true }>((resolve) => {
-            oracle = setTimeout(() => resolve({ expired: true }), 500)
+            oracle = setTimeout(
+              () => resolve({ expired: true }),
+              Math.max(0, deadline - performance.now()),
+            )
           }),
         ])
+        if (!('result' in observed) && !observedWorker)
+          throw new Error(
+            `actor fixture setup deadline expired: ${join(root, 'worker.json')}`,
+          )
         expect('result' in observed).toBe(true)
         if (!('result' in observed))
           throw new Error('unqualified cleanup did not finish')
         expect(invalidate).toBe(true)
         expect(observed.result.code).toBe(0)
+        expect(observed.result.timedOut).toBe(false)
+        timerControl.assertCompleted(0)
         expect(observed.result.cleanup.outcome).toBe('failed')
         expect(observed.result.cleanup.signaled).toBe(0)
         expect(observed.result.cleanup.survivors).toBeNull()
         expect(modifiedControls.length).toBeGreaterThan(0)
         expect(new Set(modifiedControls)).toEqual(new Set([controlPath]))
         expect(observed.result.cleanup.failures).toEqual([expectedRefusal])
-        const worker = JSON.parse(
-          originalRead(join(root, 'worker.json'), 'utf8'),
-        ) as InertIdentity
+        const worker = observedWorker!
         expect(inertAlive(worker)).toBe(true)
-        expect(await inertListener(worker.port!)).toBe(true)
+        expect(await inertListener(worker.port)).toBe(true)
+      } catch (error) {
+        errors.push(error)
       } finally {
-        stats.mockRestore()
-        reads.mockRestore()
-        if (oracle) clearTimeout(oracle)
-        await finallyReapInert(root)
-        await pending.catch(() => undefined)
-        rmSync(root, { recursive: true, force: true })
+        await finishInertTest(errors, [
+          () => {
+            stats.mockRestore()
+            reads.mockRestore()
+            if (oracle) clearTimeout(oracle)
+          },
+          timerControl.settleOnFailure,
+          () => finallyReapInert(root),
+          () => pending,
+          () => rmSync(root, { recursive: true, force: true }),
+        ])
       }
     },
   )
@@ -2420,11 +2801,17 @@ describe(CLEANUP_GROUP, () => {
   for (const mode of ['success', 'nonzero', 'timeout', 'output-cap'])
     motorTest(
       CLEANUP_GROUP,
-      `native cleanup reaps detached pipe-holding listener on ${mode} without changing the command result`,
+      mode === 'timeout'
+        ? 'native cleanup after a ready-gated timeout reaps detached pipe-holding listener without changing the command result'
+        : `native cleanup reaps detached pipe-holding listener on ${mode} without changing the command result`,
       async () => {
         const scope = qualifyNativeProcessScope()
         const root = mkdtempSync(join(tmpdir(), 'ga-native-cleanup-'))
         const script = inertProgram(root)
+        // Natural-exit/output-cap controls hold the timer. Only the timeout
+        // control dispatches it after readiness; none measures wall-clock accuracy.
+        const timerControl = heldNativeTimer()
+        const deadline = performance.now() + 500
         const pending = runNativeCommand(
           scope,
           process.execPath,
@@ -2434,31 +2821,54 @@ describe(CLEANUP_GROUP, () => {
             env: nativeHostEnv(root, {}),
             timeoutMs: 100,
             outputCapBytes: 1024,
+            testTimers: timerControl.timers,
           },
         )
         let oracle: ReturnType<typeof setTimeout> | undefined
+        const errors: unknown[] = []
+        let admitted: InertReadyIdentity | undefined
         try {
+          const completion =
+            mode === 'timeout'
+              ? readyBeforeInertCleanup(
+                  waitForInertReady(join(root, 'worker.json'), deadline),
+                  timerControl.fire,
+                  (identity) => {
+                    admitted = identity
+                  },
+                ).then(() => pending)
+              : pending
           const observed = await Promise.race([
-            pending.then((result) => ({ result })),
+            completion.then((result) => ({ result })),
             new Promise<{ expired: true }>((resolve) => {
-              oracle = setTimeout(() => resolve({ expired: true }), 500)
+              oracle = setTimeout(
+                () => resolve({ expired: true }),
+                Math.max(0, deadline - performance.now()),
+              )
             }),
           ])
+          if (!('result' in observed) && mode === 'timeout' && !admitted)
+            throw new Error(
+              `actor fixture setup deadline expired: ${join(root, 'worker.json')}`,
+            )
           expect('result' in observed).toBe(true)
           if (!('result' in observed))
             throw new Error('production cleanup exceeded inert oracle bound')
           const { result } = observed
-          const worker = JSON.parse(
-            readFileSync(join(root, 'worker.json'), 'utf8'),
-          ) as InertIdentity
+          const worker = readInertIdentity(join(root, 'worker.json'), true)
+          if (!worker)
+            throw new Error(
+              `missing ready actor fixture ${join(root, 'worker.json')}`,
+            )
           expect(worker.pgid).toBe(worker.pid)
           expect(worker.sid).toBe(worker.pid)
           expect(fixtureIdentities(root).some(inertAlive)).toBe(false)
-          expect(await inertListener(worker.port!)).toBe(false)
+          expect(await inertListener(worker.port)).toBe(false)
           expect(result.cleanup.outcome).toBe('clean')
           expect(result.cleanup.signaled).toBeGreaterThan(0)
           expect(result.timedOut).toBe(mode === 'timeout')
           expect(result.outputCapExceeded).toBe(mode === 'output-cap')
+          timerControl.assertCompleted(mode === 'timeout' ? 1 : 0)
           if (mode === 'success' || mode === 'nonzero') {
             expect(result.code).toBe(mode === 'success' ? 0 : 7)
             expect(
@@ -2467,14 +2877,139 @@ describe(CLEANUP_GROUP, () => {
               )?.identity.parent,
             ).toBe(1)
           }
+        } catch (error) {
+          errors.push(error)
         } finally {
-          if (oracle) clearTimeout(oracle)
-          await finallyReapInert(root)
-          await pending.catch(() => undefined)
-          rmSync(root, { recursive: true, force: true })
+          await finishInertTest(errors, [
+            () => {
+              if (oracle) clearTimeout(oracle)
+            },
+            timerControl.settleOnFailure,
+            () => finallyReapInert(root),
+            () => pending,
+            () => rmSync(root, { recursive: true, force: true }),
+          ])
         }
       },
     )
+  motorTest(
+    CLEANUP_GROUP,
+    'native command real wall-clock timeout kills a sleeping owned child',
+    async () => {
+      const scope = qualifyNativeProcessScope()
+      const root = mkdtempSync(join(tmpdir(), 'ga-native-real-timer-'))
+      const originalSpawn = childProcess.spawn
+      const originalSet = globalThis.setTimeout
+      const originalClear = globalThis.clearTimeout
+      let birth: InertIdentity | undefined
+      let published = Promise.resolve()
+      let realTimer: ReturnType<typeof setTimeout> | undefined
+      let fired = 0
+      let cleared = false
+      const delays: number[] = []
+      const launches = spyOn(childProcess, 'spawn').mockImplementation(
+        new Proxy(originalSpawn, {
+          apply(target, receiver, args: unknown[]) {
+            const child = Reflect.apply(
+              target,
+              receiver,
+              args,
+            ) as childProcess.ChildProcess
+            if (child.pid === undefined)
+              throw new Error('sleep actor did not spawn')
+            birth = captureInertBirth(child.pid)
+            published = publishInertFixture(join(root, 'leader.json'), birth)
+            return child
+          },
+        }),
+      )
+      const sets = spyOn(globalThis, 'setTimeout').mockImplementation(
+        new Proxy(originalSet, {
+          apply(target, receiver, args: unknown[]) {
+            expect(target).toBe(originalSet)
+            const callback = args[0] as () => void
+            delays.push(Number(args[1]))
+            realTimer = Reflect.apply(target, receiver, [
+              () => {
+                fired++
+                callback()
+              },
+              ...args.slice(1),
+            ]) as ReturnType<typeof setTimeout>
+            return realTimer
+          },
+        }),
+      )
+      const clears = spyOn(globalThis, 'clearTimeout').mockImplementation(
+        observeBuiltin(originalClear, (value, args) => {
+          if (args[0] === realTimer) cleared = true
+          return value
+        }),
+      )
+      // Sleep has no readiness protocol and cannot finish naturally in 100 ms.
+      // No timer seam is supplied: the default must fire and reap this live PID.
+      const pending = runNativeCommand(scope, '/bin/sleep', ['30'], {
+        cwd: root,
+        env: nativeHostEnv(root, {}),
+        timeoutMs: 100,
+      })
+      const errors: unknown[] = []
+      try {
+        const result = await pending
+        await published
+        if (!birth) throw new Error('sleep actor birth was not captured')
+        expect(delays).toEqual([100])
+        expect(fired).toBe(1)
+        expect(cleared).toBe(true)
+        expect(result).toMatchObject({
+          code: null,
+          signal: 'SIGKILL',
+          stdout: '',
+          stderr: '',
+          timedOut: true,
+          outputCapExceeded: false,
+          spawnError: null,
+          cleanup: {
+            outcome: 'clean',
+            signaled: 1,
+            survivors: [],
+            failures: [],
+          },
+        })
+        expect(
+          result.cleanup.signals.map((entry) => ({
+            pid: entry.identity.pid,
+            start: entry.identity.start,
+            signal: entry.signal,
+          })),
+        ).toEqual([{ pid: birth.pid, start: birth.start, signal: 'SIGKILL' }])
+        expect(
+          result.cleanup.preexisting.some(
+            (row) => row.pid === birth!.pid && row.start === birth!.start,
+          ),
+        ).toBe(false)
+        // This assertion precedes the backstop, so it proves subject-side reaping.
+        expect(inertAlive(birth)).toBe(false)
+      } catch (error) {
+        errors.push(error)
+      } finally {
+        await finishInertTest(errors, [
+          () => {
+            clears.mockRestore()
+            sets.mockRestore()
+            launches.mockRestore()
+          },
+          () => published,
+          () => finallyReapInert(root),
+          () => pending,
+          () => {
+            if (birth) expect(inertAlive(birth)).toBe(false)
+          },
+          () => rmSync(root, { recursive: true, force: true }),
+        ])
+      }
+    },
+  )
   test('a non-writable job-owned PSI observation through a read-only mount is truthful evidence', () => {
     const value = nativeMatrix()
     value.native.processBoundary.cgroup.pressureObservation.uid = 999
@@ -4188,11 +4723,11 @@ test('Docker bootstrap avoids Hub and verifies Bun before extraction', () => {
 test('motor-inert registration equals the independently frozen expanded inventory', () => {
   const expected =
     selectedTestProfile === 'motor-inert'
-      ? [...MOTOR_INERT_EXPECTED_R5].sort()
+      ? [...MOTOR_INERT_EXPECTED_R6].sort()
       : []
   const registered = [...motorRegistered].sort()
   console.log(
-    `MOTOR_INERT_INVENTORY=${JSON.stringify({ revision: 'r5', profile: selectedTestProfile, expected, registered, executedAtInventoryCheck: [...motorExecuted], registeredCount: registered.length, executedCountAtInventoryCheck: motorExecuted.length })}`,
+    `MOTOR_INERT_INVENTORY=${JSON.stringify({ revision: 'r6', profile: selectedTestProfile, expected, registered, executedAtInventoryCheck: [...motorExecuted], registeredCount: registered.length, executedCountAtInventoryCheck: motorExecuted.length })}`,
   )
   expect(registered).toEqual(expected)
   expect(new Set(motorRegistered).size).toBe(motorRegistered.length)

@@ -2554,6 +2554,25 @@ export interface NativeCommandResult {
     failures: string[]
   }
 }
+export interface NativeCommandTimers {
+  setTimer: (
+    callback: () => void,
+    delay: number,
+  ) => ReturnType<typeof setTimeout>
+  clearTimer: (timer: ReturnType<typeof setTimeout>) => void
+}
+export function armNativeCommandTimer(
+  callback: () => void,
+  delay: number,
+  timers: NativeCommandTimers = {
+    setTimer: setTimeout,
+    clearTimer: clearTimeout,
+  },
+): () => void {
+  const timer = timers.setTimer(callback, delay)
+  return () => timers.clearTimer(timer)
+}
+
 export async function runNativeCommand(
   scope: NativeProcessScope,
   binary: string,
@@ -2563,6 +2582,8 @@ export async function runNativeCommand(
     env: Record<string, string>
     timeoutMs: number
     outputCapBytes?: number
+    // Fixture controls may hold dispatch until readiness; normal runs use real timers.
+    testTimers?: NativeCommandTimers
   },
 ): Promise<NativeCommandResult> {
   recheckNativeScope(scope)
@@ -2604,7 +2625,7 @@ export async function runNativeCommand(
     const complete = async () => {
       if (completing) return
       completing = true
-      clearTimeout(timer)
+      clearTimer()
       let survivors: NativeProcessIdentity[] | null = null
       const cleanupDeadline = Math.min(hardDeadline, performance.now() + 3000)
       const budget: NativeCleanupBudget = { deadline: cleanupDeadline }
@@ -2715,10 +2736,14 @@ export async function runNativeCommand(
         void complete()
       }
     }
-    const timer = setTimeout(() => {
-      timedOut = true
-      void complete()
-    }, options.timeoutMs)
+    const clearTimer = armNativeCommandTimer(
+      () => {
+        timedOut = true
+        void complete()
+      },
+      options.timeoutMs,
+      options.testTimers,
+    )
     try {
       recheckNativeScope(scope)
       child = spawn(binary, args, {

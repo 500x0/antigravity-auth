@@ -981,3 +981,62 @@ runner = "command"
 command = ["bash", "-c", "bun run --cwd packages/core build && bun test --isolate packages/e2e-tests/src/opencode-ga-harness.test.ts -t \"$1\"", "--", "{test}"]
 test_count_pattern = "Ran {count} test"
 expect_red = ['^GA\sownership\sharness\spreparation\s\(source\scontrols,\snot\snative\sproof\)\saccepts\sa\s500→200\sretry\swhen\sonly\svalid\sper-attempt\strace\sheaders\sdiffer$']
+
+[[control]]
+id = "ga-inert-fixture-atomic-publication"
+guards = "Actor birth and ready files expose only a complete old record or absence until the new JSON is synced, closed and renamed."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = '''  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
+  let file: number | undefined
+  try {
+    const bytes = Buffer.from(JSON.stringify(value))
+    const middle = Math.floor(bytes.length / 2)
+    file = fs.openSync(temporary, 'wx')'''
+new = '''  const temporary = path // NON-VACUITY BREAK: write directly to the visible final path.
+  let file: number | undefined
+  try {
+    const bytes = Buffer.from(JSON.stringify(value))
+    const middle = Math.floor(bytes.length / 2)
+    file = fs.openSync(temporary, 'w')'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^actor\sfixture\spublication\snever\sexposes\struncated\sJSON\sbefore\srename$']
+
+[[control]]
+id = "ga-inert-fixture-ready-before-trigger"
+guards = "Both the boundary-exit release and timeout-cleanup trigger wait for a validated port-bearing ready identity and armed observation."
+file = "packages/e2e-tests/docker/inert-fixture.ts"
+old = '''  const identity = await ready
+  arm(identity)
+  await trigger()'''
+new = '''  await trigger() // NON-VACUITY BREAK: bypass the ready latch for both cleanup controls.
+  const identity = await ready
+  arm(identity)'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^slow\sactor\sreadiness\sprecedes\sthe\scleanup\strigger\swithin\sthe\sexisting\sdeadline$']
+
+[[control]]
+id = "ga-inert-fixture-held-timer"
+guards = "Natural-exit and output-cap fixture controls arm the native command timer without allowing it to win the intended trigger."
+file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+old = '''      callback = fn
+      delays.push(delay)
+      return token'''
+new = '''      callback = fn
+      delays.push(delay)
+      dispatched++ // NON-VACUITY BREAK: dispatch the held timer before the intended trigger.
+      fn()
+      return token'''
+test_file = "packages/e2e-tests/docker/ga-contract-inputs.test.ts"
+list_command = ["bun", "scripts/list-bun-tests.mjs", "--cwd", ".", "packages/e2e-tests/docker/ga-contract-inputs.test.ts", "-t", "{test}"]
+runner = "command"
+command = ["bash", "-c", "bun run --cwd packages/core build && env -u GA_NATIVE_JOB_TEST_PROFILE bun test --isolate packages/e2e-tests/docker/ga-contract-inputs.test.ts -t \"$1\"", "--", "{test}"]
+test_count_pattern = "Ran {count} test"
+expect_red = ['^held\snative\scommand\stimers\sare\sarmed\sand\scleared\swithout\sdispatch\suntil\sthe\scleanup\strigger$']
