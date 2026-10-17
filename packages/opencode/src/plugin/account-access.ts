@@ -177,10 +177,11 @@ export function selectBestVerificationUrl(urls: string[]): string | undefined {
  * error: the account was never disabled, never rotated away from, and the
  * request was retried on the same account until the retry budget ran out.
  *
- * Every alternative is anchored to Gemini refusal context. The age sentence
- * alone is too broad — it must appear in the same body as the refusal, or the
- * product name, so an unrelated 403 that merely mentions an age requirement
- * cannot disable an account. A bare substring such as /age/ is worse still: it
+ * The token is matched anywhere; it is unambiguous on its own. The two prose
+ * alternatives are matched only against Gemini refusal context, so an unrelated
+ * 403 cannot disable an account: the second needs the refusal wording, and the
+ * third needs "Gemini Code Assist" within 200 characters of the age sentence on
+ * the same line. A bare substring such as /age/ would be worse still — it
  * matches the privacy notice in a healthy 200 response ("...how Gemini Code
  * Assist for individuals handles your DATA...").
  */
